@@ -9,6 +9,7 @@ from pathlib import Path
 from .checkpoint import CheckpointError, export_checkpoint, restore_checkpoint
 from .diagnostics import diagnose_failure
 from .executor import TaskExecutor
+from .github_ops import GitHubClient, GitHubOpsError, submit_change_plan
 from .memory import JsonMemory, MemoryError
 from .planner import order_tasks
 from .policy import PolicyError, validate_task, validate_relative_path
@@ -66,9 +67,22 @@ def main(argv: list[str] | None = None) -> int:
                         help="write validated state.json and SHA-256 manifest for GitHub artifact storage")
     parser.add_argument("--restore-checkpoint", metavar="DIR",
                         help="verify and restore state.json plus manifest downloaded from GitHub")
+    parser.add_argument("--github-plan", metavar="PATH",
+                        help="validate a declarative GitHub change plan (dry-run by default)")
+    parser.add_argument("--execute-github-plan", action="store_true",
+                        help="execute branch, one commit and draft pull-request operations for --github-plan")
     parser.add_argument("--memory", default=".cerebro/memory/state.json", help="memory file path")
     args = parser.parse_args(argv)
     try:
+        if args.execute_github_plan and not args.github_plan:
+            raise GitHubOpsError("--execute-github-plan requires --github-plan")
+        if args.github_plan:
+            plan_path = Path(validate_relative_path(args.github_plan))
+            plan_data = json.loads(plan_path.read_text(encoding="utf-8"))
+            client = GitHubClient()
+            result = submit_change_plan(plan_data, client=client, execute=args.execute_github_plan)
+            _print_json(result)
+            return 0
         if args.export_checkpoint:
             _print_json(export_checkpoint(args.memory, args.export_checkpoint))
             return 0
@@ -155,7 +169,7 @@ def main(argv: list[str] | None = None) -> int:
         parser.print_help()
         return 0
     except (OSError, UnicodeError, json.JSONDecodeError, PolicyError, MemoryError,
-            QueueError, CheckpointError, ValueError) as exc:
+            QueueError, CheckpointError, GitHubOpsError, ValueError) as exc:
         print(f"CHECK FAIL: {exc}", file=sys.stderr)
         return 2
 
