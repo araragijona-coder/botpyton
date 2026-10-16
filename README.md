@@ -100,6 +100,46 @@ An unsupported/ambiguous failure, timeout, failed post-repair verification, or e
 
 The test subprocess receives a filtered environment that removes common credential-bearing variable names. The cycle makes no network/API calls, does not install dependencies, does not merge branches, and never executes commands supplied in JSON or task text.
 
+## Phase 08: JSON task orchestration from GitHub
+
+The persistent worker workflow at .github/workflows/botpyton-worker.yml accepts a bounded JSON task batch and a separate batch of GitHub change plans from workflow_dispatch. These inputs are JSON data; task descriptions are never interpreted as shell commands.
+
+### Validate task batches locally
+
+~~~bash
+python -m bot.main --validate-task-batch .cerebro/examples/github-task-batch.json
+python -m bot.main --enqueue .cerebro/examples/github-task-batch.json --memory .cerebro/memory/state.json
+python -m bot.main --work-queue 10 --memory .cerebro/memory/state.json
+~~~
+
+Task batch validation checks each task against the fixed action allowlist, rejects duplicate IDs and internal dependency cycles, and imposes a maximum of 25 tasks and 50,000 input bytes. References to earlier persisted tasks are allowed at batch-validation time; TaskQueue.enqueue_many then checks dependency existence and cycles atomically against the complete queue before persisting any incoming task. Work per dispatch is limited to 1–100 queue claims, and each task's max_attempts is separately limited to 1–3.
+
+The worker restores the most recent retained botpyton-queue-checkpoint from a previous completed run of the same workflow and branch, validates its SHA-256 manifest, resumes interrupted work, and uploads the next checkpoint. GitHub Actions artifacts are branch-scoped in this workflow and have a configured/requested 90-day retention period; they are not indefinite archival storage.
+
+### Draft pull requests from a declarative plan batch
+
+Validate a batch without making GitHub API calls (the repository identity must be configured for the dry-run summary):
+
+~~~bash
+GITHUB_REPOSITORY=owner/repo python -m bot.main --github-plans .cerebro/examples/github-change-plan-batch.json
+~~~
+
+Real branch/commit/PR operations require an explicit opt-in and a suitable repository-scoped GITHUB_TOKEN:
+
+~~~bash
+python -m bot.main --github-plans .cerebro/examples/github-change-plan-batch.json --execute-github-plans
+~~~
+
+Plan validation happens for the entire batch before the first GitHub write. A batch may contain up to 10 plans and the input is limited to 50,000 bytes. Every plan must set draft: true; path, extension, size and protected-location rules use the Phase 06 policy. The submit loop is sequential, branch names are deterministic, and existing mismatched changes are rejected. If a later GitHub API call fails after earlier plans were submitted, those earlier draft PRs remain open for human review; there is no rollback or merge operation.
+
+### GitHub Actions dispatch
+
+Use the BotPyton persistent worker workflow and select the branch containing this phase. Supply tasks_json as one task object or an array, and change_plans_json as an array. Both are validated before queue access. work_limit must be 1–100. execute_prs defaults to false; when false, change plans are validated and summarized in dry-run mode only. Set it to true to enable the separate submit job.
+
+The write job has only contents: write and pull-requests: write, and runs only for an explicit manual dispatch with execute_prs=true, after the validation and worker jobs succeed. The normal queue job has read-only repository permissions plus actions-read for checkpoints. There is no automatic merge, no AI/LLM service, and no AI API request. The workflow must be present on the repository's default branch for GitHub to expose workflow_dispatch; this development branch has not been merged automatically.
+
+Examples: .cerebro/examples/github-task-batch.json and .cerebro/examples/github-change-plan-batch.json.
+
 ## Security model
 
 - Python standard library only; no AI/LLM services or inference APIs.
@@ -111,4 +151,4 @@ The test subprocess receives a filtered environment that removes common credenti
 
 ## Current status
 
-**PHASE 07 — BOUNDED AUTONOMOUS REPAIR CYCLE / PENDING CI VERIFICATION.** The phase branch adds the deterministic test/repair/rerun loop, attempt-by-attempt JSON evidence, explicit hard limits, and CI validation. GitHub write operations remain separately gated behind manual opt-in; no automatic merge or AI service is enabled.
+**PHASE 08 — GITHUB JSON TASK ORCHESTRATION / PENDING CI VERIFICATION.** This branch adds bounded JSON task batches, explicit prevalidation, branch-scoped persistent queue checkpoints, and a separate opt-in draft-PR submission job. No automatic merge or AI service/API is enabled. Verify the workflow run and resulting SHA before considering promotion.
