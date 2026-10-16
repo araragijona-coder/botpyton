@@ -1,0 +1,70 @@
+name: BotPyton GitHub operations
+
+on:
+  push:
+    branches:
+      - bot-bootstrap/phase-06-github-operations
+  workflow_dispatch:
+    inputs:
+      plan_path:
+        description: "Repository-relative path to a validated JSON change plan"
+        required: true
+        default: ".cerebro/examples/github-change-plan.json"
+        type: string
+      execute:
+        description: "Create a branch, one commit and a draft pull request (default is dry-run)"
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: botpyton-github-ops-${{ github.ref }
+  cancel-in-progress: false
+
+jobs:
+  validate-plan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout selected branch
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref }
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Validate plan and show dry-run summary
+        env:
+          GITHUB_REPOSITORY: ${{ github.repository }
+          BOTPYTON_PLAN_PATH: ${{ inputs.plan_path || '.cerebro/examples/github-change-plan.json' }
+        run: python -m bot.main --github-plan "$BOTPYTON_PLAN_PATH"
+
+  submit-draft-pr:
+    if: github.event_name == 'workflow_dispatch' && inputs.execute == true
+    needs: validate-plan
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - name: Checkout selected branch
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref }
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Submit safe branch, commit and draft pull request
+        env:
+          GITHUB_REPOSITORY: ${{ github.repository }
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }
+          BOTPYTON_PLAN_PATH: ${{ inputs.plan_path }
+        run: python -m bot.main --github-plan "$BOTPYTON_PLAN_PATH" --execute-github-plan
