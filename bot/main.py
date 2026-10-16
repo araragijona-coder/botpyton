@@ -12,6 +12,12 @@ from .diagnostics import diagnose_failure
 from .executor import TaskExecutor
 from .github_ops import GitHubClient, GitHubOpsError, submit_change_plan
 from .memory import JsonMemory, MemoryError
+from .orchestration import (
+    OrchestrationError,
+    submit_change_plan_batch,
+    validate_change_plan_batch,
+    validate_task_batch,
+)
 from .planner import order_tasks
 from .policy import PolicyError, validate_task, validate_relative_path
 from .queue import QueueError, TaskQueue
@@ -20,6 +26,14 @@ from .verifier import verify_python_files
 
 def _print_json(value: object) -> None:
     print(json.dumps(value, ensure_ascii=False, indent=2, sort_keys=True))
+
+
+def _read_bounded_json(path_text: str, *, limit_bytes: int = 50_000) -> object:
+    path = Path(validate_relative_path(path_text))
+    raw = path.read_bytes()
+    if len(raw) > limit_bytes:
+        raise OrchestrationError(f"JSON input exceeds {limit_bytes} bytes")
+    return json.loads(raw.decode("utf-8"))
 
 
 def _run_claimed(queue: TaskQueue, record: dict, executor: TaskExecutor) -> dict:
@@ -50,6 +64,8 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="BotPyton deterministic no-AI worker")
     parser.add_argument("--check", action="store_true", help="validate Python syntax and memory schema")
     parser.add_argument("--validate-task", metavar="PATH", help="validate a JSON task record")
+    parser.add_argument("--validate-task-batch", metavar="PATH",
+                        help="validate a bounded JSON task object/array without queue mutation")
     parser.add_argument("--plan", metavar="PATH", help="validate and order a JSON array of tasks")
     parser.add_argument("--diagnose", metavar="PATH", help="classify a local error log and gather evidence")
     parser.add_argument("--enqueue", metavar="PATH", help="idempotently enqueue one task or a JSON array")
@@ -72,6 +88,10 @@ def main(argv: list[str] | None = None) -> int:
                         help="validate a declarative GitHub change plan (dry-run by default)")
     parser.add_argument("--execute-github-plan", action="store_true",
                         help="execute branch, one commit and draft pull-request operations for --github-plan")
+    parser.add_argument("--github-plans", metavar="PATH",
+                        help="validate a JSON array of human-review change plans (dry-run by default)")
+    parser.add_argument("--execute-github-plans", action="store_true",
+                        help="execute the prevalidated draft-only plan batch; requires --github-plans")
     parser.add_argument("--autonomous-cycle", action="store_true",
                         help="run bounded test, exact known repair, rerun, verification, and audit reports")
     parser.add_argument("--cycle-max-attempts", type=int, default=3,
@@ -91,6 +111,19 @@ def main(argv: list[str] | None = None) -> int:
             return 0 if result["status"] == "succeeded" else 1
         if args.execute_github_plan and not args.github_plan:
             raise GitHubOpsError("--execute-github-plan requires --github-plan")
+        if args.execute_github_plans and not args.github_plans:
+            raise GitHubOpsError("--execute-github-plans requires --github-plans")
+        if args.github_plan and args.github_plans:
+            raise GitHubOpsError("Use either --github-plan or --github-plans, not both")
+        if args.github_plans:
+            plans_data = _read_bounded_json(args.github_plans)
+            validated_batch = validate_change_plan_batch(plans_data)
+            client = GitHubClient()
+            result = submit_change_plan_batch(
+                validated_batch["plans"], client=client, execute=args.execute_github_plans
+            )
+            _print_json(result)
+            return 0
         if args.github_plan:
             plan_path = Path(validate_relative_path(args.github_plan))
             plan_data = json.loads(plan_path.read_text(encoding="utf-8"))
@@ -103,6 +136,10 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         if args.restore_checkpoint:
             _print_json(restore_checkpoint(args.restore_checkpoint, args.memory))
+            return 0
+        if args.validate_task_batch:
+            result = validate_task_batch(_read_bounded_json(args.validate_task_batch))
+            _print_json(result)
             return 0
         if args.validate_task:
             task = json.loads(Path(args.validate_task).read_text(encoding="utf-8"))
