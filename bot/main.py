@@ -6,6 +6,7 @@ import json
 import sys
 from pathlib import Path
 
+from .checkpoint import CheckpointError, export_checkpoint, restore_checkpoint
 from .diagnostics import diagnose_failure
 from .executor import TaskExecutor
 from .memory import JsonMemory, MemoryError
@@ -61,9 +62,19 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--work-once", action="store_true", help="execute one ready queued task")
     parser.add_argument("--work-queue", nargs="?", const=10, type=int, metavar="LIMIT",
                         help="execute up to LIMIT queued attempts (default: 10)")
+    parser.add_argument("--export-checkpoint", metavar="DIR",
+                        help="write validated state.json and SHA-256 manifest for GitHub artifact storage")
+    parser.add_argument("--restore-checkpoint", metavar="DIR",
+                        help="verify and restore state.json plus manifest downloaded from GitHub")
     parser.add_argument("--memory", default=".cerebro/memory/state.json", help="memory file path")
     args = parser.parse_args(argv)
     try:
+        if args.export_checkpoint:
+            _print_json(export_checkpoint(args.memory, args.export_checkpoint))
+            return 0
+        if args.restore_checkpoint:
+            _print_json(restore_checkpoint(args.restore_checkpoint, args.memory))
+            return 0
         if args.validate_task:
             task = json.loads(Path(args.validate_task).read_text(encoding="utf-8"))
             validate_task(task)
@@ -124,7 +135,6 @@ def main(argv: list[str] | None = None) -> int:
                 if record is None:
                     break
                 outcomes.append(_run_claimed(queue, record, executor))
-                # One-attempt mode is explicitly a single queue claim.
                 if args.work_once:
                     break
             remaining = queue.list_tasks()
@@ -144,7 +154,8 @@ def main(argv: list[str] | None = None) -> int:
             return 1 if terminal_bad or pending_after_limit else 0
         parser.print_help()
         return 0
-    except (OSError, UnicodeError, json.JSONDecodeError, PolicyError, MemoryError, QueueError, ValueError) as exc:
+    except (OSError, UnicodeError, json.JSONDecodeError, PolicyError, MemoryError,
+            QueueError, CheckpointError, ValueError) as exc:
         print(f"CHECK FAIL: {exc}", file=sys.stderr)
         return 2
 
