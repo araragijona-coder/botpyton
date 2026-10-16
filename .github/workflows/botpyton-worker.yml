@@ -13,9 +13,20 @@ on:
         required: true
         default: 10
         type: number
+      change_plans_json:
+        description: "JSON array of draft-only GitHub change plans (max 10, 50 KB)"
+        required: false
+        default: "[]"
+        type: string
+      execute_prs:
+        description: "Submit validated plans as draft PRs after queue work passes (default: false)"
+        required: true
+        default: false
+        type: boolean
   push:
     branches:
       - bot-bootstrap/phase-04-persistent-checkpoint
+      - bot-bootstrap/phase-08-github-task-orchestration
 
 permissions:
   actions: read
@@ -26,7 +37,65 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  validate-inputs:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout selected branch
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref }}
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Normalize and validate both JSON inputs before queue access
+        env:
+          BOTPYTON_TASKS_JSON: ${{ inputs.tasks_json || '[]' }}
+          BOTPYTON_CHANGE_PLANS_JSON: ${{ inputs.change_plans_json || '[]' }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          work = Path(os.environ["RUNNER_TEMP"])
+          raw_tasks = os.environ.get("BOTPYTON_TASKS_JSON", "[]")
+          raw_plans = os.environ.get("BOTPYTON_CHANGE_PLANS_JSON", "[]")
+          for label, raw in (("tasks_json", raw_tasks), ("change_plans_json", raw_plans)):
+              if len(raw.encode("utf-8")) > 50_000:
+                  raise SystemExit(f"{label} exceeds the 50,000-byte input limit")
+
+          tasks = json.loads(raw_tasks)
+          if isinstance(tasks, dict):
+              tasks = [tasks]
+          if not isinstance(tasks, list) or len(tasks) > 25:
+              raise SystemExit("tasks_json must be one task object or an array of at most 25 tasks")
+          if any(not isinstance(task, dict) for task in tasks):
+              raise SystemExit("every task must be a JSON object")
+
+          plans = json.loads(raw_plans)
+          if not isinstance(plans, list) or len(plans) > 10:
+              raise SystemExit("change_plans_json must be an array of at most 10 plans")
+          if any(not isinstance(plan, dict) for plan in plans):
+              raise SystemExit("every change plan must be a JSON object")
+
+          task_path = work / "botpyton-incoming-tasks.json"
+          plans_path = work / "botpyton-change-plans.json"
+          task_path.write_text(json.dumps(tasks, ensure_ascii=False, separators=(",", ":")) + "\n", encoding="utf-8")
+          plans_path.write_text(json.dumps(plans, ensure_ascii=False, separators=(",", ":")) + "\n", encoding="utf-8")
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
+              output.write(f"has_tasks={'true' if tasks else 'false'}\n")
+              output.write(f"has_plans={'true' if plans else 'false'}\n")
+          PY
+          python -m bot.main --validate-task-batch "$RUNNER_TEMP/botpyton-incoming-tasks.json"
+          python -m bot.main --github-plans "$RUNNER_TEMP/botpyton-change-plans.json"
+
   worker:
+    needs: validate-inputs
     runs-on: ubuntu-latest
     timeout-minutes: 12
     steps:
@@ -94,7 +163,7 @@ jobs:
         if: steps.previous.outputs.found != 'true'
         run: python -m bot.main --check --memory "$RUNNER_TEMP/botpyton-state.json"
 
-      - name: Parse optional task JSON input
+      - name: Parse and validate declarative task JSON before enqueue
         id: task_input
         env:
           BOTPYTON_TASKS_JSON: ${{ inputs.tasks_json || '[]' }}
@@ -105,16 +174,19 @@ jobs:
           from pathlib import Path
 
           raw = os.environ.get("BOTPYTON_TASKS_JSON", "[]")
+          if len(raw.encode("utf-8")) > 50_000:
+              raise SystemExit("tasks_json exceeds the 50,000-byte input limit")
           tasks = json.loads(raw)
           if isinstance(tasks, dict):
               tasks = [tasks]
-          if not isinstance(tasks, list) or any(not isinstance(task, dict) for task in tasks):
-              raise SystemExit("tasks_json must be a JSON task object or an array of task objects")
+          if not isinstance(tasks, list) or len(tasks) > 25 or any(not isinstance(task, dict) for task in tasks):
+              raise SystemExit("tasks_json must be one task object or an array of at most 25 task objects")
           target = Path(os.environ["RUNNER_TEMP"]) / "botpyton-incoming-tasks.json"
-          target.write_text(json.dumps(tasks, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+          target.write_text(json.dumps(tasks, ensure_ascii=False, separators=(",", ":")) + "\n", encoding="utf-8")
           with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
               output.write(f"has_tasks={'true' if tasks else 'false'}\n")
           PY
+          python -m bot.main --validate-task-batch "$RUNNER_TEMP/botpyton-incoming-tasks.json"
 
       - name: Enqueue tasks supplied to this run
         if: steps.task_input.outputs.has_tasks == 'true'
@@ -151,3 +223,42 @@ jobs:
           path: .cerebro/reports/*.json
           if-no-files-found: warn
           retention-days: 7
+
+  submit-draft-prs:
+    if: github.event_name == 'workflow_dispatch' && inputs.execute_prs == true
+    needs: [validate-inputs, worker]
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - name: Checkout selected branch
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref }}
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Submit validated draft-only change plans
+        env:
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          BOTPYTON_CHANGE_PLANS_JSON: ${{ inputs.change_plans_json || '[]' }}
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          raw = os.environ.get("BOTPYTON_CHANGE_PLANS_JSON", "[]")
+          if len(raw.encode("utf-8")) > 50_000:
+              raise SystemExit("change_plans_json exceeds the 50,000-byte input limit")
+          plans = json.loads(raw)
+          if not isinstance(plans, list) or len(plans) > 10 or any(not isinstance(plan, dict) for plan in plans):
+              raise SystemExit("change_plans_json must be an array of at most 10 plan objects")
+          target = Path(os.environ["RUNNER_TEMP"]) / "botpyton-change-plans.json"
+          target.write_text(json.dumps(plans, ensure_ascii=False, separators=(",", ":")) + "\n", encoding="utf-8")
+          PY
+          python -m bot.main --github-plans "$RUNNER_TEMP/botpyton-change-plans.json" --execute-github-plans
