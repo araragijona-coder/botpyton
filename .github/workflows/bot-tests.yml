@@ -24,6 +24,30 @@ jobs:
         run: python -m bot.main --check
       - name: Run unit tests
         run: python -m unittest discover -s tests -v
+      - name: Exercise bounded autonomous repair cycle
+        run: python -m bot.main --autonomous-cycle --cycle-max-attempts 2 --cycle-timeout 60
+      - name: Verify autonomous-cycle audit records
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          root = Path(".cerebro/reports/autonomous-cycles")
+          summaries = sorted(root.glob("*/summary.json"))
+          assert summaries, "autonomous cycle did not write a summary"
+          summary_path = summaries[-1]
+          summary = json.loads(summary_path.read_text(encoding="utf-8"))
+          assert summary["status"] == "succeeded", summary
+          assert summary["attempts_completed"] == 1, summary
+          assert summary["ai_enabled"] is False
+          assert summary["external_ai_apis_enabled"] is False
+          assert len(summary["attempt_records"]) == 1
+          attempt = json.loads((summary_path.parent / summary["attempt_records"][0]).read_text(encoding="utf-8"))
+          assert attempt["status"] == "succeeded", attempt
+          assert attempt["test_result"]["exit_code"] == 0
+          assert attempt["verification"]["ok"] is True
+          print("AUTONOMOUS CYCLE AND AUDIT RECORD PASS")
+          PY
       - name: Validate example task
         run: python -m bot.main --validate-task .cerebro/examples/example-task.json
       - name: Validate dependency plan
@@ -58,6 +82,8 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: botpyton-executor-report
-          path: .cerebro/reports/*.json
+          path: |
+            .cerebro/reports/*.json
+            .cerebro/reports/autonomous-cycles/**/*.json
           if-no-files-found: warn
           retention-days: 7
