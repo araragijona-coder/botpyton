@@ -151,4 +151,4 @@ Examples: .cerebro/examples/github-task-batch.json and .cerebro/examples/github-
 
 ## Current status
 
-**PHASE 08 — GITHUB JSON TASK ORCHESTRATION / PENDING CI VERIFICATION.** This branch adds bounded JSON task batches, explicit prevalidation, branch-scoped persistent queue checkpoints, and a separate opt-in draft-PR submission job. No automatic merge or AI service/API is enabled. Verify the workflow run and resulting SHA before considering promotion.
+**PHASE 08 — GITHUB JSON TASK ORCHESTRATION / VERIFIED ON DEVELOPMENT BRANCH.** The phase branch passed the foundation test workflow (71 unit tests plus the autonomous-cycle and audit-record checks) and the persistent worker workflow (checkpoint restored, queue work completed, next checkpoint uploaded). The change remains isolated from main; live draft-PR submission was not executed. Any promotion still requires human review.
