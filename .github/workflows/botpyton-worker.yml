@@ -43,27 +43,28 @@ jobs:
         with:
           script: |
             const { owner, repo } = context.repo;
-            const runs = await github.rest.actions.listWorkflowRuns({
+            const response = await github.rest.actions.listWorkflowRuns({
               owner,
               repo,
-              workflow_id: "botpyton-worker.yml",
+              workflow_id: 387184205,
               branch: context.ref_name,
               status: "completed",
               per_page: 50,
             });
-            for (const run of runs.data.workflow_runs) {
+            core.info(`Found ${response.data.workflow_runs.length} completed run(s) for this worker workflow on ${context.ref_name}.`);
+            for (const run of response.data.workflow_runs) {
               if (run.id === context.runId || run.head_branch !== context.ref_name) continue;
-              const response = await github.rest.actions.listWorkflowRunArtifacts({
+              const artifactsResponse = await github.rest.actions.listWorkflowRunArtifacts({
                 owner, repo, run_id: run.id, per_page: 100,
               });
-              const artifact = response.data.artifacts.find(
+              const artifact = artifactsResponse.data.artifacts.find(
                 item => item.name === "botpyton-queue-checkpoint" && !item.expired
               );
               if (artifact) {
                 core.setOutput("found", "true");
                 core.setOutput("run_id", String(run.id));
                 core.setOutput("artifact_id", String(artifact.id));
-                core.info(`Using checkpoint from run ${run.id} (sha ${run.head_sha}).`);
+                core.info(`Using checkpoint artifact ${artifact.id} from run ${run.id} (sha ${run.head_sha}).`);
                 return;
               }
             }
