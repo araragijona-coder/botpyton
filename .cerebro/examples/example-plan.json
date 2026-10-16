@@ -1,0 +1,18 @@
+[
+  {
+    "id": "TASK-FOUNDATION-CHECK",
+    "goal": "Validate Python source and foundation tests",
+    "depends_on": [],
+    "allowed_actions": ["inspect_repository", "run_tests", "prepare_report"],
+    "success_conditions": ["python_syntax_valid", "unit_tests_pass"],
+    "max_attempts": 2
+  },
+  {
+    "id": "TASK-REPORT",
+    "goal": "Prepare a report after validation completes",
+    "depends_on": ["TASK-FOUNDATION-CHECK"],
+    "allowed_actions": ["prepare_report"],
+    "success_conditions": ["report_written"],
+    "max_attempts": 1
+  }
+]
