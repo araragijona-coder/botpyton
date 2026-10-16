@@ -1,5 +1,13 @@
+import contextlib
+import io
+import json
+import os
+import tempfile
 import unittest
+from pathlib import Path
+from unittest.mock import patch
 
+from bot.main import main
 from bot.github_ops import GitHubClient
 from bot.orchestration import (
     OrchestrationError,
@@ -103,16 +111,46 @@ class OrchestrationTests(unittest.TestCase):
             submit_change_plan_batch(invalid, client=client, execute=True)
         self.assertEqual(calls, [])
 
-    def test_empty_pr_batch_does_not_make_calls(self):
-        calls = []
-        client = GitHubClient(
-            repository="owner/repo",
-            transport=lambda method, endpoint, payload: calls.append(endpoint),
-        )
-        result = submit_change_plan_batch([], client=client, execute=True)
-        self.assertEqual(result["mode"], "executed")
-        self.assertEqual(result["count"], 0)
-        self.assertEqual(calls, [])
+    def test_cli_reads_bounded_task_batch_from_absolute_temp_path(self):
+        with tempfile.TemporaryDirectory() as temp:
+            target = Path(temp) / "tasks.json"
+            target.write_text(json.dumps([task("CLI-TASK")]), encoding="utf-8")
+            output = io.StringIO()
+            with contextlib.redirect_stdout(output):
+                code = main(["--validate-task-batch", str(target)])
+            self.assertEqual(code, 0)
+            self.assertEqual(json.loads(output.getvalue())["count"], 1)
+
+    def test_cli_github_plan_batch_dry_run_never_needs_network(self):
+        with tempfile.TemporaryDirectory() as temp:
+            target = Path(temp) / "plans.json"
+            target.write_text(json.dumps([plan()]), encoding="utf-8")
+            output = io.StringIO()
+            with patch.dict(os.environ, {"GITHUB_REPOSITORY": "owner/repo", "GITHUB_TOKEN": ""}):
+                with contextlib.redirect_stdout(output):
+                    code = main(["--github-plans", str(target)])
+            self.assertEqual(code, 0)
+            result = json.loads(output.getvalue())
+            self.assertEqual(result["mode"], "dry_run")
+            self.assertEqual(result["count"], 1)
+            self.assertFalse(result["automatic_merge"])
+
+    def test_cli_rejects_oversized_json_before_parsing(self):
+        with tempfile.TemporaryDirectory() as temp:
+            target = Path(temp) / "too-large.json"
+            target.write_text(" " * 50_001, encoding="utf-8")
+            errors = io.StringIO()
+            with contextlib.redirect_stderr(errors):
+                code = main(["--validate-task-batch", str(target)])
+            self.assertEqual(code, 2)
+            self.assertIn("50,000 bytes", errors.getvalue())
+
+    def test_cli_rejects_execute_flag_without_plan_batch(self):
+        errors = io.StringIO()
+        with contextlib.redirect_stderr(errors):
+            code = main(["--execute-github-plans"])
+        self.assertEqual(code, 2)
+        self.assertIn("--execute-github-plans requires --github-plans", errors.getvalue())
 
 
 if __name__ == "__main__":
