@@ -40,7 +40,7 @@ The worker implements the predefined actions `inspect_repository`, `validate_tas
 The dedicated workflow is `.github/workflows/botpyton-worker.yml`. It uses the GitHub Actions artifact store to carry the queue from one execution to the next, on the **same branch**.
 
 - On the phase branch `bot-bootstrap/phase-04-persistent-checkpoint`, a push runs the worker and creates a first smoke-task checkpoint if none exists. Later runs search the same workflow's completed runs on that branch and restore the latest non-expired `botpyton-queue-checkpoint` artifact.
-- The workflow can also be started manually from the Actions tab on a branch that contains the workflow. The `tasks_json` input accepts one task object or an array; `work_limit` bounds claims to 1–100. Task action validation and queue dependency validation still apply.
+- After the workflow is merged into the repository's default branch, it can be started manually from the Actions tab on a selected branch. The `tasks_json` input accepts one task object or an array; `work_limit` bounds claims to 1–100. Task action validation and queue dependency validation still apply.
 - Before using a restored queue, BotPyton verifies the checkpoint manifest, SHA-256 digest, task fingerprints, lifecycle states, attempt limits and dependency graph. A corrupt or incomplete checkpoint fails closed instead of replacing memory.
 - If the previous worker was interrupted with tasks marked `running`, the next execution runs `--resume` and respects each task's attempt limit.
 - The worker token is limited to `actions: read` and `contents: read`. The workflow does not commit state to a branch or use AI APIs. Artifact upload uses GitHub's workflow artifact mechanism.
