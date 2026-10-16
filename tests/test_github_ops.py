@@ -41,6 +41,7 @@ class FakeGitHub:
         self.trees = {}
         self.files = {"main": {}}
         self.pull_requests = []
+        self.branch_changed_paths = {}
         self.next_pr = 10
         self.calls = []
 
@@ -70,8 +71,10 @@ class FakeGitHub:
                 self.files[ref_name] = dict(self.files.get(ref_name, self.files["main"]))
                 commit = self.commits[payload["sha"]]
                 tree = self.trees[commit["tree"]["sha"]]
+                self.branch_changed_paths.setdefault(ref_name, set())
                 for entry in tree["tree"]:
                     self.files[ref_name][entry["path"]] = entry["content"]
+                    self.branch_changed_paths[ref_name].add(entry["path"])
                 return {"object": {"sha": payload["sha"]}}
         if method == "POST" and path == "/repos/test/repo/git/refs":
             ref_name = payload["ref"].removeprefix("refs/heads/")
@@ -81,6 +84,7 @@ class FakeGitHub:
                 raise AssertionError("new branch must be based on an existing commit")
             self.refs[ref_name] = payload["sha"]
             self.files[ref_name] = dict(self.files["main"])
+            self.branch_changed_paths[ref_name] = set()
             return {"ref": payload["ref"], "object": {"sha": payload["sha"]}}
         if method == "GET" and path.startswith("/repos/test/repo/git/commits/"):
             sha = path.rsplit("/", 1)[-1]
@@ -100,6 +104,19 @@ class FakeGitHub:
                 "message": payload["message"],
             }
             return {"sha": commit_sha}
+        if method == "GET" and path.startswith("/repos/test/repo/compare/"):
+            comparison_ref = path[len("/repos/test/repo/compare/"):]
+            if "..." not in comparison_ref:
+                raise AssertionError("compare endpoint must include base...head")
+            base_name, branch_name = comparison_ref.split("...", 1)
+            if base_name not in self.refs or branch_name not in self.refs:
+                self._not_found()
+            changed = sorted(self.branch_changed_paths.get(branch_name, set()))
+            return {
+                "status": "ahead" if changed else "identical",
+                "ahead_by": 1 if changed else 0,
+                "files": [{"filename": path, "status": "modified"} for path in changed],
+            }
         if method == "GET" and path.startswith("/repos/test/repo/contents/"):
             file_path = urllib.parse.unquote(path[len("/repos/test/repo/contents/"):])
             branch_name = query.get("ref", ["main"])[0]
@@ -220,6 +237,12 @@ class GitHubOperationTests(unittest.TestCase):
     def test_existing_branch_with_unrelated_content_is_not_overwritten(self):
         first = submit_change_plan(make_plan(), client=self.client, execute=True)
         self.fake.files[first["branch_name"]]["docs/example.md"] = "human change\n"
+        with self.assertRaisesRegex(GitHubOpsError, "different change"):
+            submit_change_plan(make_plan(), client=self.client, execute=True)
+
+    def test_existing_branch_with_extra_unplanned_file_is_rejected(self):
+        first = submit_change_plan(make_plan(), client=self.client, execute=True)
+        self.fake.branch_changed_paths[first["branch_name"]].add("docs/added-by-human.md")
         with self.assertRaisesRegex(GitHubOpsError, "different change"):
             submit_change_plan(make_plan(), client=self.client, execute=True)
 
