@@ -32,6 +32,19 @@ jobs:
         run: |
           python -m bot.main --enqueue .cerebro/examples/worker-task.json --memory "$RUNNER_TEMP/botpyton-state.json"
           python -m bot.main --work-queue 5 --memory "$RUNNER_TEMP/botpyton-state.json"
+      - name: Exercise checkpoint export and restore
+        run: |
+          python -m bot.main --export-checkpoint "$RUNNER_TEMP/checkpoint-out" --memory "$RUNNER_TEMP/botpyton-state.json"
+          python -m bot.main --restore-checkpoint "$RUNNER_TEMP/checkpoint-out" --memory "$RUNNER_TEMP/restored-state.json"
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          original = json.loads(Path("$RUNNER_TEMP/botpyton-state.json").read_text(encoding="utf-8"))
+          restored = json.loads(Path("$RUNNER_TEMP/restored-state.json").read_text(encoding="utf-8"))
+          assert original == restored, "checkpoint restore changed queue state"
+          assert restored["tasks"]["TASK-EXECUTOR-CI-001"]["status"] == "succeeded"
+          print("CHECKPOINT ROUND TRIP PASS")
+          PY
       - name: Upload executor report
         if: always()
         uses: actions/upload-artifact@v4
