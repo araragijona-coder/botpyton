@@ -39,14 +39,24 @@ def validate_task_batch(value: Any) -> dict[str, Any]:
             raise OrchestrationError(f"Duplicate task ID in incoming batch: {task_id}")
         seen.add(task_id)
 
-    # Include existing tasks only at queue insertion time; within this batch,
-    # dependency validity/cycles are checked before the queue is touched.
-    ordered = order_tasks(tasks) if tasks else []
+    # Dependencies may refer to tasks already persisted by earlier workflow runs.
+    # Validate ordering/cycles inside this batch, while final dependency existence is
+    # checked atomically by TaskQueue.enqueue_many against the complete persisted queue.
+    local_ids = {task["id"] for task in tasks}
+    local_graph = [
+        {**task, "depends_on": [dep for dep in task.get("depends_on", []) if dep in local_ids]}
+        for task in tasks
+    ]
+    ordered = order_tasks(local_graph) if local_graph else []
+    external_dependencies = sorted({
+        dep for task in tasks for dep in task.get("depends_on", []) if dep not in local_ids
+    })
     return {
         "schema_version": 1,
         "count": len(tasks),
         "task_ids": [task["id"] for task in tasks],
         "dependency_order": [task["id"] for task in ordered],
+        "external_dependencies": external_dependencies,
         "ai_enabled": False,
         "external_ai_apis_enabled": False,
     }
