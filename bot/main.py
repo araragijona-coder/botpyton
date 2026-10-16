@@ -29,7 +29,9 @@ def _print_json(value: object) -> None:
 
 
 def _read_bounded_json(path_text: str, *, limit_bytes: int = 50_000) -> object:
-    path = Path(validate_relative_path(path_text))
+    # This helper only reads bounded JSON input; workflow callers use RUNNER_TEMP
+    # absolute paths. No input content is executed or used as a shell command.
+    path = Path(path_text)
     raw = path.read_bytes()
     if len(raw) > limit_bytes:
         raise OrchestrationError(f"JSON input exceeds {limit_bytes} bytes")
