@@ -49,6 +49,10 @@ jobs:
           assert restored["tasks"]["TASK-EXECUTOR-CI-001"]["status"] == "succeeded"
           print("CHECKPOINT ROUND TRIP PASS")
           PY
+      - name: Validate GitHub change plan in dry-run mode
+        env:
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: python -m bot.main --github-plan .cerebro/examples/github-change-plan.json
       - name: Upload executor report
         if: always()
         uses: actions/upload-artifact@v4
