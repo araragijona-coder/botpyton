@@ -56,6 +56,7 @@ jobs:
           BOTPYTON_TASKS_JSON: ${{ inputs.tasks_json || '[]' }}
           BOTPYTON_CHANGE_PLANS_JSON: ${{ inputs.change_plans_json || '[]' }}
           GITHUB_REPOSITORY: ${{ github.repository }}
+          BOTPYTON_WORK_LIMIT: ${{ inputs.work_limit || 10 }}
         run: |
           python - <<'PY'
           import json
@@ -63,6 +64,12 @@ jobs:
           from pathlib import Path
 
           work = Path(os.environ["RUNNER_TEMP"])
+          try:
+              work_limit = int(os.environ.get("BOTPYTON_WORK_LIMIT", "10"))
+          except ValueError as exc:
+              raise SystemExit("work_limit must be an integer from 1 to 100") from exc
+          if not 1 <= work_limit <= 100:
+              raise SystemExit("work_limit must be an integer from 1 to 100")
           raw_tasks = os.environ.get("BOTPYTON_TASKS_JSON", "[]")
           raw_plans = os.environ.get("BOTPYTON_CHANGE_PLANS_JSON", "[]")
           for label, raw in (("tasks_json", raw_tasks), ("change_plans_json", raw_plans)):
