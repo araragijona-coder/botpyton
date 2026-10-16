@@ -43,17 +43,20 @@ jobs:
         with:
           script: |
             const { owner, repo } = context.repo;
+            const refName = (context.ref || "").startsWith("refs/heads/")
+              ? context.ref.slice("refs/heads/".length)
+              : context.ref;
             const response = await github.rest.actions.listWorkflowRuns({
               owner,
               repo,
               workflow_id: 387184205,
-              branch: context.ref_name,
+              branch: refName,
               status: "completed",
               per_page: 50,
             });
-            core.info(`Found ${response.data.workflow_runs.length} completed run(s) for this worker workflow on ${context.ref_name}.`);
+            core.info(`Found ${response.data.workflow_runs.length} completed run(s) for this worker workflow on ${refName}.`);
             for (const run of response.data.workflow_runs) {
-              if (run.id === context.runId || run.head_branch !== context.ref_name) continue;
+              if (run.id === context.runId || run.head_branch !== refName) continue;
               const artifactsResponse = await github.rest.actions.listWorkflowRunArtifacts({
                 owner, repo, run_id: run.id, per_page: 100,
               });
@@ -108,9 +111,9 @@ jobs:
           if not isinstance(tasks, list) or any(not isinstance(task, dict) for task in tasks):
               raise SystemExit("tasks_json must be a JSON task object or an array of task objects")
           target = Path(os.environ["RUNNER_TEMP"]) / "botpyton-incoming-tasks.json"
-          target.write_text(json.dumps(tasks, ensure_ascii=False, indent=2) + "\\n", encoding="utf-8")
+          target.write_text(json.dumps(tasks, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
           with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
-              output.write(f"has_tasks={'true' if tasks else 'false'}\\n")
+              output.write(f"has_tasks={'true' if tasks else 'false'}\n")
           PY
 
       - name: Enqueue tasks supplied to this run
