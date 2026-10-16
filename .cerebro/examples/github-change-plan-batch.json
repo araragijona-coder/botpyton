@@ -1,0 +1,17 @@
+[
+  {
+    "schema_version": 1,
+    "task_id": "GITHUB-PR-EXAMPLE-001",
+    "base_branch": "main",
+    "title": "BotPyton: example human-reviewed change",
+    "body": "Example plan for demonstrating the phase G GitHub workflow. Keep as a draft until a human has reviewed the proposed file changes.",
+    "commit_message": "docs: add human-review change example",
+    "draft": true,
+    "changes": [
+      {
+        "path": "docs/proposals/botpyton-human-review-example.md",
+        "content": "# Human-reviewed BotPyton change\n\nThis file is proposed by a declarative JSON plan.\n\n- Created on an isolated BotPyton branch.\n- Submitted as a draft pull request.\n- Requires human review before any merge.\n- Automatic merge is disabled.\n"
+      }
+    ]
+  }
+]
