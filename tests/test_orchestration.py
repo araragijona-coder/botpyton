@@ -143,7 +143,7 @@ class OrchestrationTests(unittest.TestCase):
             with contextlib.redirect_stderr(errors):
                 code = main(["--validate-task-batch", str(target)])
             self.assertEqual(code, 2)
-            self.assertIn("50,000 bytes", errors.getvalue())
+            self.assertIn("50000 bytes", errors.getvalue())
 
     def test_cli_rejects_execute_flag_without_plan_batch(self):
         errors = io.StringIO()
