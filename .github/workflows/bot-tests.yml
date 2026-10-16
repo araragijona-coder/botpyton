@@ -26,3 +26,5 @@ jobs:
         run: python -m unittest discover -s tests -v
       - name: Validate example task
         run: python -m bot.main --validate-task .cerebro/examples/example-task.json
+      - name: Validate dependency plan
+        run: python -m bot.main --plan .cerebro/examples/example-plan.json
