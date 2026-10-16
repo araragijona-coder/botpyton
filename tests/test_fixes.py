@@ -99,5 +99,31 @@ class KnownFixTests(unittest.TestCase):
         self.assertEqual(target.read_text(encoding="utf-8"), original)
 
 
+    def test_executor_routes_retry_failure_to_exact_fix_rule(self):
+        from bot.executor import TaskExecutor
+
+        target = self.root / "broken.py"
+        original = "if True\n    value = 9\n"
+        target.write_text(original, encoding="utf-8")
+        payload = {
+            "id": "TASK-REPAIR-INTEGRATION",
+            "goal": "Repair one exact syntax error and verify it parses",
+            "depends_on": [],
+            "allowed_actions": ["apply_known_fix"],
+            "success_conditions": ["syntax_valid"],
+            "max_attempts": 2,
+        }
+        outcome = TaskExecutor(self.root).execute({
+            "id": payload["id"],
+            "payload": payload,
+            "attempts": 2,
+            "last_error": "SyntaxError: expected ':'",
+        })
+        self.assertTrue(outcome["ok"])
+        fix = outcome["actions"][0]["details"]
+        self.assertTrue(fix["applied"])
+        self.assertEqual(target.read_text(encoding="utf-8"), "if True:\n    value = 9\n")
+
+
 if __name__ == "__main__":
     unittest.main()
