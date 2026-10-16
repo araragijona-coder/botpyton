@@ -269,10 +269,13 @@ def run_autonomous_cycle(
             if fix_result.get("applied"):
                 post_repair_verification = _verify_repository(base)
                 attempt_record["repair"]["post_repair_verification"] = post_repair_verification
+                attempt_record["repair"]["post_repair_verification_passed"] = bool(
+                    post_repair_verification["ok"]
+                )
                 if post_repair_verification["ok"]:
                     attempt_record["status"] = "repaired_rerun_required"
                 else:
-                    attempt_record["repair"]["applied"] = False
+                    # The source edit did occur; preserve that fact even though verification failed.
                     attempt_record["repair"]["automatic_source_edit_applied"] = True
                     attempt_record["repair"]["reason"] = (
                         "repair applied but repository-wide verification did not pass; cycle stopped"
