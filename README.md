@@ -7,6 +7,7 @@ BotPyton is a deterministic software-work automation bot. It uses **no AI models
 - JSON task queue with explicit states, dependency checks, idempotency, bounded attempts and interruption recovery.
 - Cross-run queue checkpoints in GitHub Actions artifacts, with SHA-256 integrity checks.
 - Repository inventory, syntax checks, fixed unit-test execution and JSON execution reports.
+- Bounded autonomous cycle: run fixed tests, apply at most one exact known repair after a failure, rerun tests, verify Python/JSON files, and persist per-attempt evidence.
 - Conservative diagnostics plus two exact source repairs: a uniquely located JSON trailing comma and a supported one-line Python compound-header colon.
 - Declarative GitHub operations: create an isolated bot branch, create one commit containing the declared paths, and open a draft pull request for review.
 - No automatic merge, no arbitrary shell commands, no automatic package installation, and no AI/API calls to AI services.
@@ -84,6 +85,21 @@ The dedicated worker `.github/workflows/botpyton-worker.yml` uses GitHub Actions
 
 Checkpoint retention is configured to request up to 90 days, subject to GitHub policies; it is not indefinite archival storage.
 
+## Phase 07: bounded autonomous repair cycle
+
+Run this from the repository root:
+
+```bash
+python -m bot.main --autonomous-cycle
+python -m bot.main --autonomous-cycle --cycle-max-attempts 2 --cycle-timeout 60
+```
+
+The cycle runs only the fixed command `python -m unittest discover -s tests -v` with `shell=False`. Each invocation is bounded to 1–3 test attempts and 1–120 seconds per attempt. After a failed test run, it may use the existing exact-pattern repair rules in `bot/fixes.py` once; the original file is backed up and the candidate must pass parser verification. After repairs, the full Python syntax and JSON-file checks must pass before the test suite is rerun. The final successful state requires both tests and static verification to pass.
+
+An unsupported/ambiguous failure, timeout, failed post-repair verification, or exhausted limit stops the cycle. It does not retry blindly and does not make an unverified repair after the final permitted test attempt. Every attempt has a separate JSON record under `.cerebro/reports/autonomous-cycles/<cycle-id>/attempt-NNN.json`; `summary.json` is updated atomically and includes the outcome, attempt list, and explicit no-AI flags. Records are persisted before the test starts and updated before/after repair work so interrupted cycles leave evidence. The normal CI invokes the cycle and validates its successful audit record; reports are uploaded as a CI artifact.
+
+The test subprocess receives a filtered environment that removes common credential-bearing variable names. The cycle makes no network/API calls, does not install dependencies, does not merge branches, and never executes commands supplied in JSON or task text.
+
 ## Security model
 
 - Python standard library only; no AI/LLM services or inference APIs.
@@ -95,4 +111,4 @@ Checkpoint retention is configured to request up to 90 days, subject to GitHub p
 
 ## Current status
 
-**PHASE 06 — GITHUB BRANCH/COMMIT/DRAFT-PR OPERATIONS / NOT YET PRODUCTION-READY.** The implementation and fake-transport tests are in place. The normal CI path must pass before the phase is verified. The actual write workflow is gated behind a manual explicit opt-in and has not been used to create a live PR.
+**PHASE 07 — BOUNDED AUTONOMOUS REPAIR CYCLE / PENDING CI VERIFICATION.** The phase branch adds the deterministic test/repair/rerun loop, attempt-by-attempt JSON evidence, explicit hard limits, and CI validation. GitHub write operations remain separately gated behind manual opt-in; no automatic merge or AI service is enabled.
