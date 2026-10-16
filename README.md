@@ -5,10 +5,11 @@ BotPyton is a deterministic software-work automation bot. It uses **no AI models
 ## Capabilities
 
 - Persistent local JSON queue with lifecycle states, dependency checks, idempotency, bounded attempts and interruption recovery.
+- Cross-run queue checkpoints in GitHub Actions artifacts, protected by a SHA-256 manifest and schema validation.
 - Repository inventory, Python syntax inspection and a fixed unit-test invocation using Python's standard library.
 - Conservative diagnostics for missing modules, Python syntax errors, invalid JSON and Git conflict markers.
-- Machine-readable execution reports and an integrity-checked queue checkpoint that can travel between GitHub Actions runs as an artifact.
-- No automatic source edits, package installation, branch writes, pull-request creation or merge.
+- Two exact, deterministic source repairs: remove a single JSON trailing comma, or add a missing colon to a supported one-line Python compound header. Both require parser verification and create a backup first.
+- Unknown/ambiguous errors stop without edits. There is no arbitrary code generation, automatic package installation, branch writes, pull-request creation or merge.
 
 ## Quick start
 
@@ -33,19 +34,32 @@ python -m bot.main --work-queue 10
 python -m bot.main --resume
 ```
 
-The worker implements the predefined actions `inspect_repository`, `validate_task`, `run_tests`, `apply_known_fix` (non-destructive diagnosis) and `prepare_report`. The unit-test action always runs the fixed command `python -m unittest discover -s tests -v`, with `shell=False` and a timeout.
+The worker implements predefined actions: `inspect_repository`, `validate_task`, `run_tests`, `apply_known_fix` and `prepare_report`. The unit-test action always runs the fixed command `python -m unittest discover -s tests -v`, with `shell=False` and a timeout.
+
+## Known fixes (Phase 05)
+
+The exact repair rules live in `bot/fixes.py`; regression tests live in `tests/test_fixes.py`. These rules are intentionally limited:
+
+1. `json.remove_single_trailing_comma`: only considered when the failure log contains `JSONDecodeError`, exactly one repository JSON file is invalid, and the parser's error position points to a closing `}` or `]` preceded by a comma (possibly separated by whitespace). The candidate must parse as complete JSON before it is written.
+2. `python.add_missing_compound_header_colon`: only considered when the failure log contains `SyntaxError`, exactly one repository Python file is invalid, Python reports exactly `expected ':'`, and the reported line matches a supported one-line `if`, `elif`, `for`, `while`, `def` or `class` header. The candidate must parse as a complete Python module before it is written.
+
+Before a change, the original file is copied to `.cerebro/backups/` under a unique timestamped name. Every write uses a temporary file and atomic replacement. The following locations are excluded from automatic modification: `.github/`, `.cerebro/config.json`, `.cerebro/policies/`, `.cerebro/memory/`, `.cerebro/reports/` and `.cerebro/backups/`.
+
+A fix is deliberately rejected when there are multiple invalid files, multiple known signatures, unsupported syntax, parser errors after the proposed edit, protected targets or no exact match. It does not guess at missing package names, choose a Git conflict side, rewrite arbitrary code or install dependencies. A task can order `apply_known_fix` before `run_tests`, so a retry applies a supported repair and then verifies the suite.
 
 ## Cross-run queue persistence in GitHub Actions
 
-The dedicated workflow is `.github/workflows/botpyton-worker.yml`. It uses the GitHub Actions artifact store to carry the queue from one execution to the next, on the **same branch**.
+The dedicated workflow is `.github/workflows/botpyton-worker.yml`. It uses GitHub Actions artifacts to carry the queue between executions on the **same branch**.
 
-- On the phase branch `bot-bootstrap/phase-04-persistent-checkpoint`, a push runs the worker and creates a first smoke-task checkpoint if none exists. Later runs search the same workflow's completed runs on that branch and restore the latest non-expired `botpyton-queue-checkpoint` artifact.
-- After the workflow is merged into the repository's default branch, it can be started manually from the Actions tab on a selected branch. The `tasks_json` input accepts one task object or an array; `work_limit` bounds claims to 1–100. Task action validation and queue dependency validation still apply.
-- Before using a restored queue, BotPyton verifies the checkpoint manifest, SHA-256 digest, task fingerprints, lifecycle states, attempt limits and dependency graph. A corrupt or incomplete checkpoint fails closed instead of replacing memory.
-- If the previous worker was interrupted with tasks marked `running`, the next execution runs `--resume` and respects each task's attempt limit.
-- The worker token is limited to `actions: read` and `contents: read`. The workflow does not commit state to a branch or use AI APIs. Artifact upload uses GitHub's workflow artifact mechanism.
+- It searches completed runs of the worker workflow on the current branch and restores the latest retained `botpyton-queue-checkpoint` artifact.
+- Before restoration, BotPyton verifies the manifest, SHA-256 digest, task fingerprints, lifecycle states, attempt limits and dependency graph. Invalid checkpoints fail closed.
+- If the previous runner left tasks as `running`, the next run invokes `--resume` within attempt limits.
+- The workflow requests up to 90 days of artifact retention, subject to repository/organization limits.
+- The worker token has only `actions: read` and `contents: read`; it does not commit state or modify repository branches.
 
-Manual task input example (JSON; no command strings are executed):
+## Example manual task input
+
+Start the workflow manually after the workflow has been merged to the default branch, select a branch containing the workflow, and provide `tasks_json`. The `work_limit` input bounds queue claims from 1 to 100.
 
 ```json
 [
@@ -60,35 +74,22 @@ Manual task input example (JSON; no command strings are executed):
 ]
 ```
 
-For a local/manual checkpoint round trip, use:
-
-```bash
-python -m bot.main --export-checkpoint .cerebro/checkpoint-out --memory .cerebro/memory/state.json
-python -m bot.main --restore-checkpoint .cerebro/checkpoint-out --memory .cerebro/memory/restored-state.json
-```
-
-### Persistence limit
-
-GitHub Actions artifacts have a finite retention period. This workflow requests **90 days**; repository or organization policy may enforce a shorter maximum. If no retained checkpoint remains, the workflow initializes an empty queue (and seeds a smoke task only on the first push to the phase branch). Artifact-based persistence is suitable for continuity between runs, but it is not indefinite archival storage. Runs are serialized per branch to avoid checkpoint races. Work must be designed to tolerate at-least-once execution if a runner disappears before it uploads the latest checkpoint.
-
 ## Recovery behavior
 
-- `ModuleNotFoundError`: inspect the missing import and project dependency declarations; do not install packages automatically.
-- `SyntaxError`: report file/line syntax findings; do not rewrite code generically.
-- `JSONDecodeError`: parse repository JSON files and report invalid paths and locations.
-- `CONFLICT (content)`: search for common conflict markers; do not merge or rewrite files.
-- Unknown signatures: stop and report without retry.
-
-This phase performs **no automatic source repair**: plausible edits are not proof of correctness.
+- `ModuleNotFoundError`: inspect imports and declared dependencies; never install packages automatically.
+- `SyntaxError`: diagnose all Python syntax errors; automatically fix only the exact supported missing-colon pattern.
+- `JSONDecodeError`: diagnose repository JSON; automatically fix only a uniquely located trailing comma.
+- `CONFLICT (content)`: locate merge-conflict markers; do not merge or choose a side.
+- Unknown signatures: stop, preserve evidence and report.
 
 ## Security model
 
 - Python standard library only; no AI/LLM services or inference API calls.
 - Actions are allowlisted in source code; no arbitrary shell commands from task descriptions.
 - Fixed test command, timeout, and bounded task attempts.
-- Minimal workflow permissions: `actions: read`, `contents: read`.
-- No access to repository secrets, automatic source edits, branch commits, pull requests or merges.
+- Automatic writes are limited to the two exact fix rules and exclude protected paths; each repair requires a backup and a successful parser check.
+- No secret administration, automatic source-wide rewrites, branch commits, pull requests or merges.
 
 ## Current status
 
-**PHASE 04 — CROSS-RUN ARTIFACT CHECKPOINT / NOT YET PRODUCTION-READY.** The artifact checkpoint codec, integrity checks, restore command, dedicated worker workflow and queue round-trip CI tests are implemented. This does not enable indefinite retention or autonomous code changes.
+**PHASE 05 — EXACT KNOWN FIXES / NOT YET PRODUCTION-READY.** The two deterministic repairs, backups, parser verification and regression tests are implemented. GitHub Actions CI must pass before this phase is considered verified. Cross-run checkpoint persistence remains artifact-based rather than indefinite archival storage.
