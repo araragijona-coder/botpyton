@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "bot_name": "BotPyton",
+  "mode": "safe_foundation",
+  "ai_enabled": false,
+  "external_ai_apis_enabled": false,
+  "default_max_attempts": 3,
+  "unknown_error_policy": "stop_and_report",
+  "automatic_merge": false,
+  "allowed_actions": [
+    "inspect_repository",
+    "validate_task",
+    "run_tests",
+    "apply_known_fix",
+    "prepare_report"
+  ]
+}
