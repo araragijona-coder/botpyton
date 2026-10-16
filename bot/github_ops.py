@@ -260,11 +260,33 @@ def _read_file(client: GitHubClient, path: str, branch: str) -> str | None:
         raise GitHubOpsError(f"Cannot decode existing repository file: {path}") from exc
 
 
-def _existing_changes_match(client: GitHubClient, plan: NormalizedPlan, branch: str) -> bool:
+def _existing_changes_match(
+    client: GitHubClient, plan: NormalizedPlan, branch: str, base_branch: str
+) -> bool:
     for path, expected in plan.changes.items():
         if _read_file(client, path, branch) != expected:
             return False
-    return True
+    # Also inspect the branch diff so a human-added extra file cannot sneak into
+    # the same pull request just because the declared paths still match.
+    endpoint = client._endpoint(
+        "/compare/" + urllib.parse.quote(base_branch, safe="/")
+        + "..." + urllib.parse.quote(branch, safe="/")
+    )
+    comparison = client.request("GET", endpoint)
+    if not isinstance(comparison, dict):
+        return False
+    files = comparison.get("files")
+    if not isinstance(files, list) or len(files) > MAX_FILES_PER_PLAN:
+        return False
+    if comparison.get("status") not in {"ahead", "identical"}:
+        return False
+    changed_paths = {
+        item.get("filename") for item in files
+        if isinstance(item, dict) and isinstance(item.get("filename"), str)
+    }
+    if len(changed_paths) != len(files):
+        return False
+    return changed_paths.issubset(set(plan.changes))
 
 
 def _find_existing_pull_request(client: GitHubClient, plan: NormalizedPlan) -> dict[str, Any] | None:
@@ -342,7 +364,7 @@ def submit_change_plan(
         branch_sha = branch_ref["object"]["sha"]
         branch_created = False
         if branch_sha != base_sha:
-            if not _existing_changes_match(client, plan, plan.branch_name):
+            if not _existing_changes_match(client, plan, plan.branch_name, plan.base_branch):
                 raise GitHubOpsError(
                     "The deterministic branch already contains a different change; "
                     "refusing to overwrite or extend it"
