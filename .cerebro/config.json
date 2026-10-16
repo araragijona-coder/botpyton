@@ -71,5 +71,23 @@
       "contents: write",
       "pull-requests: write"
     ]
+  },
+  "github_task_orchestration": {
+    "enabled": true,
+    "task_input_schema": "JSON task object or array, validated against the source-controlled allowlist",
+    "max_tasks_per_dispatch": 25,
+    "max_json_input_bytes": 50000,
+    "max_queue_claims_per_dispatch": 100,
+    "task_dependencies_checked_against_persistent_queue": true,
+    "persistence": "GitHub Actions checkpoint artifact scoped to the current branch",
+    "checkpoint_retention_days": 90,
+    "change_plans_enabled": true,
+    "max_change_plans_per_dispatch": 10,
+    "draft_pull_requests_required": true,
+    "require_explicit_execute_prs_opt_in": true,
+    "submit_only_after_queue_job_success": true,
+    "automatic_merge": false,
+    "ai_enabled": false,
+    "external_ai_apis_enabled": false
   }
 }
