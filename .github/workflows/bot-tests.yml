@@ -33,14 +33,18 @@ jobs:
           python -m bot.main --enqueue .cerebro/examples/worker-task.json --memory "$RUNNER_TEMP/botpyton-state.json"
           python -m bot.main --work-queue 5 --memory "$RUNNER_TEMP/botpyton-state.json"
       - name: Exercise checkpoint export and restore
+        env:
+          BOTPYTON_ORIGINAL_STATE: ${{ runner.temp }}/botpyton-state.json
+          BOTPYTON_RESTORED_STATE: ${{ runner.temp }}/restored-state.json
         run: |
-          python -m bot.main --export-checkpoint "$RUNNER_TEMP/checkpoint-out" --memory "$RUNNER_TEMP/botpyton-state.json"
-          python -m bot.main --restore-checkpoint "$RUNNER_TEMP/checkpoint-out" --memory "$RUNNER_TEMP/restored-state.json"
+          python -m bot.main --export-checkpoint "$RUNNER_TEMP/checkpoint-out" --memory "$BOTPYTON_ORIGINAL_STATE"
+          python -m bot.main --restore-checkpoint "$RUNNER_TEMP/checkpoint-out" --memory "$BOTPYTON_RESTORED_STATE"
           python - <<'PY'
           import json
+          import os
           from pathlib import Path
-          original = json.loads(Path("$RUNNER_TEMP/botpyton-state.json").read_text(encoding="utf-8"))
-          restored = json.loads(Path("$RUNNER_TEMP/restored-state.json").read_text(encoding="utf-8"))
+          original = json.loads(Path(os.environ["BOTPYTON_ORIGINAL_STATE"]).read_text(encoding="utf-8"))
+          restored = json.loads(Path(os.environ["BOTPYTON_RESTORED_STATE"]).read_text(encoding="utf-8"))
           assert original == restored, "checkpoint restore changed queue state"
           assert restored["tasks"]["TASK-EXECUTOR-CI-001"]["status"] == "succeeded"
           print("CHECKPOINT ROUND TRIP PASS")
