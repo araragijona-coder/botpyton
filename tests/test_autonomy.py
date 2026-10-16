@@ -117,7 +117,22 @@ class AutonomousCycleTests(unittest.TestCase):
         attempt = json.loads((report_dir / "attempt-001.json").read_text(encoding="utf-8"))
         self.assertFalse(attempt["verification"]["ok"])
         self.assertFalse(attempt["repair"]["applied"])
-        self.assertIn("No automatic source repair", attempt["repair"]["reason"])
+        self.assertIn("trailing comma", attempt["repair"]["reason"].lower())
+
+    def test_final_attempt_never_applies_an_unverified_repair(self):
+        target = self.root / "tests" / "test_repair_candidate.py"
+        original = "if True\n    value = 3\n"
+        target.write_text(original, encoding="utf-8")
+
+        result = run_autonomous_cycle(self.root, max_attempts=1, test_timeout_seconds=20)
+
+        self.assertEqual(result["status"], "failed")
+        self.assertEqual(result["attempts_completed"], 1)
+        self.assertEqual(target.read_text(encoding="utf-8"), original)
+        report_dir = self._report_dir(result).parent
+        attempt = json.loads((report_dir / "attempt-001.json").read_text(encoding="utf-8"))
+        self.assertEqual(attempt["repair"]["reason"], "attempt_limit_reached; no unverified final repair will be made")
+        self.assertFalse(attempt["repair"]["applied"])
 
 
 if __name__ == "__main__":
