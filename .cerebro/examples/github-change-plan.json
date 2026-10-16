@@ -1,0 +1,15 @@
+{
+  "schema_version": 1,
+  "task_id": "EXAMPLE-GITHUB-CHANGE",
+  "base_branch": "main",
+  "title": "BotPyton: example generated change",
+  "body": "Example change plan for validating BotPyton GitHub operations. The workflow defaults to dry-run; explicitly approve execution to create a branch, commit, and draft pull request.",
+  "commit_message": "docs: add BotPyton GitHub operations example",
+  "draft": true,
+  "changes": [
+    {
+      "path": "docs/proposals/botpyton-github-operations-example.md",
+      "content": "# BotPyton GitHub operations example\n\nThis file is produced only if a maintainer explicitly executes the example change plan.\n\n- One isolated branch per plan fingerprint.\n- One atomic Git commit containing the declared paths.\n- One draft pull request for human review.\n- Automatic merge is disabled.\n"
+    }
+  ]
+}
