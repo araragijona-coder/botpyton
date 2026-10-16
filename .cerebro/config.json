@@ -1,12 +1,37 @@
 {
   "schema_version": 1,
   "bot_name": "BotPyton",
-  "mode": "safe_foundation",
+  "mode": "deterministic_known_fixes",
   "ai_enabled": false,
   "external_ai_apis_enabled": false,
   "default_max_attempts": 3,
   "unknown_error_policy": "stop_and_report",
   "automatic_merge": false,
+  "automatic_source_repairs_enabled": true,
+  "known_fix_rules": [
+    {
+      "id": "json.remove_single_trailing_comma",
+      "requires_exact_signature": "JSONDecodeError",
+      "requires_unique_invalid_file": true,
+      "requires_parser_verification": true,
+      "creates_backup": true
+    },
+    {
+      "id": "python.add_missing_compound_header_colon",
+      "requires_exact_signature": "SyntaxError: expected ':'",
+      "requires_unique_invalid_file": true,
+      "requires_parser_verification": true,
+      "creates_backup": true
+    }
+  ],
+  "protected_paths": [
+    ".github/",
+    ".cerebro/config.json",
+    ".cerebro/policies/",
+    ".cerebro/memory/",
+    ".cerebro/reports/",
+    ".cerebro/backups/"
+  ],
   "allowed_actions": [
     "inspect_repository",
     "validate_task",
