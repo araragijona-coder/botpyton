@@ -6,6 +6,7 @@ import json
 import sys
 from pathlib import Path
 
+from .autonomy import AutonomousCycleError, run_autonomous_cycle
 from .checkpoint import CheckpointError, export_checkpoint, restore_checkpoint
 from .diagnostics import diagnose_failure
 from .executor import TaskExecutor
@@ -71,9 +72,23 @@ def main(argv: list[str] | None = None) -> int:
                         help="validate a declarative GitHub change plan (dry-run by default)")
     parser.add_argument("--execute-github-plan", action="store_true",
                         help="execute branch, one commit and draft pull-request operations for --github-plan")
+    parser.add_argument("--autonomous-cycle", action="store_true",
+                        help="run bounded test, exact known repair, rerun, verification, and audit reports")
+    parser.add_argument("--cycle-max-attempts", type=int, default=3,
+                        help="maximum test attempts for --autonomous-cycle (hard maximum: 3)")
+    parser.add_argument("--cycle-timeout", type=int, default=120,
+                        help="seconds per fixed test attempt for --autonomous-cycle (hard maximum: 120)")
     parser.add_argument("--memory", default=".cerebro/memory/state.json", help="memory file path")
     args = parser.parse_args(argv)
     try:
+        if args.autonomous_cycle:
+            result = run_autonomous_cycle(
+                Path.cwd(),
+                max_attempts=args.cycle_max_attempts,
+                test_timeout_seconds=args.cycle_timeout,
+            )
+            _print_json(result)
+            return 0 if result["status"] == "succeeded" else 1
         if args.execute_github_plan and not args.github_plan:
             raise GitHubOpsError("--execute-github-plan requires --github-plan")
         if args.github_plan:
@@ -169,7 +184,7 @@ def main(argv: list[str] | None = None) -> int:
         parser.print_help()
         return 0
     except (OSError, UnicodeError, json.JSONDecodeError, PolicyError, MemoryError,
-            QueueError, CheckpointError, GitHubOpsError, ValueError) as exc:
+            QueueError, CheckpointError, GitHubOpsError, AutonomousCycleError, ValueError) as exc:
         print(f"CHECK FAIL: {exc}", file=sys.stderr)
         return 2
 
