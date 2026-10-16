@@ -12,7 +12,7 @@ permissions:
 jobs:
   test:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 8
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -28,3 +28,15 @@ jobs:
         run: python -m bot.main --validate-task .cerebro/examples/example-task.json
       - name: Validate dependency plan
         run: python -m bot.main --plan .cerebro/examples/example-plan.json
+      - name: Exercise deterministic task executor
+        run: |
+          python -m bot.main --enqueue .cerebro/examples/worker-task.json --memory "$RUNNER_TEMP/botpyton-state.json"
+          python -m bot.main --work-queue 5 --memory "$RUNNER_TEMP/botpyton-state.json"
+      - name: Upload executor report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: botpyton-executor-report
+          path: .cerebro/reports/*.json
+          if-no-files-found: warn
+          retention-days: 7
