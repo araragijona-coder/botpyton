@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from .diagnostics import diagnose_failure
+from .fixes import apply_known_fix
 from .policy import PolicyError, validate_task
 from .verifier import verify_python_files
 
@@ -110,11 +111,13 @@ class TaskExecutor:
                     "automatic_source_edit_applied": False,
                     "message": "There is no recorded failure to recover from."
                 }
-            return diagnose_failure(
-                str(previous_error), self.root,
-                attempt=record.get("attempts", 1),
-                max_attempts=task.get("max_attempts", 3),
-            )
+            result = apply_known_fix(str(previous_error), self.root)
+            if not result["applied"]:
+                raise ActionFailure(
+                    f"No safe deterministic fix was applied: {result['reason']}",
+                    log_text="NO_SAFE_FIX_APPLIED without an actionable failure signature",
+                )
+            return result
         if action == "prepare_report":
             # The final report is always written after all actions; this marker records intent.
             return {"status": "final_report_will_be_written", "format": "json"}
