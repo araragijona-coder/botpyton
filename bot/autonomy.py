@@ -186,23 +186,20 @@ def run_autonomous_cycle(
 
     for attempt_number in range(1, max_attempts + 1):
         attempt_started = _now()
-        test_result = _run_fixed_tests(base, test_timeout_seconds)
+        attempt_path = report_dir / f"attempt-{attempt_number:03d}.json"
         attempt_record: dict[str, Any] = {
             "schema_version": 1,
             "cycle_id": cycle_id,
             "attempt": attempt_number,
             "max_attempts": max_attempts,
             "started_at": attempt_started,
-            "test_result": {
-                key: value for key, value in test_result.items()
-                if key != "failure_log_tail"
-            },
+            "test_result": None,
             "verification": None,
             "diagnostic": None,
             "repair": {
                 "attempted": False,
                 "applied": False,
-                "reason": "not_needed",
+                "reason": "not_started",
                 "automatic_source_edit_applied": False,
             },
             "status": "running",
@@ -210,7 +207,19 @@ def run_autonomous_cycle(
             "ai_enabled": False,
             "external_ai_apis_enabled": False,
         }
+        # Persist the attempt before launching the test process, so interruptions leave evidence.
+        _write_json_atomic(attempt_path, attempt_record)
+        summary["attempts_started"] = attempt_number
+        summary["attempt_records"].append(attempt_path.name)
+        _write_json_atomic(summary_path, summary)
 
+        test_result = _run_fixed_tests(base, test_timeout_seconds)
+        attempt_record["test_result"] = {
+            key: value for key, value in test_result.items()
+            if key != "failure_log_tail"
+        }
+        # Persist test results before any repair operation.
+        _write_json_atomic(attempt_path, attempt_record)
         failure_log = test_result["failure_log_tail"]
         test_ok = test_result["exit_code"] == 0 and not test_result["timed_out"]
         if test_ok:
@@ -220,10 +229,8 @@ def run_autonomous_cycle(
                 attempt_record["status"] = "succeeded"
                 attempt_record["repair"]["reason"] = "tests_and_static_verification_passed"
                 attempt_record["finished_at"] = _now()
-                attempt_path = report_dir / f"attempt-{attempt_number:03d}.json"
                 _write_json_atomic(attempt_path, attempt_record)
                 summary["attempts_completed"] = attempt_number
-                summary["attempt_records"].append(attempt_path.name)
                 summary["status"] = "succeeded"
                 summary["finished_at"] = _now()
                 summary["final_verification"] = verification
@@ -275,10 +282,8 @@ def run_autonomous_cycle(
                 attempt_record["status"] = "failed"
 
         attempt_record["finished_at"] = _now()
-        attempt_path = report_dir / f"attempt-{attempt_number:03d}.json"
         _write_json_atomic(attempt_path, attempt_record)
         summary["attempts_completed"] = attempt_number
-        summary["attempt_records"].append(attempt_path.name)
 
         if attempt_record["status"] != "repaired_rerun_required":
             summary["status"] = "failed"
