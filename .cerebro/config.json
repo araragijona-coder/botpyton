@@ -38,5 +38,38 @@
     "run_tests",
     "apply_known_fix",
     "prepare_report"
-  ]
+  ],
+  "github_operations": {
+    "enabled": true,
+    "default_mode": "dry_run",
+    "execution_requires_explicit_workflow_dispatch_opt_in": true,
+    "branch_prefix": "botpyton/",
+    "max_files_per_plan": 20,
+    "max_file_bytes": 200000,
+    "max_total_bytes": 500000,
+    "allowed_suffixes": [
+      ".py",
+      ".md",
+      ".json",
+      ".toml",
+      ".txt"
+    ],
+    "protected_paths": [
+      ".github/",
+      ".cerebro/config.json",
+      ".cerebro/policies/",
+      ".cerebro/memory/",
+      ".cerebro/reports/",
+      ".cerebro/backups/"
+    ],
+    "default_pull_request_type": "draft",
+    "automatic_merge": false,
+    "read_only_job_permissions": [
+      "contents: read"
+    ],
+    "submission_job_permissions": [
+      "contents: write",
+      "pull-requests: write"
+    ]
+  }
 }
