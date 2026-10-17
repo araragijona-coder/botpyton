@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import csv
+import heapq
 import io
 import hashlib
 import json
@@ -677,6 +678,169 @@ def get_cleanup_preview(
         ],
     }
 
+
+
+
+MAX_STORAGE_SCAN_ENTRIES = 20_000
+MAX_STORAGE_SCAN_DEPTH = 8
+MAX_STORAGE_TOP_FILES = 50
+MAX_STORAGE_EXTENSION_BUCKETS = 128
+MAX_STORAGE_TIMEOUT_SECONDS = 10.0
+
+
+def analyze_storage_path(
+    root: str | Path,
+    *,
+    max_entries: int = 5_000,
+    max_depth: int = 6,
+    top_n: int = 20,
+    timeout_seconds: float = 5.0,
+) -> dict:
+    """Summarize storage usage under one explicit folder; no file contents are read or changed."""
+    if not isinstance(max_entries, int) or isinstance(max_entries, bool) or not 1 <= max_entries <= MAX_STORAGE_SCAN_ENTRIES:
+        raise ValueError(f"max_entries must be between 1 and {MAX_STORAGE_SCAN_ENTRIES}")
+    if not isinstance(max_depth, int) or isinstance(max_depth, bool) or not 0 <= max_depth <= MAX_STORAGE_SCAN_DEPTH:
+        raise ValueError(f"max_depth must be between 0 and {MAX_STORAGE_SCAN_DEPTH}")
+    if not isinstance(top_n, int) or isinstance(top_n, bool) or not 1 <= top_n <= MAX_STORAGE_TOP_FILES:
+        raise ValueError(f"top_n must be between 1 and {MAX_STORAGE_TOP_FILES}")
+    if (not isinstance(timeout_seconds, (int, float)) or isinstance(timeout_seconds, bool)
+            or not 0.1 <= float(timeout_seconds) <= MAX_STORAGE_TIMEOUT_SECONDS):
+        raise ValueError(f"timeout_seconds must be between 0.1 and {MAX_STORAGE_TIMEOUT_SECONDS}")
+
+    target = Path(root).expanduser()
+    started = time.perf_counter()
+    report = {
+        "product": "BOTPYTON PC Care",
+        "schema_version": 1,
+        "status": "not_present",
+        "root_path": str(target),
+        "read_only": True,
+        "network_used": False,
+        "file_contents_read": False,
+        "files_deleted": 0,
+        "settings_changed": False,
+        "entries_examined": 0,
+        "directories_examined": 0,
+        "files_examined": 0,
+        "file_bytes_examined": 0,
+        "largest_files": [],
+        "extensions": [],
+        "extension_types_returned": 0,
+        "skipped_links": 0,
+        "access_errors": 0,
+        "scan_limited": False,
+        "timeout_hit": False,
+        "max_entries": max_entries,
+        "max_depth": max_depth,
+        "timeout_seconds": float(timeout_seconds),
+        "elapsed_ms": 0.0,
+        "limitations": [
+            "Only metadata is inspected; file contents are never opened.",
+            "The scan is bounded by entry count, recursion depth, result count and elapsed-time checks; partial totals are not a full-disk measurement.",
+            "Symbolic links and Windows reparse points are skipped to avoid scanning outside the selected folder.",
+            "A reported large file is not necessarily safe to delete. No deletion recommendation or automatic cleanup is performed.",
+            "Reports include local paths. Review them before sharing.",
+        ],
+    }
+    try:
+        if not target.exists():
+            report["status"] = "not_present"
+            return report
+        if _is_link_or_reparse(target):
+            report["status"] = "unsafe_root"
+            return report
+        if not target.is_dir():
+            report["status"] = "not_a_directory"
+            return report
+        root_path = target.resolve(strict=True)
+        if not root_path.is_dir() or _is_link_or_reparse(root_path):
+            report["status"] = "unsafe_root"
+            return report
+    except (OSError, RuntimeError, ValueError):
+        report["status"] = "access_limited"
+        report["access_errors"] = 1
+        return report
+
+    report["root_path"] = str(root_path)
+    stack: list[tuple[Path, int]] = [(root_path, 0)]
+    top_heap: list[tuple[int, str, str, int, str]] = []
+    extension_buckets: dict[str, dict[str, int]] = {}
+    limited = False
+    deadline = started + float(timeout_seconds)
+
+    while stack:
+        if time.perf_counter() >= deadline:
+            limited = True
+            report["timeout_hit"] = True
+            break
+        current, depth = stack.pop()
+        try:
+            with os.scandir(current) as entries:
+                for entry in entries:
+                    if time.perf_counter() >= deadline:
+                        limited = True
+                        report["timeout_hit"] = True
+                        break
+                    if report["entries_examined"] >= max_entries:
+                        limited = True
+                        break
+                    report["entries_examined"] += 1
+                    entry_path = Path(entry.path)
+                    try:
+                        if entry.is_symlink() or _is_link_or_reparse(entry_path):
+                            report["skipped_links"] += 1
+                            continue
+                        if entry.is_dir(follow_symlinks=False):
+                            report["directories_examined"] += 1
+                            if depth < max_depth:
+                                if len(stack) < max_entries:
+                                    stack.append((entry_path, depth + 1))
+                                else:
+                                    limited = True
+                            else:
+                                limited = True
+                            continue
+                        if not entry.is_file(follow_symlinks=False):
+                            continue
+                        info = entry.stat(follow_symlinks=False)
+                        if not stat.S_ISREG(info.st_mode):
+                            continue
+                        size = max(0, int(info.st_size))
+                        report["files_examined"] += 1
+                        report["file_bytes_examined"] += size
+                        suffix = Path(entry.name).suffix.casefold() or "(no extension)"
+                        bucket = suffix
+                        if bucket not in extension_buckets and len(extension_buckets) >= MAX_STORAGE_EXTENSION_BUCKETS:
+                            bucket = "(other extensions)"
+                        stats = extension_buckets.setdefault(bucket, {"files": 0, "bytes": 0})
+                        stats["files"] += 1
+                        stats["bytes"] += size
+                        path_text = str(entry_path)
+                        heap_item = (size, path_text.casefold(), path_text, int(info.st_mtime), suffix)
+                        if len(top_heap) < top_n:
+                            heapq.heappush(top_heap, heap_item)
+                        elif heap_item[:2] > top_heap[0][:2]:
+                            heapq.heapreplace(top_heap, heap_item)
+                    except OSError:
+                        report["access_errors"] += 1
+        except OSError:
+            report["access_errors"] += 1
+        if limited:
+            break
+
+    report["largest_files"] = [
+        {"path": item[2], "size_bytes": item[0], "modified_epoch": item[3], "extension": item[4]}
+        for item in sorted(top_heap, key=lambda item: (-item[0], item[1]))
+    ]
+    report["extensions"] = [
+        {"extension": extension, "files": values["files"], "bytes": values["bytes"]}
+        for extension, values in sorted(extension_buckets.items(), key=lambda item: (-item[1]["bytes"], item[0]))[:20]
+    ]
+    report["extension_types_returned"] = len(report["extensions"])
+    report["scan_limited"] = limited or bool(report["access_errors"])
+    report["status"] = "scan_partial" if report["scan_limited"] else "scan_complete"
+    report["elapsed_ms"] = round((time.perf_counter() - started) * 1000, 2)
+    return report
 
 
 def _process_memory_snapshot(*, windows: bool | None = None) -> dict:

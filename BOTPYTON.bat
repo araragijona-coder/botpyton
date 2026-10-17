@@ -37,8 +37,10 @@ echo  N. Comprobar actualizaciones de aplicaciones (optativo; sin instalar)
 echo  O. Ver auditoria local de PC Care (solo lectura)
 echo  P. Vista previa de restauracion (integridad; no restaura)
 echo  Q. Medir recursos con un diagnostico de una pasada (solo lectura)
+echo  R. Analizar una carpeta para localizar archivos grandes (solo lectura)
 echo.
-choice /c 123456789ABCDEFGHIJKLMNOPQ /n /m "Selecciona una opcion: "
+choice /c 123456789ABCDEFGHIJKLMNOPQR /n /m "Selecciona una opcion: "
+if errorlevel 27 goto storageanalysis
 if errorlevel 26 goto resourcebenchmark
 if errorlevel 25 goto restorepreview
 if errorlevel 24 goto auditcheck
@@ -315,6 +317,19 @@ echo.
 echo Medicion puntual; puede tardar unos segundos y usa lectura local acotada.
 echo No limpia, actualiza ni contacta servicios de red.
 python -m bot.main --pc-benchmark
+echo.
+pause
+goto menu
+
+
+:storageanalysis
+echo.
+echo Analisis de almacenamiento de una carpeta elegida por ti.
+echo Solo lee metadatos, limita tiempo/entradas y NO abre contenidos ni borra archivos.
+set "STORAGE_PATH="
+set /p "STORAGE_PATH=Ruta completa de la carpeta a analizar: "
+if not defined STORAGE_PATH goto menu
+python -m bot.main --pc-storage "%STORAGE_PATH%"
 echo.
 pause
 goto menu

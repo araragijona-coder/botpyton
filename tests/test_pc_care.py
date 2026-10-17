@@ -554,5 +554,83 @@ class PcCareTests(unittest.TestCase):
             self.assertGreaterEqual(operation["item_count"], 0)
 
 
+    def test_storage_analyzer_reports_bytes_extensions_and_largest_files(self):
+        from bot.pc_care import analyze_storage_path
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            sub = root / "subfolder"
+            sub.mkdir()
+            (root / "small.txt").write_bytes(b"x" * 5)
+            (sub / "large.bin").write_bytes(b"b" * 120)
+            (sub / "medium.txt").write_bytes(b"t" * 40)
+            result = analyze_storage_path(root, max_entries=100, max_depth=4, top_n=2, timeout_seconds=5)
+            self.assertEqual(result["status"], "scan_complete")
+            self.assertTrue(result["read_only"])
+            self.assertFalse(result["file_contents_read"])
+            self.assertFalse(result["network_used"])
+            self.assertEqual(result["files_deleted"], 0)
+            self.assertEqual(result["files_examined"], 3)
+            self.assertEqual(result["file_bytes_examined"], 165)
+            self.assertEqual([Path(item["path"]).name for item in result["largest_files"]], ["large.bin", "medium.txt"])
+            extensions = {item["extension"]: item["bytes"] for item in result["extensions"]}
+            self.assertEqual(extensions[".txt"], 45)
+            self.assertEqual(extensions[".bin"], 120)
+            self.assertTrue((root / "small.txt").exists())
+
+    def test_storage_analyzer_marks_entry_limit_as_partial(self):
+        from bot.pc_care import analyze_storage_path
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            for index in range(6):
+                (root / f"{index}.dat").write_bytes(b"payload")
+            result = analyze_storage_path(root, max_entries=2, max_depth=1, timeout_seconds=5)
+            self.assertEqual(result["status"], "scan_partial")
+            self.assertTrue(result["scan_limited"])
+            self.assertLessEqual(result["entries_examined"], 2)
+            self.assertTrue(all(Path(item["path"]).is_file() for item in result["largest_files"]))
+
+    def test_storage_analyzer_respects_recursion_depth_and_result_caps(self):
+        from bot.pc_care import analyze_storage_path
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            current = root
+            for index in range(4):
+                current = current / f"d{index}"
+                current.mkdir()
+                (current / f"{index}.dat").write_bytes(b"x" * (index + 1))
+            result = analyze_storage_path(root, max_entries=100, max_depth=1, top_n=1)
+            self.assertEqual(result["status"], "scan_partial")
+            self.assertTrue(result["scan_limited"])
+            self.assertLessEqual(len(result["largest_files"]), 1)
+
+    def test_storage_analyzer_validates_limits_and_refuses_file_roots(self):
+        from bot.pc_care import analyze_storage_path
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            file_path = root / "one.txt"
+            file_path.write_text("one", encoding="utf-8")
+            with self.assertRaises(ValueError):
+                analyze_storage_path(root, max_entries=0)
+            with self.assertRaises(ValueError):
+                analyze_storage_path(root, timeout_seconds=100)
+            result = analyze_storage_path(file_path)
+            self.assertEqual(result["status"], "not_a_directory")
+            self.assertEqual(result["files_examined"], 0)
+
+    def test_storage_analyzer_refuses_symlink_root_when_supported(self):
+        from bot.pc_care import analyze_storage_path
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            real_root = root / "real"
+            real_root.mkdir()
+            link_path = root / "link"
+            try:
+                link_path.symlink_to(real_root, target_is_directory=True)
+            except (OSError, NotImplementedError):
+                self.skipTest("Symlink creation is not permitted in this test environment")
+            result = analyze_storage_path(link_path)
+            self.assertEqual(result["status"], "unsafe_root")
+
+
 if __name__ == "__main__":
     unittest.main()

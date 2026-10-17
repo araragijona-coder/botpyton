@@ -86,6 +86,15 @@ python -m bot.main --pc-cleanup-restore "C:\\path\\to\\BOTPYTON\\Quarantine\\ses
 - The current portable artifact is a source ZIP, not a bundled interpreter or standalone installer/EXE. A native packaged executable is a separate future decision and must be measured for size/startup/RAM before adoption.
 - Keep on-demand, serial, bounded operation. No resident service, scheduled task, API, telemetry, cleanup, or update check is enabled automatically.
 
+## Phase 20 — Bounded read-only storage analysis — implemented on the development branch
+
+- Run \`python -m bot.main --pc-storage "C:\\Users\\YOUR_USER\\Downloads"\` or choose R in the launcher. The path must be an existing folder explicitly selected by the user; nothing scans the full drive automatically.
+- Reports total bytes observed, file/directory/entry counts, largest files and a bounded file-extension breakdown. It never opens file contents and makes no deletion recommendations.
+- Default bounds: 5,000 directory entries, depth 6, top 20 files and a five-second elapsed-time deadline. Hard maxima are 20,000 entries, depth 8, top 50 files and 10 seconds.
+- Symlinks and Windows reparse points are skipped; a linked root is rejected. Access errors, depth/entry caps and timeouts are reflected in the partial status, so partial sizes cannot be mistaken for a full-drive total.
+- The result contains local file paths. No network, registry changes, file moves, deletions or settings changes occur.
+- Automated tests cover totals, ordering, limits, depth, invalid roots and symlink refusal. CI must pass before treating this phase as verified; real disk timing still depends on the target PC.
+
 ## Safety and accuracy rules
 
 - A cleanup estimate is not a guarantee that every byte can be reclaimed; some files may be locked or actively used.

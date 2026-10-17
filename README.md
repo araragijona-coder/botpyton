@@ -318,3 +318,10 @@ python -m bot.main --pc-benchmark
 El ZIP incluye los módulos, documentación y ejemplos, más un manifiesto con SHA-256 de cada miembro y un archivo lateral \`.sha256\`. La verificación comprueba miembros duplicados/inseguros, rutas, CRC, límites y hashes. No incluye un intérprete Python ni es un EXE autónomo; tampoco incluye estado local, reportes, caches, repositorio Git o tests.
 
 \`--pc-benchmark\` hace una sola pasada de diagnóstico local con límites de escaneo, tiempos CPU/pared por operación y memoria residente actual/pico cuando el sistema lo permite. No modifica el PC, no limpia, no actualiza y no usa red. Los números de CI verifican el programa en runners; los valores reales de tu Ryzen y el pico de RAM todavía deben medirse en tu equipo.
+
+
+## Phase 20: analisis de almacenamiento seguro
+
+\`python -m bot.main --pc-storage "RUTA_DE_CARPETA"\` o la opción R del menú analiza una carpeta que elijas. Informa bytes observados, número de archivos/directorios, archivos más grandes y resumen por extensión. No abre contenidos ni cambia nada.
+
+La pasada tiene límites estrictos: 5.000 entradas, profundidad 6, top 20 y cinco segundos por defecto; máximo absoluto 20.000 entradas, profundidad 8, top 50 y diez segundos. Omite enlaces y puntos de reanálisis, y marca resultados parciales cuando llega a un límite o encuentra errores. No analiza toda la unidad de forma automática; debes escoger la carpeta. El informe contiene rutas locales, así que revísalo antes de compartirlo.
