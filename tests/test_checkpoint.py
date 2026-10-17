@@ -56,6 +56,23 @@ class CheckpointTests(unittest.TestCase):
         self.assertEqual(after["tasks"]["A"]["status"], "succeeded")
         self.assertEqual(after["tasks"]["B"]["status"], "running")
 
+    def test_restore_accepts_crlf_state_without_breaking_manifest_digest(self):
+        JsonMemory(self.source_memory).save({
+            "schema_version": 1, "tasks": {}, "incidents": [], "solutions": []
+        })
+        export_checkpoint(self.source_memory, self.checkpoint_dir)
+        state_path = self.checkpoint_dir / "state.json"
+        normalized_text = state_path.read_text(encoding="utf-8")
+        state_path.write_bytes(normalized_text.replace("\\n", "\\r\\n").encode("utf-8"))
+
+        restored = restore_checkpoint(self.checkpoint_dir, self.restore_memory)
+
+        self.assertTrue(restored["restored"])
+        self.assertEqual(restored["task_count"], 0)
+        self.assertEqual(JsonMemory(self.restore_memory).load(), {
+            "schema_version": 1, "tasks": {}, "incidents": [], "solutions": []
+        })
+
     def test_tampered_state_is_rejected_without_overwriting_existing_memory(self):
         JsonMemory(self.source_memory).save({
             "schema_version": 1, "tasks": {}, "incidents": [], "solutions": []
