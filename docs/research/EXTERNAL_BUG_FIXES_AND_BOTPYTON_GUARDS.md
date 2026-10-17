@@ -108,3 +108,26 @@ En `bot/local_changes.py`, el plan de cambios locales validaba que un archivo nu
 Las operaciones portables de rutas de Python no proporcionan una garantía universal de compare-and-swap de archivo y directorio contra un proceso hostil que compita exactamente en el último instante. Las comprobaciones cercanas a publicación reducen la ventana y las creaciones exclusivas impiden reemplazar destinos nuevos; no deben describirse como una solución matemática a toda carrera TOCTOU. BOTPYTON debe seguir rechazando enlaces/reparse points y abortar cuando detecta una discrepancia.
 
 Estas son correcciones locales, sin servicios residentes, llamadas de IA, nuevas dependencias ni limpieza automática no solicitada. La integración queda condicionada a pruebas de CI; esa CI tampoco sustituye una prueba en el PC del usuario.
+
+
+## Auditoría adicional — 2026-10-17: puntos de reanálisis al preparar el paquete portable
+
+### Documentación oficial contrastada
+
+- BleachBit publicó correcciones para no seguir symlinks/junctions durante operaciones de limpieza y en BleachBit 6.0.3 beta documenta endurecimiento de seguridad para rutas, enlaces y puntos de reanálisis: https://github.com/bleachbit/bleachbit/releases y https://www.bleachbit.org/news/bleachbit-603-beta
+- La documentación de Python distingue los enlaces simbólicos de las junctions de Windows. `Path.is_junction()` existe desde Python 3.12, y `os.walk()` documenta su control de seguimiento de enlaces simbólicos; por eso una implementación que usa solo `is_symlink()` no debe asumir que cubre todos los puntos de reanálisis: https://docs.python.org/3.12/library/pathlib.html y https://docs.python.org/3.12/library/os.html
+- CCleaner 7.12.1526, publicada el 29 de septiembre de 2026, documenta tanto una corrección de seguridad relacionada con escritura de archivos como arreglos de sincronización al cerrar la aplicación: https://www.ccleaner.com/ccleaner/version-history/
+
+### Riesgo de código localizado
+
+En `bot/packaging.py`, el recolector del paquete revisaba `Path.is_symlink()` en directorios enumerados por `os.walk()` y en los archivos de la lista fija. En Windows, una junction u otro punto de reanálisis no debe tratarse como si fuera siempre un symlink. Una junction dentro de los árboles `bot`, `docs` o `.cerebro/examples`, o en un componente padre de un archivo requerido, podría hacer que el generador inspeccionara datos que están fuera del árbol del repositorio previsto. No hay evidencia de que la rama `main` contuviera actualmente una junction maliciosa; se trata de un hueco de validación confirmado en el método de enumeración.
+
+### Corrección candidata
+
+- Reutiliza el detector compartido de BOTPYTON que comprueba el atributo de reparse point de Windows, además de los enlaces simbólicos.
+- Comprueba la cadena de componentes entre cada archivo/directorio seleccionado y la raíz permitida, incluidas las carpetas padre de archivos fijos.
+- Poda los puntos de reanálisis durante el recorrido, antes de que `os.walk()` pueda descender a un árbol enlazado.
+- Rechaza también que la ruta inicial de origen del paquete atraviese un enlace o punto de reanálisis.
+- Añade pruebas para simular un punto de reanálisis en un subdirectorio y un componente padre; añade además una prueba de integración que crea una junction real en Windows cuando el runner lo permite y se salta de forma explícita si no puede crearla.
+
+La solución no agrega dependencias ni modifica el mantenimiento del PC. Se limita al generador del ZIP y a evitar que archivos externos al árbol aprobado entren accidentalmente en el paquete. El PR debe pasar tanto las pruebas base como el humo de Windows antes de fusionarse; la prueba con junction real es especialmente importante porque CI Linux no puede reproducir el comportamiento de reparse points de Windows.
