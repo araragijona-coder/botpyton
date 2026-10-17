@@ -23,6 +23,7 @@ from .planner import order_tasks
 from .repository_analyzer import inspect_repository
 from .process_runner import ProcessRunnerError, run_tool_probe
 from .tool_registry import discover_tools
+from .system_profile import get_system_profile
 from .policy import PolicyError, validate_task, validate_relative_path
 from .queue import QueueError, TaskQueue
 from .verifier import verify_python_files
@@ -73,6 +74,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--check", action="store_true", help="validate Python syntax and memory schema")
     parser.add_argument("--inspect-repository", metavar="PATH", nargs="?", const=".",
                         help="bounded read-only project inventory; candidate checks are not executed")
+    parser.add_argument("--system-profile", action="store_true", help="report available RAM, disk space and a conservative child-process memory budget")
     parser.add_argument("--tools", action="store_true", help="list installed developer tools without running them")
     parser.add_argument("--probe-tool", metavar="TOOL_ID", help="run the fixed version probe for one registered tool")
     parser.add_argument("--local-plan", metavar="PATH", help="validate a declarative local file-change plan (dry-run by default)")
@@ -118,6 +120,9 @@ def main(argv: list[str] | None = None) -> int:
     try:
         if args.inspect_repository is not None:
             _print_json(inspect_repository(args.inspect_repository))
+            return 0
+        if args.system_profile:
+            _print_json(get_system_profile(Path.cwd()))
             return 0
         if args.tools:
             _print_json(discover_tools())
