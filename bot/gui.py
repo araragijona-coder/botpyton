@@ -47,6 +47,7 @@ STATUS_LABELS = {
 }
 FIELD_LABELS = {
     "operation": "Operación", "status": "Estado", "note": "Detalle", "message": "Mensaje",
+    "tests_run": "Pruebas ejecutadas", "failures": "Pruebas fallidas", "errors": "Errores de prueba",
     "recommendation": "Recomendación", "next_action": "Siguiente paso",
     "candidate_count": "Archivos encontrados", "candidate_files": "Archivos encontrados",
     "candidate_bytes": "Tamaño estimado", "candidate_mib": "Tamaño estimado (MiB)",
@@ -148,6 +149,7 @@ def format_report(raw: str, exit_code: int = 0, *, technical: bool = False) -> s
         "integrity_status", "scan_limited", "access_errors", "manifest_path", "root_path",
         "ai_enabled", "external_ai_apis_enabled", "network_used", "settings_changed",
         "software_changes_made", "drivers_updated", "network_access_requested",
+        "tests_run", "failures", "errors",
     )
     for key in priority:
         if key not in data:
