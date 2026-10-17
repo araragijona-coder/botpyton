@@ -11,6 +11,9 @@
       "task_validated",
       "report_created"
     ],
-    "max_attempts": 2
+    "max_attempts": 2,
+    "verification_checks": [
+      {"type": "report_exists"}
+    ]
   }
 ]

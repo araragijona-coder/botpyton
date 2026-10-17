@@ -14,5 +14,10 @@
     "unit_tests_pass",
     "report_created"
   ],
-  "max_attempts": 2
+  "max_attempts": 2,
+  "verification_checks": [
+    {"type": "python_syntax"},
+    {"type": "tests_pass"},
+    {"type": "report_exists"}
+  ]
 }

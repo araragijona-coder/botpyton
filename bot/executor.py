@@ -93,8 +93,11 @@ class TaskExecutor:
             "ai_enabled": False,
             "external_ai_apis_enabled": False,
         }
-        # Write once so the report_exists check can verify a real artifact, then
-        # persist the final verification result into that same report.
+        # Write a non-success provisional report so a crash during verification
+        # cannot leave a false "succeeded" status on disk.
+        if task.get("verification_checks"):
+            report["status"] = "verification_pending"
+            report["ok"] = False
         report_path = self._write_report(report)
         report["report_path"] = report_path
         verification = evaluate_verification_checks(
@@ -102,6 +105,8 @@ class TaskExecutor:
             action_results=action_results, report_path=report_path,
         )
         report["verification"] = verification
+        if verification["all_passed"] is True and successful:
+            report["status"] = "succeeded"
         if verification["all_passed"] is False and successful:
             successful = False
             failed_action = "verify_success_conditions"

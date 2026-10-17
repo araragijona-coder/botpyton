@@ -125,6 +125,8 @@ Este apartado distingue capacidades presentes de objetivos futuros; no declara B
 - Cola persistente, planificación por dependencias, informes JSON, ciclo acotado de prueba/reparación y diagnóstico que recopila contexto de traceback desconocido sin editar código.
 - Planes de cambios locales con rutas protegidas, hashes previos obligatorios al reemplazar archivos, backups fuera del proyecto y reversión ante errores de escritura.
 - Worktrees Git aislados para repositorios limpios, ramas locales dedicadas, hooks deshabilitados durante la creación y sin push/merge automático.
+- Checks de éxito verificables por máquina para tareas que editan archivos o ejecutan perfiles de proyecto; los informes no marcan éxito hasta completar las comprobaciones declaradas.
+- Verificación estática de sintaxis Python limitada por cantidad y tamaño de archivos, sin importar ni ejecutar el código.
 - Perfiles de pruebas/build para varias tecnologías: descubrimiento estático por defecto y ejecución solo con autorización explícita.
 - Operaciones GitHub mediante token de entorno o sesión local autenticada de GitHub CLI; la promoción/merge automático sigue deshabilitada.
 - Biblioteca educativa de proyectos y fábrica de plantillas iniciales.
@@ -134,6 +136,7 @@ Este apartado distingue capacidades presentes de objetivos futuros; no declara B
 - Prueba de instalación y ejecución en el PC Windows del usuario, incluyendo consumo real de RAM y Job Objects.
 - Agente de acceso local con permisos configurables por carpeta y registro de auditoría más completo. El lanzador actual ejecuta el núcleo local directamente; no es un servicio remoto ni un instalador independiente.
 - Mayor cobertura de herramientas, lenguajes, formatos y entornos de compilación.
+- Más estrategias de reparación experimental. El sistema ya extrae traceback acotado, redacta valores que parecen credenciales y propone experimentos para tipos de error comunes; todavía no repara de forma autónoma cualquier error desconocido.
 - Estrategias de experimentación para errores desconocidos. Hoy el sistema recopila evidencia y detiene la reparación automática cuando no hay una regla segura; no promete resolver cualquier error.
 - Flujo de promoción y revisión más completo para workspaces: el worktree inicial ya existe, pero todavía no hay integración automática de diffs, cherry-pick o merge.
 - Validación de los flujos reales de GitHub desde la cuenta local y pruebas de seguridad adicionales antes de habilitar cualquier escritura privilegiada.
