@@ -262,8 +262,8 @@ Tasks that edit files or run a project check must declare machine-verifiable `ve
 
 Run on demand:
 
-\`\`\`bash
+```bash
 python -m bot.main --pc-check
-\`\`\`
+```
 
-On Windows, this reports available physical RAM, free disk space, older files found in a bounded set of per-user temp/cache folders, and startup registration names. The audit is offline and uses only Python's standard library. It performs no deletion, registry edits, process termination, updates, installs, telemetry, or AI/API calls. A candidate cleanup size is an estimate, not a guarantee; driver/app update states remain explicitly not checked until an opt-in, trusted update source is implemented. See \`docs/PC-CARE-ROADMAP.md\`.
+On Windows, this reports available physical RAM, free disk space, older files found in a bounded set of per-user temp/cache folders, and startup registration names. The audit is offline and uses only Python's standard library. It performs no deletion, registry edits, process termination, updates, installs, telemetry, or AI/API calls. A candidate cleanup size is an estimate, not a guarantee; driver/app update states remain explicitly not checked until an opt-in, trusted update source is implemented. See `docs/PC-CARE-ROADMAP.md`.

@@ -2,12 +2,12 @@
 
 ## Phase 12 — Read-only local audit
 
-**Branch:** \`bot-bootstrap/phase-12-pc-care-read-only\`  
+**Branch:** `bot-bootstrap/phase-12-pc-care-read-only`  
 **Goal:** give BOTPYTON a trustworthy, low-cost local diagnostic instead of alarm-style upsell messages.
 
 ### Included in this phase
 
-- On-demand command: \`python -m bot.main --pc-check\`.
+- On-demand command: `python -m bot.main --pc-check`.
 - Reports available physical memory and free disk space.
 - Estimates old files in selected user temp/cache locations using metadata only (older than seven days), with an entry/depth cap.
 - On Windows, lists startup registration names and source locations without exposing command-line arguments.
@@ -32,4 +32,4 @@
 4. **Phase 16 — Backups and restore:** create a manifest and reversible quarantine before any supported deletion; skip locked, linked, protected, or ambiguous paths.
 5. **Phase 17 — Windows smoke tests and packaging:** verify on Windows 10/11, measure idle and peak RAM on the user's actual machine, build a portable launcher, and document the minimum supported Windows/Python versions.
 
-Each phase must be separately tested. A selection to continue authorizes only the next listed phase; it does not authorize background services, automatic cleanup, driver installation, registry edits, or merges into \`main\`.
+Each phase must be separately tested. A selection to continue authorizes only the next listed phase; it does not authorize background services, automatic cleanup, driver installation, registry edits, or merges into `main`.
