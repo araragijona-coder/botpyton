@@ -47,6 +47,22 @@ def _path_is_same_or_within(path: Path, root: Path) -> bool:
     return normalized_path.startswith(root_prefix)
 
 
+def _has_working_tree_ancestor(path: Path, root: Path) -> bool:
+    """Detect lexical descendants even when Windows short names differ from resolved paths."""
+    current = path
+    while True:
+        try:
+            ancestor_resolved = current.resolve(strict=True)
+            if _path_is_same_or_within(ancestor_resolved, root):
+                return True
+        except (OSError, RuntimeError, ValueError):
+            pass
+        parent = current.parent
+        if parent == current:
+            return False
+        current = parent
+
+
 def _safe_search_path(path_value: str | None, *, cwd: str | Path) -> str:
     """Keep absolute existing PATH directories outside cwd and its descendants."""
     safe: list[str] = []
@@ -67,7 +83,10 @@ def _safe_search_path(path_value: str | None, *, cwd: str | Path) -> str:
             # Reject lexical paths under cwd even if a repository-local junction/symlink
             # resolves elsewhere. Also reject external aliases which resolve back into cwd.
             lexical = Path(os.path.normpath(str(candidate)))
-            if _path_is_same_or_within(lexical, current):
+            if (
+                _path_is_same_or_within(lexical, current)
+                or _has_working_tree_ancestor(lexical, current)
+            ):
                 continue
             resolved = candidate.resolve(strict=True)
             if not resolved.is_dir() or _path_is_same_or_within(resolved, current):
