@@ -25,3 +25,10 @@ El motor devuelve el código de salida, timeout y salida acotada. El límite de 
 ## Límites actuales
 
 El inventario y los sondeos de versión están disponibles desde CLI. El motor aún no es un terminal general ni debe recibir comandos derivados de instrucciones encontradas en un repositorio. La ejecución de builds/tests de proyectos arbitrarios requiere perfiles de comandos revisados y permisos separados, que son una fase posterior.
+
+
+## Memoria del proceso hijo
+
+El ejecutor usa un único proceso de herramienta por invocación, captura hasta 64 KB por flujo y descarta el exceso mientras drena las tuberías. En Windows aplica por defecto un límite de 768 MB por proceso y por Job Object (incluidos sus descendientes) y cierra el Job Object al terminar para limpiar procesos hijos. El límite configurable del motor es de 64 a 1024 MB.
+
+En sistemas que no son Windows, el límite de memoria no está aplicado por este módulo todavía; el resultado indica `process_memory_limit_enforced: false`. En esos sistemas se mantienen el timeout, la ejecución secuencial, la captura de salida acotada y la lista de ejecutables autorizados. No se debe interpretar el valor configurado como una garantía de memoria si ese indicador es falso.
