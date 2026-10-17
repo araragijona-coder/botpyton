@@ -222,3 +222,10 @@ The queue stores durable state under `.cerebro/memory/state.json` by default. Ta
 `python -m bot.main --system-profile` reports the current operating system, Python executable, CPU count, available physical RAM and free disk space using lightweight standard-library/system calls. The process runner chooses a conservative child memory budget from available RAM: at most 768 MB and generally no more than half of currently available memory. On Windows, the runner applies that budget through a Job Object and terminates child processes when the job closes. On other platforms the memory limit is reported as not enforced; timeout, serial execution and bounded output capture still apply.
 
 Because the reported available RAM varies with what Windows and other applications are using, BOTPYTON calculates the budget at runtime rather than assuming the full 16 GB is available.
+
+
+## Cross-language test/build profiles
+
+`python -m bot.main --list-project-checks --project-root "C:\\path\\project"` detects supported check profiles without executing them. When the repository has been reviewed, a specific profile can be run with `--run-project-check ID --project-root PATH --execute-project-code`. The explicit flag is mandatory because test/build scripts can execute arbitrary project code. Current profiles cover Python unittest, npm test/build scripts, Cargo, Go, Maven, .NET, Composer and Rake/Bundler where the required manifest and tool exist. See `docs/PROJECT-CHECKS.md`.
+
+The worker now supports both explicit local file-change plans and explicit project-check profiles as queue actions. It still does not translate arbitrary natural-language requests into arbitrary code on its own; that requires a structured plan or a known deterministic procedure.
