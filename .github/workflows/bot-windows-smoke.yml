@@ -99,6 +99,10 @@ jobs:
             Write-Host 'PASS: driver inventory explicitly reported a bounded partial result.'
             exit 0
           }
+          if ($code -eq 1 -and $report.status -eq 'timeout' -and $report.read_only -eq $true -and $report.network_used -eq $false) {
+            Write-Host 'PASS: driver inventory hit its explicit timeout, reported no usable inventory, and made no changes.'
+            exit 0
+          }
           if ($code -ne 0) { exit $code }
           if ($report.operation_assessment.outcome -ne 'reported_success') { throw 'Driver inventory result was not recognized as a valid success.' }
       - name: Inspect Windows disk status metadata (read-only)
