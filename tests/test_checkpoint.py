@@ -150,7 +150,7 @@ class CheckpointTests(unittest.TestCase):
             encoding="utf-8",
         )
 
-        with self.assertRaisesRegex(CheckpointError, "too deeply nested JSON"):
+        with self.assertRaisesRegex(CheckpointError, "nesting depth limit"):
             restore_checkpoint(self.checkpoint_dir, self.restore_memory)
         self.assertEqual(JsonMemory(self.restore_memory).load(), existing)
 
