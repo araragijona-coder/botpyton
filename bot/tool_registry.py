@@ -19,6 +19,7 @@ TOOL_SPECS: tuple[ToolSpec, ...] = (
     ToolSpec("python", "python", "Python runtime", ("--version",), ("Python",)),
     ToolSpec("python3", "python3", "Python runtime (alternate name)", ("--version",), ("Python",)),
     ToolSpec("git", "git", "Version control", ("--version",), ("Git",)),
+    ToolSpec("gh", "gh", "GitHub CLI and local authentication", ("--version",), ("GitHub",)),
     ToolSpec("node", "node", "JavaScript runtime", ("--version",), ("JavaScript", "TypeScript")),
     ToolSpec("npm", "npm", "JavaScript package manager", ("--version",), ("JavaScript", "TypeScript")),
     ToolSpec("pnpm", "pnpm", "JavaScript package manager", ("--version",), ("JavaScript", "TypeScript")),
