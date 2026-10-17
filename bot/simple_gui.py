@@ -181,6 +181,14 @@ def summarize_report(title: str, report: Any, exit_code: int = 0) -> str:
     }
     findings = report.get("findings")
     if isinstance(findings, list):
+        severities = {
+            str(item.get("severity", "")).strip().casefold()
+            for item in findings if isinstance(item, dict)
+        }
+        if severities.intersection({"critical", "fatal"}):
+            lines.append("  • Se detectó un hallazgo crítico. No hagas cambios automáticos; revisá el detalle técnico.")
+        elif "error" in severities:
+            lines.append("  • Se detectó un hallazgo de error. Revisá el detalle técnico antes de actuar.")
         shown = 0
         for item in findings:
             if not isinstance(item, dict):
