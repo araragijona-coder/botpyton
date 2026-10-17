@@ -1,8 +1,11 @@
 """Read-only, offline PC-care inventory; no cleanup or settings changes."""
 from __future__ import annotations
 
+import csv
+import io
 import os
 import shutil
+import subprocess
 import time
 from pathlib import Path
 
@@ -200,10 +203,91 @@ def read_startup_entries(*, windows: bool | None = None) -> dict:
     }
 
 
+def read_top_processes(*, windows: bool | None = None, limit: int = 20) -> dict:
+    """Read a bounded tasklist snapshot; never reads command lines or stops processes."""
+    is_windows = os.name == "nt" if windows is None else windows
+    if not isinstance(limit, int) or isinstance(limit, bool) or not 1 <= limit <= 30:
+        raise ValueError("limit must be between 1 and 30")
+    if not is_windows:
+        return {
+            "status": "unsupported_platform",
+            "items": [],
+            "items_count": 0,
+            "note": "Process inventory is only available on Windows in this phase.",
+        }
+
+    try:
+        completed = subprocess.run(
+            ["tasklist", "/FO", "CSV", "/NH"],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=5,
+            check=False,
+            shell=False,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return {
+            "status": "unavailable",
+            "items": [],
+            "items_count": 0,
+            "note": f"tasklist could not be read ({type(exc).__name__}); no processes were changed.",
+        }
+
+    if completed.returncode != 0:
+        return {
+            "status": "unavailable",
+            "items": [],
+            "items_count": 0,
+            "note": "Windows tasklist returned an error; no processes were changed.",
+        }
+
+    items: list[dict] = []
+    try:
+        rows = csv.reader(io.StringIO(completed.stdout))
+        for row in rows:
+            if len(row) < 5:
+                continue
+            try:
+                pid = int(row[1].replace(",", "").strip())
+                memory_text = row[4].strip().replace(",", "").replace(" K", "").replace(" KB", "")
+                memory_kib = int(memory_text)
+            except (ValueError, IndexError):
+                continue
+            items.append({
+                "name": row[0][:160],
+                "pid": pid,
+                "session_name": row[2][:80],
+                "session_number": row[3][:40],
+                "memory_kib": max(0, memory_kib),
+            })
+    except csv.Error:
+        return {
+            "status": "parse_error",
+            "items": [],
+            "items_count": 0,
+            "note": "The tasklist output could not be parsed safely.",
+        }
+
+    items.sort(key=lambda item: item["memory_kib"], reverse=True)
+    selected = items[:limit]
+    return {
+        "status": "collected",
+        "items": selected,
+        "items_count": len(items),
+        "returned_count": len(selected),
+        "limit": limit,
+        "note": "Snapshot only: memory use changes over time; no process was stopped or modified.",
+    }
+
+
 def get_pc_care_report(
     *,
     scan_roots: list[tuple[str, Path]] | None = None,
     startup_items: dict | None = None,
+    process_items: dict | None = None,
     windows: bool | None = None,
     now: float | None = None,
 ) -> dict:
@@ -238,6 +322,7 @@ def get_pc_care_report(
         disk_report = {"status": "unavailable"}
 
     startup = read_startup_entries(windows=is_windows) if startup_items is None else startup_items
+    processes = read_top_processes(windows=is_windows) if process_items is None else process_items
     findings: list[dict] = []
 
     free_percent = disk_report.get("free_percent")
@@ -277,6 +362,16 @@ def get_pc_care_report(
             "detail": f"{total_candidate_files} files older than {STALE_DAYS} days were identified by metadata.",
             "estimated_bytes": total_candidate_bytes,
             "recommendation": "Treat this as an estimate only. Files may be in use and are not deleted by this audit.",
+        })
+
+    if processes.get("status") == "collected" and processes.get("items"):
+        top = processes["items"][0]
+        findings.append({
+            "id": "process_memory_snapshot",
+            "severity": "info",
+            "title": "Processes using the most memory",
+            "detail": f"{top['name']} (PID {top['pid']}) is currently using approximately {round(top['memory_kib'] / 1024)} MiB of working-set memory.",
+            "recommendation": "Use this as a snapshot, not a verdict. Save work before closing an application, and do not terminate unfamiliar system processes.",
         })
 
     if startup.get("items_count", 0):
@@ -343,6 +438,7 @@ def get_pc_care_report(
         },
         "scan_locations": scans,
         "startup_inventory": startup,
+        "process_inventory": processes,
         "driver_updates": {"status": driver_status},
         "application_updates": {"status": app_update_status},
         "findings": findings,

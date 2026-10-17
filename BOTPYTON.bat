@@ -28,8 +28,10 @@ echo  E. Crear workspace Git aislado (requiere repositorio limpio)
 echo  F. Inspeccionar estado/diff de un workspace
 echo  G. Salir
 echo  H. Auditoria del PC (solo lectura, sin borrar ni actualizar nada)
+echo  I. Ver procesos que mas memoria usan (solo lectura)
 echo.
-choice /c 123456789ABCDEFGH /n /m "Selecciona una opcion: "
+choice /c 123456789ABCDEFGHI /n /m "Selecciona una opcion: "
+if errorlevel 18 goto processcheck
 if errorlevel 17 goto pccheck
 if errorlevel 16 goto end
 if errorlevel 15 goto workspacestatus
@@ -205,6 +207,14 @@ echo.
 pause
 goto menu
 
+
+:processcheck
+echo.
+echo Instantanea de memoria por proceso; no cierra ni cambia procesos.
+python -m bot.main --pc-processes
+echo.
+pause
+goto menu
 
 :pccheck
 echo.

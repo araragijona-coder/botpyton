@@ -24,10 +24,17 @@
 - A bounded scan may be partial; the report marks that condition and must not present itself as exhaustive.
 - The report may contain local paths. Inspect it before posting it publicly.
 
+### Phase 13 — Process memory snapshot (implemented in this branch)
+
+- Adds `python -m bot.main --pc-processes` and option I to the Windows launcher.
+- Reads the built-in Windows `tasklist` CSV output with a five-second timeout, no shell, no command-line arguments, and no third-party dependency.
+- Returns at most 30 processes, sorted by working-set memory; the default report includes the top 20.
+- The data is a momentary snapshot. No process is terminated, reprioritized, or modified. CPU trend, startup impact over time, and publisher reputation are not yet verified.
+- Includes mocked tests for parsing, memory sorting, output limits, unsupported platforms, and timeouts.
+
 ### Next phases — not yet implemented
 
-1. **Phase 13 — Process and startup review:** bounded snapshot of CPU/memory-heavy processes and startup publisher metadata; recommendations only, no termination or disabling.
-2. **Phase 14 — Explicit cleanup preview:** calculate candidates first; display exact paths, age, file count and size; require a separate typed confirmation for each cleanup category; keep browser profiles, cookies, sessions, downloads, personal documents and system folders out of scope by default.
+1. **Phase 14 — Explicit cleanup preview:** calculate candidates first; display exact paths, age, file count and size; require a separate typed confirmation for each cleanup category; keep browser profiles, cookies, sessions, downloads, personal documents and system folders out of scope by default.
 3. **Phase 15 — Update checks, opt-in:** use Windows Update, Microsoft Store, winget, or official vendor sources only on explicit user request; no third-party driver packs; never auto-install in the initial release.
 4. **Phase 16 — Backups and restore:** create a manifest and reversible quarantine before any supported deletion; skip locked, linked, protected, or ambiguous paths.
 5. **Phase 17 — Windows smoke tests and packaging:** verify on Windows 10/11, measure idle and peak RAM on the user's actual machine, build a portable launcher, and document the minimum supported Windows/Python versions.

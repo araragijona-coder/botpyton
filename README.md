@@ -267,3 +267,8 @@ python -m bot.main --pc-check
 ```
 
 On Windows, this reports available physical RAM, free disk space, older files found in a bounded set of per-user temp/cache folders, and startup registration names. The audit is offline and uses only Python's standard library. It performs no deletion, registry edits, process termination, updates, installs, telemetry, or AI/API calls. A candidate cleanup size is an estimate, not a guarantee; driver/app update states remain explicitly not checked until an opt-in, trusted update source is implemented. See `docs/PC-CARE-ROADMAP.md`.
+
+
+## Phase 13: process memory snapshot
+
+On Windows, run `python -m bot.main --pc-processes` to list a bounded snapshot of processes sorted by working-set memory. It uses the built-in `tasklist` command with a five-second timeout, no shell, and no command-line capture. It does not stop or change processes. Memory usage is a momentary observation, not proof that an application is unnecessary. See `docs/PC-CARE-ROADMAP.md`.

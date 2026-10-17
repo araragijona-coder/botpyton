@@ -3,7 +3,9 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from bot.pc_care import get_pc_care_report, read_startup_entries, scan_stale_files
+from unittest.mock import patch, Mock
+
+from bot.pc_care import get_pc_care_report, read_startup_entries, read_top_processes, scan_stale_files
 
 
 class PcCareTests(unittest.TestCase):
@@ -43,6 +45,34 @@ class PcCareTests(unittest.TestCase):
         result = read_startup_entries(windows=False)
         self.assertEqual(result["status"], "unsupported_platform")
         self.assertEqual(result["items_count"], 0)
+
+    def test_non_windows_process_inventory_is_explicitly_unsupported(self):
+        result = read_top_processes(windows=False)
+        self.assertEqual(result["status"], "unsupported_platform")
+        self.assertEqual(result["items_count"], 0)
+
+    @patch("bot.pc_care.subprocess.run")
+    def test_process_inventory_sorts_by_memory_and_limits_output(self, run):
+        run.return_value = Mock(
+            returncode=0,
+            stdout='"small.exe","21","Console","1","1,024 K"\n"large.exe","42","Console","1","20,480 K"\n',
+        )
+        result = read_top_processes(windows=True, limit=1)
+        self.assertEqual(result["status"], "collected")
+        self.assertEqual(result["items_count"], 2)
+        self.assertEqual(result["returned_count"], 1)
+        self.assertEqual(result["items"][0]["name"], "large.exe")
+        self.assertEqual(result["items"][0]["pid"], 42)
+        run.assert_called_once()
+        self.assertFalse(run.call_args.kwargs["shell"])
+
+    @patch("bot.pc_care.subprocess.run")
+    def test_process_inventory_handles_timeout_without_modifying_processes(self, run):
+        import subprocess
+        run.side_effect = subprocess.TimeoutExpired(cmd="tasklist", timeout=5)
+        result = read_top_processes(windows=True)
+        self.assertEqual(result["status"], "unavailable")
+        self.assertEqual(result["items"], [])
 
     def test_report_never_claims_to_have_modified_the_pc(self):
         with tempfile.TemporaryDirectory() as tmp:
