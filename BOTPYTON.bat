@@ -12,28 +12,30 @@ echo  No instala servicios ni se agrega al inicio.
 echo ==================================================
 echo.
 echo  1. Inspeccionar un proyecto (solo lectura)
-echo  2. Detectar herramientas instaladas
-echo  3. Consultar version de una herramienta registrada
-echo  4. Validar plan de cambios locales (sin escribir)
-echo  5. Aplicar plan local (escritura explicita + backups)
-echo  6. Comprobar el nucleo
-echo  7. Ejecutar las pruebas del propio BOTPYTON
-echo  8. Agregar tarea JSON a la cola
-echo  9. Ejecutar una tarea pendiente
-echo  A. Ver cola de tareas
-echo  B. Salir
+echo  2. Ver perfil del sistema y presupuesto de memoria
+echo  3. Detectar herramientas instaladas
+echo  4. Consultar version de una herramienta registrada
+echo  5. Validar plan de cambios locales (sin escribir)
+echo  6. Aplicar plan local (escritura explicita + backups)
+echo  7. Comprobar el nucleo
+echo  8. Ejecutar las pruebas del propio BOTPYTON
+echo  9. Agregar tarea JSON a la cola
+echo  A. Ejecutar una tarea pendiente
+echo  B. Ver cola de tareas
+echo  C. Salir
 echo.
-choice /c 123456789AB /n /m "Selecciona una opcion: "
-if errorlevel 11 goto end
-if errorlevel 10 goto queue
-if errorlevel 9 goto workonce
-if errorlevel 8 goto enqueue
-if errorlevel 7 goto tests
-if errorlevel 6 goto check
-if errorlevel 5 goto applyplan
-if errorlevel 4 goto dryplan
-if errorlevel 3 goto probe
-if errorlevel 2 goto tools
+choice /c 123456789ABC /n /m "Selecciona una opcion: "
+if errorlevel 12 goto end
+if errorlevel 11 goto queue
+if errorlevel 10 goto workonce
+if errorlevel 9 goto enqueue
+if errorlevel 8 goto tests
+if errorlevel 7 goto check
+if errorlevel 6 goto applyplan
+if errorlevel 5 goto dryplan
+if errorlevel 4 goto probe
+if errorlevel 3 goto tools
+if errorlevel 2 goto systemprofile
 if errorlevel 1 goto inspect
 
 :inspect
@@ -43,6 +45,12 @@ set /p "PROJECT_PATH=Ruta completa del proyecto a inspeccionar: "
 if not defined PROJECT_PATH goto menu
 python -m bot.main --inspect-repository "%PROJECT_PATH%"
 if errorlevel 1 echo La inspeccion termino con un error.
+echo.
+pause
+goto menu
+
+:systemprofile
+python -m bot.main --system-profile
 echo.
 pause
 goto menu
