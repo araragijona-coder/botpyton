@@ -35,6 +35,25 @@ class LocalChangeError(ValueError):
     """Raised when a local change plan is invalid or cannot be applied safely."""
 
 
+def _reject_link_components(path: str | Path, label: str) -> None:
+    """Fail closed when any existing path component is a symlink/reparse point."""
+    current = Path(os.path.abspath(str(Path(path).expanduser())))
+    while True:
+        try:
+            current.lstat()
+        except FileNotFoundError:
+            pass
+        except OSError as exc:
+            raise LocalChangeError(f"Could not safely inspect {label} path components") from exc
+        else:
+            if _is_link_or_reparse(current):
+                raise LocalChangeError(f"{label} contains a symlink or Windows reparse-point component")
+        parent = current.parent
+        if parent == current:
+            break
+        current = parent
+
+
 def _safe_relative_path(raw: Any) -> str:
     if not isinstance(raw, str) or not raw or raw.strip() != raw:
         raise LocalChangeError("Every path must be a non-empty canonical relative path")
@@ -86,7 +105,9 @@ def _validate_local_change_plan(plan: Any, root: str | Path) -> dict:
     changes = plan.get("changes")
     if not isinstance(changes, list) or not 1 <= len(changes) <= MAX_FILES:
         raise LocalChangeError(f"changes must contain 1–{MAX_FILES} file entries")
-    base = Path(root).expanduser().resolve()
+    lexical_root = Path(root).expanduser()
+    _reject_link_components(lexical_root, "Project root")
+    base = lexical_root.resolve()
     if not base.is_dir():
         raise LocalChangeError("Project root must be an existing directory")
     seen: set[str] = set()
@@ -161,15 +182,26 @@ def validate_local_change_plan(plan: Any, root: str | Path) -> dict:
     return _public_summary(_validate_local_change_plan(plan, root))
 
 
-def _write_atomic(path: Path, raw: bytes) -> None:
+def _write_atomic(path: Path, raw: bytes, *, replace_existing: bool = True) -> None:
+    """Publish a complete file atomically; optionally require an unused destination."""
+    _reject_link_components(path.parent, "Write destination")
     path.parent.mkdir(parents=True, exist_ok=True)
+    _reject_link_components(path.parent, "Write destination")
+    _reject_link_components(path, "Write destination")
     fd, temporary = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".botpyton-tmp", dir=path.parent)
     try:
         with os.fdopen(fd, "wb") as stream:
             stream.write(raw)
             stream.flush()
             os.fsync(stream.fileno())
-        os.replace(temporary, path)
+        # Recheck path components just before publication. For new files, hard-link
+        # publication is exclusive: a file created concurrently is never replaced.
+        _reject_link_components(path.parent, "Write destination")
+        _reject_link_components(path, "Write destination")
+        if replace_existing:
+            os.replace(temporary, path)
+        else:
+            os.link(temporary, path)
     finally:
         if os.path.exists(temporary):
             os.unlink(temporary)
@@ -184,9 +216,11 @@ def apply_local_change_plan(
     """Apply validated changes; existing files require a matching hash and are backed up."""
     validated = _validate_local_change_plan(plan, root)
     base = Path(validated["root"])
-    backup_base = Path(backup_root).expanduser().resolve() if backup_root else (
+    backup_base_input = Path(backup_root).expanduser() if backup_root else (
         Path.home() / ".botpyton" / "backups" / hashlib.sha256(str(base).encode("utf-8")).hexdigest()[:16]
     )
+    _reject_link_components(backup_base_input, "Backup directory")
+    backup_base = backup_base_input.resolve()
     try:
         backup_base.relative_to(base)
         backup_is_inside_project = True
@@ -200,13 +234,17 @@ def apply_local_change_plan(
         sort_keys=True, separators=(",", ":"),
     ).encode("utf-8"))
     backup_base.mkdir(parents=True, exist_ok=True)
+    _reject_link_components(backup_base, "Backup directory")
 
     written: list[Path] = []
+    written_hashes: dict[Path, str] = {}
     backups: dict[Path, bytes | None] = {}
     backup_records = []
     try:
         for item in validated["changes"]:
+            _reject_link_components(base, "Project root")
             target = _resolve_target(base, item["path"])
+            _reject_link_components(target.parent, "Project file parent")
             original = target.read_bytes() if item["exists"] else None
             if original is not None and _sha256(original) != item["expected_sha256"]:
                 raise LocalChangeError(f"File changed immediately before write: {item['path']}")
@@ -215,24 +253,38 @@ def apply_local_change_plan(
             backups[target] = original
             if original is not None:
                 backup_path = backup_base / validated["task_id"] / plan_fingerprint / item["path"]
-                _write_atomic(backup_path, original)
+                expected_backup_sha256 = _sha256(original)
+                _reject_link_components(backup_path.parent, "Backup file")
+                if backup_path.exists() or backup_path.is_symlink():
+                    _reject_link_components(backup_path, "Backup file")
+                    if not backup_path.is_file() or _sha256(backup_path.read_bytes()) != expected_backup_sha256:
+                        raise LocalChangeError("An existing backup does not match the expected original file; it was preserved.")
+                else:
+                    _write_atomic(backup_path, original, replace_existing=False)
                 backup_records.append({
                     "path": item["path"],
                     "backup_path": str(backup_path),
                     "sha256": _sha256(original),
                 })
-            _write_atomic(target, item["content"].encode("utf-8"))
+            _write_atomic(target, item["content"].encode("utf-8"), replace_existing=bool(item["exists"]))
             written.append(target)
+            written_hashes[target] = item["new_sha256"]
     except Exception as exc:
         rollback_errors = []
         for target in reversed(written):
             try:
+                _reject_link_components(target.parent, "Rollback target")
+                _reject_link_components(target, "Rollback target")
+                if not target.is_file() or _is_link_or_reparse(target):
+                    raise OSError("rollback skipped because target is no longer a regular file")
+                if _sha256(target.read_bytes()) != written_hashes[target]:
+                    raise OSError("rollback skipped because target changed after BOTPYTON wrote it")
                 original = backups[target]
                 if original is None:
-                    target.unlink(missing_ok=True)
+                    target.unlink()
                 else:
                     _write_atomic(target, original)
-            except OSError as rollback_exc:
+            except (OSError, LocalChangeError) as rollback_exc:
                 rollback_errors.append(f"{target}: {type(rollback_exc).__name__}")
         message = f"Local change failed and rollback was attempted: {type(exc).__name__}: {exc}"
         if rollback_errors:
