@@ -215,3 +215,10 @@ python -m bot.main --work-once
 ```
 
 The queue stores durable state under `.cerebro/memory/state.json` by default. Tasks are JSON and actions are allowlisted. This is an auditable, deterministic work order, not natural-language AI reasoning. Review any task JSON before queueing it, especially tasks that contain `apply_local_plan`.
+
+
+## Resource-aware operation
+
+`python -m bot.main --system-profile` reports the current operating system, Python executable, CPU count, available physical RAM and free disk space using lightweight standard-library/system calls. The process runner chooses a conservative child memory budget from available RAM: at most 768 MB and generally no more than half of currently available memory. On Windows, the runner applies that budget through a Job Object and terminates child processes when the job closes. On other platforms the memory limit is reported as not enforced; timeout, serial execution and bounded output capture still apply.
+
+Because the reported available RAM varies with what Windows and other applications are using, BOTPYTON calculates the budget at runtime rather than assuming the full 16 GB is available.
