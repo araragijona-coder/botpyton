@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import json
 import os
-import subprocess
 import sys
 import tempfile
 from datetime import datetime, timezone
@@ -11,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from .diagnostics import diagnose_failure
+from .process_runner import ProcessRunnerError, run_process
 from .fixes import apply_known_fix
 from .verifier import verify_python_files
 
@@ -19,7 +19,6 @@ MAX_TEST_TIMEOUT_SECONDS = 120
 MAX_FAILURE_LOG_BYTES = 50_000
 REPORT_TAIL_CHARS = 8_000
 _SKIP_DIRS = {".git", ".venv", "venv", "__pycache__", "node_modules", "dist", "build"}
-_SECRET_ENV_MARKERS = ("TOKEN", "SECRET", "PASSWORD", "CREDENTIAL", "API_KEY", "PRIVATE_KEY")
 
 
 class AutonomousCycleError(ValueError):
@@ -53,47 +52,47 @@ def _tail_file(stream, limit: int = MAX_FAILURE_LOG_BYTES) -> str:
     return stream.read(limit).decode("utf-8", errors="replace")
 
 
-def _safe_test_environment() -> dict[str, str]:
-    """Do not pass common credentials into the test subprocess."""
-    return {
-        key: value for key, value in os.environ.items()
-        if not any(marker in key.upper() for marker in _SECRET_ENV_MARKERS)
-    } | {"PYTHONDONTWRITEBYTECODE": "1"}
-
-
 def _run_fixed_tests(root: Path, timeout_seconds: int) -> dict[str, Any]:
-    """Run only the fixed unittest command; no shell and no task-provided arguments."""
+    """Run the fixed test command through the bounded process runner."""
     argv = [sys.executable, "-m", "unittest", "discover", "-s", "tests", "-v"]
-    with tempfile.TemporaryFile(mode="w+b") as stdout_file, tempfile.TemporaryFile(mode="w+b") as stderr_file:
-        try:
-            completed = subprocess.run(
-                argv,
-                cwd=root,
-                env=_safe_test_environment(),
-                stdin=subprocess.DEVNULL,
-                stdout=stdout_file,
-                stderr=stderr_file,
-                shell=False,
-                timeout=timeout_seconds,
-                check=False,
-            )
-            timed_out = False
-            exit_code = completed.returncode
-        except subprocess.TimeoutExpired:
-            timed_out = True
-            exit_code = None
-        stdout_tail = _tail_file(stdout_file, REPORT_TAIL_CHARS)
-        stderr_tail = _tail_file(stderr_file, REPORT_TAIL_CHARS)
-    combined = (stdout_tail + "\n" + stderr_tail)[-MAX_FAILURE_LOG_BYTES:]
+    try:
+        completed = run_process(
+            argv,
+            cwd=root,
+            allowed_root=root,
+            approved_executables=[sys.executable],
+            timeout_seconds=timeout_seconds,
+            output_limit_bytes=MAX_FAILURE_LOG_BYTES // 2,
+        )
+    except ProcessRunnerError as exc:
+        return {
+            "command_id": "python_unittest_discovery",
+            "argv": argv,
+            "exit_code": None,
+            "timed_out": False,
+            "timeout_seconds": timeout_seconds,
+            "stdout_tail": "",
+            "stderr_tail": "",
+            "failure_log_tail": f"ProcessRunnerError: {exc}"[:MAX_FAILURE_LOG_BYTES],
+            "runner_error": type(exc).__name__,
+            "process_memory_limit_enforced": False,
+        }
+    stdout_tail = completed["stdout"][-REPORT_TAIL_CHARS:]
+    stderr_tail = completed["stderr"][-REPORT_TAIL_CHARS:]
+    combined = (completed["stdout"] + "\\n" + completed["stderr"])[-MAX_FAILURE_LOG_BYTES:]
     return {
         "command_id": "python_unittest_discovery",
-        "argv": [sys.executable, "-m", "unittest", "discover", "-s", "tests", "-v"],
-        "exit_code": exit_code,
-        "timed_out": timed_out,
+        "argv": argv,
+        "exit_code": completed["exit_code"],
+        "timed_out": completed["timed_out"],
         "timeout_seconds": timeout_seconds,
         "stdout_tail": stdout_tail,
         "stderr_tail": stderr_tail,
         "failure_log_tail": combined,
+        "stdout_truncated": completed["stdout_truncated"],
+        "stderr_truncated": completed["stderr_truncated"],
+        "process_memory_limit_mb": completed["process_memory_limit_mb"],
+        "process_memory_limit_enforced": completed["process_memory_limit_enforced"],
     }
 
 
