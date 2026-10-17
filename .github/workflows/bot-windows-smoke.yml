@@ -26,6 +26,8 @@ jobs:
         run: python -m bot.main --check
       - name: Run unit and safety tests
         run: python -m unittest discover -s tests -v
+      - name: Exercise isolated browser-cache quarantine and restore fixtures
+        run: python -m unittest discover -s tests -p test_application_cache_quarantine.py -v
       - name: Report available RAM and disk
         run: python -m bot.main --system-profile
       - name: Run actionable read-only preflight

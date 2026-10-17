@@ -180,3 +180,15 @@ python -m bot.main --pc-cleanup-restore "C:\\path\\to\\BOTPYTON\\Quarantine\\ses
 - Automated tests cover supported browser paths, privacy-sensitive exclusions, unsupported platforms and scan/candidate caps. Windows CI smoke invokes the command on the candidate SHA.
 - This phase expands the **preview/catalog** gap only. It does not yet perform browser-cache cleanup, measure boot/performance impact, resolve publisher/signature metadata, or prove that every cache file is safe to remove. Do not infer reclaimable bytes from cache size alone.
 - Local paths may contain user-specific folder names. Inspect output before sharing. The report never authorizes an automatic or background cleanup.
+
+
+## Phase 29 — Explicit browser-cache quarantine and verified restore
+
+- Commands: \`python -m bot.main --pc-app-cache-quarantine\`, \`--pc-app-cache-restore-preview MANIFEST_JSON\`, and \`--pc-app-cache-restore MANIFEST_JSON\`. Windows launcher: **Y** to select/quarantine and **Z** to preview/restore.
+- Quarantine enumerates only a **complete fresh preview** of allowlisted Chrome, Edge, Brave and Firefox cache locations. The user selects displayed item numbers. Selection is capped at 25 files; per-file size is capped at 32 MiB and the selected batch at 128 MiB.
+- Before the first move it checks exact path membership, file identity/size/nanosecond mtime, regular-file status, link/reparse components and SHA-256. Files move into a separate per-user \`%LOCALAPPDATA%\\BOTPYTON\\BrowserCacheQuarantine\` session with a checksummed manifest. Files are moved, not permanently deleted; this command does not clear cookies or browser databases.
+- Exact confirmations are required: \`QUARANTINE SELECTED BROWSER CACHE\` and \`RESTORE BOTPYTON BROWSER CACHE\`. Typing anything else performs no move/restore.
+- Restore preview validates the manifest checksum, known original cache roots, stored file SHA-256 and destination conflicts. Restore refuses existing destinations and uses an atomic no-overwrite file creation; conflicts remain in quarantine. Parents must still exist under recognized cache roots.
+- All actions are local and sequential. No background service, network call, AI API, registry edit or browser launch is performed. Locked files, changed files, incomplete scans, hash/size cap hits and I/O errors fail closed or produce explicit partial reports.
+- Tests use temporary synthetic profiles to verify selected-only movement, integrity checks, wrong confirmation, outside-root path rejection, changed-file rejection, restore, manifest tampering and no-overwrite conflicts. Windows CI runs the focused fixture suite. A CI pass is not target-PC validation.
+- Limits: this is still a deliberately narrow cache-cleaning feature, not full CCleaner parity. Close browsers first. Manifests contain local file paths; inspect them before sharing. SHA-256 detects changes but is not a digital signature. Atomic moves can be rejected if the filesystem/volume does not support them.

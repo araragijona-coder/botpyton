@@ -44,8 +44,12 @@ echo  U. Estado reportado de discos (solo lectura; no repara)
 echo  V. Diagnostico previo: requisitos, memoria y siguientes pasos (solo lectura)
 echo  W. Analizar destinos de programas de inicio (solo lectura; no desactiva nada)
 echo  X. Vista previa de cachés de navegadores (solo lectura; no borra nada)
+echo  Y. Cuarentena reversible de caché seleccionada (confirmación escrita)
+echo  Z. Restaurar caché desde manifest.json (verifica y no sobrescribe)
 echo.
-choice /c 123456789ABCDEFGHIJKLMNOPQRSTUVWX /n /m "Selecciona una opcion: "
+choice /c 123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ /n /m "Selecciona una opcion: "
+if errorlevel 35 goto appcacherestore
+if errorlevel 34 goto appcachequarantine
 if errorlevel 33 goto appcachepreview
 if errorlevel 32 goto startupadvisor
 if errorlevel 31 goto doctor
@@ -401,6 +405,22 @@ goto menu
 
 :appcachepreview
 python -m bot.main --pc-app-cleanup-preview
+echo.
+pause
+goto menu
+
+:appcachequarantine
+python -m bot.main --pc-app-cache-quarantine
+echo.
+pause
+goto menu
+
+:appcacherestore
+echo.
+set "CACHE_MANIFEST="
+set /p "CACHE_MANIFEST=Ruta absoluta del manifest.json de la cuarentena: "
+if not defined CACHE_MANIFEST goto menu
+python -m bot.main --pc-app-cache-restore "%CACHE_MANIFEST%"
 echo.
 pause
 goto menu

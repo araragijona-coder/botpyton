@@ -7,8 +7,12 @@ from typing import Any
 SUCCESS_STATUSES = {
     "collected", "completed", "measured", "scan_complete", "preview_complete",
     "ready_to_restore", "no_candidates", "restored", "no_files_restored", "diagnostic_only",
+    "no_cache_candidates", "cache_quarantined", "cache_restored", "restore_preview_complete",
 }
-PARTIAL_STATUSES = {"partial", "partial_limit", "preview_partial", "scan_partial", "partial_measurement"}
+PARTIAL_STATUSES = {
+    "partial", "partial_limit", "preview_partial", "scan_partial", "partial_measurement",
+    "cache_quarantine_partial", "cache_restore_partial", "restore_preview_partial",
+}
 FAILURE_STATUSES = {
     "unavailable", "unsupported_platform", "not_present", "timeout",
     "command_unavailable", "query_unavailable", "query_error", "parse_error",
@@ -17,6 +21,8 @@ FAILURE_STATUSES = {
     "unsafe_audit_directory", "read_error", "unreadable_record",
     "audit_unavailable", "audit_write_failed", "restore_failed",
     "source_or_query_error", "blocked", "error", "fail",
+    "confirmation_mismatch", "cache_quarantine_blocked", "cache_manifest_invalid",
+    "cache_restore_blocked", "restore_preview_blocked",
 }
 
 

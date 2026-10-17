@@ -28,6 +28,11 @@ from .doctor import run_preflight
 from .operation_guard import print_pc_result
 from .startup_advisor import read_startup_advisor
 from .application_cache import preview_application_cache
+from .application_cache_quarantine import (
+    CACHE_QUARANTINE_CONFIRMATION, CACHE_RESTORE_CONFIRMATION,
+    preview_application_cache_restore, quarantine_application_cache_candidates,
+    restore_application_cache_quarantine,
+)
 from .pc_care import get_pc_care_report, QUARANTINE_CONFIRMATION, RESTORE_CONFIRMATION, quarantine_cleanup_candidates, restore_quarantined_files, check_application_updates, preview_quarantined_restore, read_pc_care_audit
 from .packaging import build_portable_package, verify_portable_archive
 from .pc_care import get_pc_care_benchmark, analyze_storage_path, find_duplicate_files, read_device_driver_inventory, read_disk_health_inventory
@@ -88,6 +93,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--pc-check", action="store_true", help="run the read-only, offline local PC-care audit")
     parser.add_argument("--pc-startup-advisor", action="store_true", help="inspect Windows startup entry targets locally; never disables entries")
     parser.add_argument("--pc-app-cleanup-preview", action="store_true", help="preview old files in recognized browser cache folders; never deletes or changes browser data")
+    parser.add_argument("--pc-app-cache-quarantine", action="store_true", help="interactively move explicitly selected browser cache files into reversible quarantine")
+    parser.add_argument("--pc-app-cache-restore-preview", metavar="MANIFEST_JSON", help="verify a browser-cache quarantine manifest and show restore conflicts; no files moved")
+    parser.add_argument("--pc-app-cache-restore", metavar="MANIFEST_JSON", help="restore verified browser-cache files after exact typed confirmation; never overwrite existing files")
     parser.add_argument("--pc-processes", action="store_true", help="show a bounded read-only snapshot of Windows process memory usage")
     parser.add_argument("--pc-cleanup-preview", action="store_true", help="list exact eligible temporary-file candidates without deleting anything")
     parser.add_argument("--pc-cleanup-quarantine", action="store_true", help="move verified temporary-file candidates to reversible quarantine after typed confirmation")
@@ -175,6 +183,74 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         if args.pc_startup_advisor:
             return print_pc_result(read_startup_advisor())
+        cache_action_count = sum(bool(value) for value in (
+            args.pc_app_cache_quarantine, args.pc_app_cache_restore_preview, args.pc_app_cache_restore
+        ))
+        if cache_action_count > 1:
+            raise ValueError("Choose only one browser-cache quarantine or restore action per invocation.")
+        if args.pc_app_cache_quarantine:
+            from .application_cache import preview_application_cache
+            preview = preview_application_cache(max_candidates=100, timeout_seconds=5.0)
+            if preview.get("status") != "preview_complete" or preview.get("scan_limited") or preview.get("access_errors", 0):
+                return print_pc_result(preview)
+            candidates = preview.get("candidates", [])
+            if not candidates:
+                return print_pc_result({
+                    "product": "BOTPYTON PC Care", "schema_version": 1,
+                    "status": "no_cache_candidates", "operation": "application_cache_quarantine",
+                    "read_only": True, "network_used": False, "files_moved": 0,
+                    "note": "No eligible files were found by the complete allowlisted browser-cache preview."
+                })
+            print("BROWSER CACHE QUARANTINE — choose only files you recognize. This moves files; it does not permanently delete them.")
+            for index, candidate in enumerate(candidates, start=1):
+                print(f"  {index}. [{candidate['size_bytes']} bytes; {candidate['age_days']} days] {candidate['browser']} / {candidate['profile']} / {candidate['cache_area']} — {candidate['path']}")
+            print(f"Choose 1–{len(candidates)}. Maximum selected files: 25. Close browsers first; locked files will be skipped.")
+            try:
+                selection_text = input("Selected item numbers separated by commas (blank cancels): ").strip()
+                if not selection_text:
+                    return print_pc_result({
+                        "product": "BOTPYTON PC Care", "schema_version": 1,
+                        "status": "cache_quarantine_blocked", "operation": "application_cache_quarantine",
+                        "read_only": True, "network_used": False, "files_moved": 0,
+                        "note": "Cancelled at the selection prompt; no files were moved."
+                    })
+                indices = [int(part.strip()) for part in selection_text.split(",")]
+                if (len(indices) > 25 or len(set(indices)) != len(indices)
+                        or any(index < 1 or index > len(candidates) for index in indices)):
+                    raise ValueError("Selection must contain up to 25 unique displayed item numbers.")
+                selected_paths = [candidates[index - 1]["path"] for index in indices]
+                print("A fresh full preview, exact metadata comparison, and SHA-256 validation will run before any move.")
+                confirmation = input(f'Type exactly "{CACHE_QUARANTINE_CONFIRMATION}" to continue: ')
+            except (EOFError, ValueError) as exc:
+                return print_pc_result({
+                    "product": "BOTPYTON PC Care", "schema_version": 1,
+                    "status": "cache_quarantine_blocked", "operation": "application_cache_quarantine",
+                    "read_only": True, "network_used": False, "files_moved": 0,
+                    "note": f"Selection cancelled or invalid ({type(exc).__name__}); no files were moved."
+                })
+            result = quarantine_application_cache_candidates(
+                selected_paths, confirmation=confirmation
+            )
+            return print_pc_result(result)
+        if args.pc_app_cache_restore_preview:
+            return print_pc_result(preview_application_cache_restore(args.pc_app_cache_restore_preview))
+        if args.pc_app_cache_restore:
+            preview = preview_application_cache_restore(args.pc_app_cache_restore)
+            for item in preview.get("items", []):
+                if isinstance(item, dict):
+                    print(f"  [{item.get('status', 'unknown')}] {item.get('path', '(path missing)')}")
+            if preview.get("ready_count", 0) < 1:
+                return print_pc_result(preview)
+            print("RESTORE PREVIEW — existing destination files will never be overwritten.")
+            print(f"Verified files ready to restore: {preview['ready_count']}; blocked/skipped: {preview.get('files_skipped', 0)}")
+            try:
+                confirmation = input(f'Type exactly "{CACHE_RESTORE_CONFIRMATION}" to continue: ')
+            except EOFError:
+                confirmation = ""
+            result = restore_application_cache_quarantine(
+                args.pc_app_cache_restore, confirmation=confirmation
+            )
+            return print_pc_result(result)
         if args.pc_app_cleanup_preview:
             return print_pc_result(preview_application_cache())
         if args.pc_apps:

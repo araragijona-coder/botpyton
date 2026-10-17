@@ -22,7 +22,7 @@ The vendor describes cleaning of Windows/browser/application junk and privacy da
 |---|---|---|---|
 | Local PC overview | Read-only system/disk/temp/startup/process/app snapshots | Health Check overview and guided fixes | **Partial.** BOTPYTON's output is structured JSON, not yet a polished guided UI. |
 | Temporary-file cleanup | Bounded preview; confirmed move of approved old temp files into quarantine; restore and integrity checks | Broad cleanup rules for Windows and hundreds of applications | **Large gap.** A separate read-only preview now recognizes selected browser-cache folders; no browser/app cache is moved or deleted. Most application-cleaning profiles remain absent. |
-| Browser privacy cleaning | Read-only preview lists older files in recognized Chrome, Edge, Brave and Firefox cache paths. Execution/quarantine still excludes browser caches and personal browsing data. | Browser history, cache, cookies/tracking data cleaning | **Preview only.** No browser cache is moved/deleted. Cookies, sessions, history, passwords, autofill and saved data remain excluded. |
+| Browser privacy cleaning | Bounded preview plus explicitly selected cache-file quarantine and SHA-256-checked restoration for recognized Chrome, Edge, Brave and Firefox cache paths. Cookies and browser databases remain excluded. | Browser history, cache, cookies/tracking data cleaning | **Partial.** A narrow reversible cache subset is supported; no history/cookie/session/password cleaning or broad application rules. |
 | Storage analysis | Bounded analysis of one user-selected folder; largest files/extensions | Disk Analyzer / Duplicate Finder features | **Partial.** No integrated whole-drive visual explorer; user-selected scan avoids unexpected full-drive work. |
 | Duplicate detection | SHA-256 exact duplicate inventory in a selected folder; never deletes | Duplicate Finder scans and supports selection/removal workflows | **Detection partial; safe deletion absent.** Add reviewed selection and reversible quarantine only after further safeguards. |
 | Installed applications | Local metadata inventory | Uninstaller and app management | **Partial.** No uninstall execution or uninstall safety workflow. |
@@ -66,3 +66,8 @@ The most important parity gaps are:
 The startup advisor closes part of the evidence gap by checking whether a target path can be resolved, but it is not a startup optimizer. It does not measure boot impact, verify publisher signatures, resolve shortcut targets, or disable entries. Those must be separate, tested capabilities before claiming parity with CCleaner's startup controls.
 
 Phase 28 adds a bounded, read-only browser-cache preview for recognized Chrome, Edge, Brave and Firefox profile layouts. It deliberately does not delete or quarantine browser data, and it excludes privacy-sensitive databases and arbitrary application folders. This is a catalog/preview step, not completed application cleaning or CCleaner parity.
+
+
+### Phase 29 — bounded reversible browser-cache subset
+
+The browser-cache feature now supports a user-selected, typed-confirmation quarantine and a separately confirmed restore path. It uses a fresh complete preview, exact metadata checks, bounded SHA-256 hashing, a checksummed manifest, and no-overwrite restoration. It is intentionally restricted to up to 25 selected files / 128 MiB per batch and does not clear privacy-sensitive browser databases. It remains a narrow prototype, not evidence of CCleaner parity or target-PC performance.
