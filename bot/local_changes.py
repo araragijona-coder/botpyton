@@ -9,6 +9,8 @@ import tempfile
 from pathlib import Path, PurePosixPath
 from typing import Any
 
+from .application_cache import _is_link_or_reparse
+
 MAX_FILES = 20
 MAX_FILE_BYTES = 200_000
 MAX_TOTAL_BYTES = 500_000
@@ -59,8 +61,8 @@ def _resolve_target(root: Path, relative: str) -> Path:
     current = root
     for part in PurePosixPath(relative).parts:
         current = current / part
-        if current.is_symlink():
-            raise LocalChangeError(f"Symlink path components are not allowed: {relative}")
+        if _is_link_or_reparse(current):
+            raise LocalChangeError(f"Symlink or reparse-point path components are not allowed: {relative}")
     resolved = current.resolve()
     try:
         resolved.relative_to(root)
