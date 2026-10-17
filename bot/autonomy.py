@@ -79,7 +79,7 @@ def _run_fixed_tests(root: Path, timeout_seconds: int) -> dict[str, Any]:
         }
     stdout_tail = completed["stdout"][-REPORT_TAIL_CHARS:]
     stderr_tail = completed["stderr"][-REPORT_TAIL_CHARS:]
-    combined = (completed["stdout"] + "\\n" + completed["stderr"])[-MAX_FAILURE_LOG_BYTES:]
+    combined = (completed["stdout"] + "\n" + completed["stderr"])[-MAX_FAILURE_LOG_BYTES:]
     return {
         "command_id": "python_unittest_discovery",
         "argv": argv,
