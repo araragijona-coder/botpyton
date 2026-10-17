@@ -183,7 +183,7 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         if args.github_plan:
             plan_path = Path(validate_relative_path(args.github_plan))
-            plan_data = _read_bounded_json(str(plan_path))
+            plan_data = _read_bounded_json(str(plan_path), limit_bytes=600_000)
             client = GitHubClient()
             result = submit_change_plan(plan_data, client=client, execute=args.execute_github_plan)
             _print_json(result)
@@ -199,14 +199,14 @@ def main(argv: list[str] | None = None) -> int:
             _print_json(result)
             return 0
         if args.validate_task:
-            task = _read_bounded_json(args.validate_task)
+            task = _read_bounded_json(args.validate_task, limit_bytes=600_000)
             if not isinstance(task, dict):
                 raise PolicyError("Task file must contain a JSON object")
             validate_task(task)
             print(f"VALID task={task['id']}")
             return 0
         if args.plan:
-            tasks = _read_bounded_json(args.plan)
+            tasks = _read_bounded_json(args.plan, limit_bytes=600_000)
             if not isinstance(tasks, list):
                 raise PolicyError("Plan file must contain a JSON array")
             print("\n".join(task["id"] for task in order_tasks(tasks)))
@@ -231,7 +231,7 @@ def main(argv: list[str] | None = None) -> int:
 
         queue = TaskQueue(JsonMemory(args.memory))
         if args.enqueue:
-            incoming = _read_bounded_json(args.enqueue)
+            incoming = _read_bounded_json(args.enqueue, limit_bytes=600_000)
             tasks = incoming if isinstance(incoming, list) else [incoming]
             _print_json([{"id": record["payload"]["id"], "status": record["status"],
                           "idempotency_key": record["idempotency_key"]}
