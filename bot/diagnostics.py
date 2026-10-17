@@ -89,6 +89,60 @@ def _conflict_evidence(root: Path) -> dict[str, Any]:
     return {"conflict_marker_files": markers}
 
 
+
+def _traceback_evidence(log_text: str, root: Path) -> dict[str, Any]:
+    """Extract bounded traceback context from files inside the project without executing them."""
+    frame_pattern = re.compile(r'File ["\\']([^"\\']+)["\\'], line (\\d+)')
+    frames = []
+    base = root.resolve()
+    for match in frame_pattern.finditer(log_text):
+        if len(frames) >= 10:
+            break
+        raw_path, raw_line = match.group(1), match.group(2)
+        candidate = Path(raw_path)
+        if not candidate.is_absolute():
+            candidate = base / candidate
+        try:
+            resolved = candidate.resolve()
+            relative = resolved.relative_to(base).as_posix()
+        except (OSError, ValueError):
+            frames.append({"path": raw_path[:300], "line": int(raw_line), "source_read": False,
+                           "reason": "frame path is outside project or unresolved"})
+            continue
+        line_number = int(raw_line)
+        frame = {"path": relative, "line": line_number, "source_read": False}
+        try:
+            if not resolved.is_file() or resolved.is_symlink() or resolved.stat().st_size > 200_000:
+                frame["reason"] = "source is missing, symbolic, or larger than 200 KB"
+            else:
+                lines = resolved.read_text(encoding="utf-8").splitlines()
+                if 1 <= line_number <= len(lines):
+                    start = max(1, line_number - 2)
+                    end = min(len(lines), line_number + 2)
+                    frame["context"] = [
+                        {"line": number, "text": lines[number - 1][:300]}
+                        for number in range(start, end + 1)
+                    ]
+                    frame["source_read"] = True
+                else:
+                    frame["reason"] = "traceback line is outside current file length"
+        except (OSError, UnicodeError) as exc:
+            frame["reason"] = f"source read failed: {type(exc).__name__}"
+        frames.append(frame)
+    last_line = next((line.strip() for line in reversed(log_text.splitlines()) if line.strip()), "")
+    error_match = re.search(
+        r"\\b([A-Za-z_][A-Za-z0-9_]*(?:Error|Exception|Failure|Interrupt))\\b(?::|$)",
+        last_line,
+    )
+    return {
+        "traceback_frames": frames,
+        "last_error_line": last_line[:1000],
+        "error_type_guess": error_match.group(1) if error_match else None,
+        "evidence_only": True,
+        "source_modified": False,
+        "code_executed": False,
+    }
+
 def diagnose_failure(
     log_text: str, root: str | Path, *, attempt: int = 1, max_attempts: int = 3
 ) -> dict[str, Any]:
@@ -97,24 +151,30 @@ def diagnose_failure(
     decision: RecoveryDecision = classify_failure(
         log_text, attempt=attempt, max_attempts=max_attempts
     )
-    details: dict[str, Any] = {}
+    details: dict[str, Any] = _traceback_evidence(log_text, base)
     if decision.strategy == "verify_declared_dependencies":
-        details = _dependency_evidence(base, log_text)
+        details.update(_dependency_evidence(base, log_text))
     elif decision.strategy == "inspect_syntax_location":
-        details = {
+        details.update({
             "python_syntax_errors": verify_python_files(base),
             "recommendation": "Inspect the exact file and line; no generic syntax rewrite is safe."
-        }
+        })
     elif decision.strategy == "validate_json_schema":
-        details = {
+        details.update({
             **_json_evidence(base),
             "recommendation": "Correct the reported JSON syntax error, then rerun validation."
-        }
+        })
     elif decision.strategy == "rebuild_isolated_branch":
-        details = {
+        details.update({
             **_conflict_evidence(base),
             "recommendation": "Resolve only identified conflict markers on an isolated branch; no merge was performed."
-        }
+        })
+    if decision.category == "unknown":
+        details["recommendation"] = (
+            "No exact known-error rule matched. Preserve the complete log, inspect the bounded "
+            "traceback context, form one testable hypothesis, and run a small reversible experiment. "
+            "No source edit or automatic retry was performed."
+        )
     return {
         "category": decision.category,
         "strategy": decision.strategy,
