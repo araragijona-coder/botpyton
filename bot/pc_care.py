@@ -1016,7 +1016,7 @@ def find_duplicate_files(
 
     hash_groups: dict[str, list[dict]] = {}
     hash_limit_hit = False
-    for bucket in candidate_buckets:
+    for bucket_index, bucket in enumerate(candidate_buckets):
         if time.perf_counter() >= deadline:
             limited = True
             report["timeout_hit"] = True
@@ -1026,20 +1026,20 @@ def find_duplicate_files(
             report["oversize_candidate_files_skipped"] += len(bucket)
             limited = True
             continue
-        for item in bucket:
+        for member_index, item in enumerate(bucket):
             if time.perf_counter() >= deadline:
                 limited = True
                 report["timeout_hit"] = True
                 hash_limit_hit = True
                 break
             if report["files_hashed"] >= MAX_DUPLICATE_HASH_FILES:
-                report["hash_budget_skipped_files"] += sum(len(entries) for entries in candidate_buckets[candidate_buckets.index(bucket):])
+                report["hash_budget_skipped_files"] += len(bucket) - member_index + sum(len(entries) for entries in candidate_buckets[bucket_index + 1:])
                 limited = True
                 hash_limit_hit = True
                 break
             remaining = max_hash_bytes - report["hash_bytes_examined"]
             if size_bytes > remaining:
-                report["hash_budget_skipped_files"] += sum(len(entries) for entries in candidate_buckets[candidate_buckets.index(bucket):])
+                report["hash_budget_skipped_files"] += len(bucket) - member_index + sum(len(entries) for entries in candidate_buckets[bucket_index + 1:])
                 limited = True
                 hash_limit_hit = True
                 break
@@ -1054,11 +1054,16 @@ def find_duplicate_files(
                 if (not stat.S_ISREG(before.st_mode) or before.st_size != size_bytes
                         or before.st_mtime_ns != item["modified_ns"]):
                     raise OSError("file metadata changed during scan")
-                digest = _sha256_file(candidate_path, byte_limit=min(size_bytes, remaining, max_file_bytes))
+                digest = _sha256_file(candidate_path, byte_limit=min(size_bytes, remaining, max_file_bytes), deadline=deadline)
                 after = candidate_path.stat(follow_symlinks=False)
                 if (after.st_size != before.st_size or after.st_mtime_ns != before.st_mtime_ns
                         or int(getattr(after, "st_ino", 0)) != item["inode"]):
                     raise OSError("file metadata changed during hashing")
+            except TimeoutError:
+                report["timeout_hit"] = True
+                limited = True
+                hash_limit_hit = True
+                break
             except (OSError, RuntimeError, ValueError):
                 report["changed_or_inaccessible_files"] += 1
                 limited = True
@@ -1407,7 +1412,7 @@ def _move_no_replace(source: str | Path, destination: str | Path) -> None:
         raise
 
 
-def _sha256_file(path: str | Path, *, byte_limit: int) -> str:
+def _sha256_file(path: str | Path, *, byte_limit: int, deadline: float | None = None) -> str:
     """Hash a regular file with bounded memory and detect concurrent modification."""
     target = Path(path)
     before = target.stat(follow_symlinks=False)
@@ -1417,6 +1422,8 @@ def _sha256_file(path: str | Path, *, byte_limit: int) -> str:
     total = 0
     with target.open("rb") as stream:
         while True:
+            if deadline is not None and time.perf_counter() >= deadline:
+                raise TimeoutError("file hashing deadline exceeded")
             chunk = stream.read(HASH_CHUNK_BYTES)
             if not chunk:
                 break

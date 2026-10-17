@@ -706,5 +706,24 @@ class PcCareTests(unittest.TestCase):
             self.assertEqual(result["status"], "unsafe_root")
 
 
+    def test_duplicate_finder_reports_exact_hash_budget_skips_and_deadline(self):
+        from bot.pc_care import find_duplicate_files
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "a-small.bin").write_bytes(b"x")
+            (root / "b-small.bin").write_bytes(b"x")
+            (root / "c-large.bin").write_bytes(b"yy")
+            (root / "d-large.bin").write_bytes(b"yy")
+            budget = find_duplicate_files(
+                root, max_entries=100, max_hash_bytes=1, max_file_bytes=100, timeout_seconds=5
+            )
+            self.assertEqual(budget["files_hashed"], 1)
+            self.assertEqual(budget["hash_budget_skipped_files"], 3)
+            with patch("bot.pc_care._sha256_file", side_effect=TimeoutError("deadline")):
+                timed = find_duplicate_files(root, max_entries=100, timeout_seconds=5)
+            self.assertEqual(timed["status"], "scan_partial")
+            self.assertTrue(timed["timeout_hit"])
+            self.assertEqual(timed["files_hashed"], 0)
+
 if __name__ == "__main__":
     unittest.main()
