@@ -41,3 +41,10 @@ Los archivos existentes se respaldan fuera de la raíz del proyecto, por defecto
 Para actualizar un archivo existente, añade `expected_sha256` con el SHA-256 del contenido exacto que el plan espera reemplazar. No inventes el hash; calcúlalo a partir del archivo real.
 
 Este mecanismo proporciona escritura local controlada, pero no convierte texto libre en código automáticamente ni decide por sí solo qué cambio resolverá un error. El plan debe describir el cambio solicitado y BOTPYTON verifica precondiciones, permisos y hashes antes de aplicarlo.
+
+
+## Usar el plan como una tarea de la cola
+
+Una tarea de la cola puede incluir `"apply_local_plan"` en `allowed_actions` y el mismo objeto de plan en `local_change_plan`. El `task_id` del plan debe coincidir exactamente con el `id` de la tarea. El ejecutor de tareas aplica las mismas comprobaciones de hash, límites, rutas protegidas y backups; no convierte el campo `goal` en un comando y no interpreta código libre como instrucciones.
+
+Esto permite automatizar una orden ya estructurada y auditable. No es todavía un traductor universal de texto libre a código: sin un modelo de IA, las órdenes genéricas deben convertirse en planes explícitos o encajar en procedimientos deterministas que el trabajador conozca.
