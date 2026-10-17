@@ -28,6 +28,8 @@ jobs:
         run: python -m unittest discover -s tests -v
       - name: Report available RAM and disk
         run: python -m bot.main --system-profile
+      - name: Exercise bounded read-only PC care benchmark
+        run: python -m bot.main --pc-benchmark
       - name: Build and verify portable package
         run: |
           python -m bot.main --package-portable "$env:RUNNER_TEMP\botpyton-dist"

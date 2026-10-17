@@ -303,3 +303,18 @@ El único comando de consulta es \`winget list --upgrade-available --source wing
 Cada manifiesto nuevo de cuarentena guarda el hash SHA-256 y la marca de tiempo de alta precision de cada archivo, ademas de un checksum del propio manifiesto que se valida antes de la restauracion. BOTPYTON verifica el hash antes de restaurar; si el contenido cambio, falta o excede el presupuesto, se deja en cuarentena. El cálculo usa bloques de 256 KiB y limita los datos leídos a 512 MiB por operación.
 
 Ejecuta \`python -m bot.main --pc-cleanup-restore-preview "PATH\\manifest.json"\` para comprobar integridad y conflictos de destino sin modificar nada. Ejecuta \`python -m bot.main --pc-audit\` para leer el registro local de operaciones. La auditoría registra tipos de operación, estado y contadores, no rutas exactas; está limitada a 200 registros mostrados, archivos/eventos y bytes acotados. Los hashes detectan cambios accidentales, pero no sustituyen una firma criptográfica ni una copia de seguridad externa. Revisa \`docs/PC-CARE-ROADMAP.md\` para los límites.
+
+
+## Phase 19: paquete portátil y medicion puntual de recursos
+
+Crear y validar un paquete fuente portátil con Python 3.11+:
+
+\`\`\`powershell
+python -m bot.main --package-portable ".\\dist"
+python -m bot.main --verify-portable-package ".\\dist\\BOTPYTON-portable.zip"
+python -m bot.main --pc-benchmark
+\`\`\`
+
+El ZIP incluye los módulos, documentación y ejemplos, más un manifiesto con SHA-256 de cada miembro y un archivo lateral \`.sha256\`. La verificación comprueba miembros duplicados/inseguros, rutas, CRC, límites y hashes. No incluye un intérprete Python ni es un EXE autónomo; tampoco incluye estado local, reportes, caches, repositorio Git o tests.
+
+\`--pc-benchmark\` hace una sola pasada de diagnóstico local con límites de escaneo, tiempos CPU/pared por operación y memoria residente actual/pico cuando el sistema lo permite. No modifica el PC, no limpia, no actualiza y no usa red. Los números de CI verifican el programa en runners; los valores reales de tu Ryzen y el pico de RAM todavía deben medirse en tu equipo.

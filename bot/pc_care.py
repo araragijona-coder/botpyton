@@ -679,6 +679,151 @@ def get_cleanup_preview(
 
 
 
+def _process_memory_snapshot(*, windows: bool | None = None) -> dict:
+    """Read current and lifetime peak resident memory for this process without dependencies."""
+    is_windows = os.name == "nt" if windows is None else windows
+    if is_windows:
+        try:
+            import ctypes
+            from ctypes import wintypes
+
+            class ProcessMemoryCounters(ctypes.Structure):
+                _fields_ = [
+                    ("cb", wintypes.DWORD),
+                    ("PageFaultCount", wintypes.DWORD),
+                    ("PeakWorkingSetSize", ctypes.c_size_t),
+                    ("WorkingSetSize", ctypes.c_size_t),
+                    ("QuotaPeakPagedPoolUsage", ctypes.c_size_t),
+                    ("QuotaPagedPoolUsage", ctypes.c_size_t),
+                    ("QuotaPeakNonPagedPoolUsage", ctypes.c_size_t),
+                    ("QuotaNonPagedPoolUsage", ctypes.c_size_t),
+                    ("PagefileUsage", ctypes.c_size_t),
+                    ("PeakPagefileUsage", ctypes.c_size_t),
+                ]
+
+            counters = ProcessMemoryCounters()
+            counters.cb = ctypes.sizeof(counters)
+            process = ctypes.windll.kernel32.GetCurrentProcess()
+            ok = ctypes.windll.psapi.GetProcessMemoryInfo(process, ctypes.byref(counters), counters.cb)
+            if ok:
+                return {
+                    "status": "measured",
+                    "source": "GetProcessMemoryInfo",
+                    "current_rss_bytes": int(counters.WorkingSetSize),
+                    "peak_rss_bytes": int(counters.PeakWorkingSetSize),
+                }
+        except (AttributeError, OSError, ImportError):
+            pass
+        return {"status": "unavailable", "source": "GetProcessMemoryInfo"}
+    status_path = Path("/proc/self/status")
+    if status_path.is_file():
+        try:
+            values = {}
+            for line in status_path.read_text(encoding="ascii").splitlines():
+                if line.startswith("VmRSS:") or line.startswith("VmHWM:"):
+                    parts = line.split()
+                    values[parts[0].rstrip(":")] = int(parts[1]) * 1024
+            if "VmRSS" in values:
+                return {
+                    "status": "measured",
+                    "source": "/proc/self/status",
+                    "current_rss_bytes": values["VmRSS"],
+                    "peak_rss_bytes": values.get("VmHWM"),
+                }
+        except (OSError, ValueError, IndexError):
+            pass
+    return {"status": "unavailable", "source": "not_supported"}
+
+
+def get_pc_care_benchmark(
+    *,
+    windows: bool | None = None,
+    scan_roots: list[tuple[str, Path]] | None = None,
+) -> dict:
+    """Run one bounded, read-only PC-care probe and report timings/RSS; never updates or cleans."""
+    started_wall = time.perf_counter()
+    started_cpu = time.process_time()
+    memory_before = _process_memory_snapshot(windows=windows)
+    operations: list[dict] = []
+    measurements: dict[str, dict] = {}
+
+    def measure(name: str, callback) -> None:
+        wall = time.perf_counter()
+        cpu = time.process_time()
+        try:
+            result = callback()
+            operation_status = result.get("status", "completed") if isinstance(result, dict) else "completed"
+            item_count = result.get("items_count", result.get("candidate_count", 0)) if isinstance(result, dict) else 0
+            scanned = result.get("entries_examined", 0) if isinstance(result, dict) else 0
+            error_type = None
+        except (OSError, ValueError, RuntimeError) as exc:
+            operation_status = "unavailable"
+            item_count = 0
+            scanned = 0
+            error_type = type(exc).__name__
+        timing = {
+            "name": name,
+            "status": operation_status,
+            "elapsed_wall_ms": round((time.perf_counter() - wall) * 1000, 2),
+            "elapsed_cpu_ms": round(max(0.0, time.process_time() - cpu) * 1000, 2),
+            "item_count": max(0, int(item_count)) if isinstance(item_count, int) and not isinstance(item_count, bool) else 0,
+            "entries_examined": max(0, int(scanned)) if isinstance(scanned, int) and not isinstance(scanned, bool) else 0,
+        }
+        if error_type:
+            timing["failure_type"] = error_type
+        operations.append(timing)
+        measurements[name] = {
+            "status": operation_status,
+            "failure_type": error_type,
+            "network_used": False,
+        }
+
+    measure("system_profile", lambda: get_system_profile())
+    measure("startup_inventory", lambda: read_startup_entries(windows=windows))
+    measure("process_memory_inventory", lambda: read_top_processes(windows=windows, limit=10))
+    measure("application_inventory", lambda: read_installed_applications(windows=windows, limit=100))
+    measure("cleanup_preview", lambda: get_cleanup_preview(
+        scan_roots=scan_roots, max_entries_per_root=1_000, max_candidates=30
+    ))
+    memory_after = _process_memory_snapshot(windows=windows)
+    elapsed_wall = max(0.0, time.perf_counter() - started_wall)
+    elapsed_cpu = max(0.0, time.process_time() - started_cpu)
+    measured = memory_before.get("status") == "measured" or memory_after.get("status") == "measured"
+    peak_values = [
+        value for value in (memory_before.get("peak_rss_bytes"), memory_after.get("peak_rss_bytes"))
+        if isinstance(value, int)
+    ]
+    return {
+        "product": "BOTPYTON PC Care",
+        "schema_version": 1,
+        "status": "measured" if measured else "partial_measurement",
+        "read_only": True,
+        "network_used": False,
+        "ai_enabled": False,
+        "files_deleted": 0,
+        "files_quarantined": 0,
+        "settings_changed": False,
+        "software_changes_made": False,
+        "drivers_updated": False,
+        "measurements": {
+            "total_elapsed_wall_ms": round(elapsed_wall * 1000, 2),
+            "total_elapsed_cpu_ms": round(elapsed_cpu * 1000, 2),
+            "process_memory_before": memory_before,
+            "process_memory_after": memory_after,
+            "process_peak_rss_bytes": max(peak_values) if peak_values else None,
+            "operations": operations,
+        },
+        "operation_summaries": measurements,
+        "limitations": [
+            "One diagnostic pass only. Timings vary with background tasks, Windows state, disks, antivirus and permissions.",
+            "Peak RSS is the process lifetime high-water mark when the OS exposes it; it is not an isolated peak attributable solely to this run.",
+            "The probe runs a bounded preview and metadata inventories only. It never removes files, disables startup items, updates apps, installs drivers, or contacts a network service.",
+            "This benchmark does not represent CCleaner performance and cannot replace a measurement on the target machine.",
+        ],
+    }
+
+
+
 QUARANTINE_CONFIRMATION = "QUARANTINE OLD TEMP FILES"
 RESTORE_CONFIRMATION = "RESTORE BOTPYTON QUARANTINE"
 MAX_QUARANTINE_CANDIDATES = 100

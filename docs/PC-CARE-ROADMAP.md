@@ -67,7 +67,17 @@ python -m bot.main --pc-cleanup-restore "C:\\path\\to\\BOTPYTON\\Quarantine\\ses
 - SHA-256 event checksums detect accidental changes but are not a cryptographic signature against a person able to rewrite both the file and checksum. Local audit is not a backup or a remote log.
 - Regression tests cover manifest integrity, tampering, restore preview/no-overwrite, audit verification and checksum failure. CI must pass for this branch SHA before calling the phase verified. No test has changed files on the user's PC.
 
-## Phase 19 — Windows smoke tests, packaging and resource measurements — planned
+## Phase 19 — Portable source package and one-pass resource benchmark — implemented in CI; real-machine measurement pending
+
+- \`python -m bot.main --package-portable OUTPUT_DIR\` builds \`BOTPYTON-portable.zip\` and an adjacent SHA-256 sidecar. The archive uses fixed member ordering/timestamps and excludes tests, Git metadata, local memory state, generated reports, virtual environments and caches.
+- Package manifest lists every packaged source file with byte count and SHA-256. \`python -m bot.main --verify-portable-package ZIP_PATH\` checks ZIP CRCs, path traversal/duplicate/symlink members, archive-size caps, manifest membership, and every member hash. Package creation/verification use only the standard library.
+- This is a portable Python source archive, not a bundled interpreter or standalone EXE. Python 3.11+ is required; optional GitHub/developer worker features can need external tools and local authentication.
+- CI builds and verifies the archive on Ubuntu and Windows and publishes a short-retention artifact for inspection/download.
+- \`python -m bot.main --pc-benchmark\` (menu option Q) runs one bounded read-only pass: system profile, startup inventory, top-10 process memory snapshot, installed-app metadata capped at 100, and cleanup preview capped at 30 candidates / 1,000 entries per root. It reports wall/CPU time per operation and current/lifetime-peak resident memory where the OS exposes it. It runs no network/update command and performs no cleanup.
+- Benchmark measurements are a one-pass snapshot, not a CCleaner comparison. CI confirms code/packaging behavior; it cannot measure the user's own Ryzen 5 5600G with approximately 2 GB available. Actual idle/peak RAM and timings remain pending until the package is executed on that PC.
+- The launcher remains on-demand; no service, scheduled task, background monitor, API or telemetry was added.
+
+
 
 Test supported Windows 10/11 configurations; measure idle/peak RAM, CPU and scan time on the actual Ryzen 5 5600G machine with only about 2 GB available; verify path/permission/locked-file edge cases; build a portable launcher and document Python/Windows minimums. The target remains on-demand, serial, bounded operation with no resident service.
 

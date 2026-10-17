@@ -537,5 +537,22 @@ class PcCareTests(unittest.TestCase):
             self.assertFalse(original.exists())
 
 
+    def test_pc_resource_benchmark_is_read_only_bounded_and_reports_timings(self):
+        from bot.pc_care import get_pc_care_benchmark
+        result = get_pc_care_benchmark(windows=False, scan_roots=[])
+        self.assertIn(result["status"], {"measured", "partial_measurement"})
+        self.assertTrue(result["read_only"])
+        self.assertFalse(result["network_used"])
+        self.assertFalse(result["ai_enabled"])
+        self.assertEqual(result["files_deleted"], 0)
+        self.assertFalse(result["settings_changed"])
+        self.assertEqual(len(result["measurements"]["operations"]), 5)
+        self.assertGreaterEqual(result["measurements"]["total_elapsed_wall_ms"], 0)
+        self.assertGreaterEqual(result["measurements"]["total_elapsed_cpu_ms"], 0)
+        for operation in result["measurements"]["operations"]:
+            self.assertGreaterEqual(operation["elapsed_wall_ms"], 0)
+            self.assertGreaterEqual(operation["item_count"], 0)
+
+
 if __name__ == "__main__":
     unittest.main()
