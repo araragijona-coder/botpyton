@@ -101,7 +101,7 @@ class LocalChangePlanTests(unittest.TestCase):
 
             def reparse_probe(path):
                 candidate = Path(path)
-                return candidate.name == "linked" and candidate.parent == root
+                return candidate.name == "linked"
 
             with patch("bot.local_changes._is_link_or_reparse", side_effect=reparse_probe):
                 with self.assertRaisesRegex(LocalChangeError, "reparse-point"):
