@@ -1,0 +1,20 @@
+{
+  "id": "TASK-EXAMPLE-001",
+  "goal": "Validate the BotPyton foundation",
+  "depends_on": [],
+  "allowed_actions": [
+    "validate_task",
+    "run_tests",
+    "prepare_report"
+  ],
+  "success_conditions": [
+    "python_syntax_valid",
+    "unit_tests_pass"
+  ],
+  "max_attempts": 2,
+  "verification_checks": [
+    {"type": "python_syntax"},
+    {"type": "tests_pass"},
+    {"type": "report_exists"}
+  ]
+}

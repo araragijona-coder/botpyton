@@ -1,0 +1,30 @@
+{
+  "id": "TASK-LOCAL-PLAN-EXAMPLE-001",
+  "goal": "Create a small example module from a declarative local change plan",
+  "depends_on": [],
+  "allowed_actions": [
+    "apply_local_plan",
+    "prepare_report"
+  ],
+  "success_conditions": [
+    "The planned Python module exists with the exact requested content",
+    "A JSON execution report was written"
+  ],
+  "max_attempts": 1,
+  "verification_checks": [
+    {"type": "local_plan_applied"},
+    {"type": "file_exists", "path": "botpyton_demo_output/hello.py"},
+    {"type": "python_syntax"},
+    {"type": "report_exists"}
+  ],
+  "local_change_plan": {
+    "schema_version": 1,
+    "task_id": "TASK-LOCAL-PLAN-EXAMPLE-001",
+    "changes": [
+      {
+        "path": "botpyton_demo_output/hello.py",
+        "content": "def hello(name):\n    return f'Hello, {name}!'\n"
+      }
+    ]
+  }
+}

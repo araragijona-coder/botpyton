@@ -1,0 +1,93 @@
+{
+  "schema_version": 1,
+  "bot_name": "BotPyton",
+  "mode": "deterministic_known_fixes",
+  "ai_enabled": false,
+  "external_ai_apis_enabled": false,
+  "default_max_attempts": 3,
+  "unknown_error_policy": "stop_and_report",
+  "automatic_merge": false,
+  "automatic_source_repairs_enabled": true,
+  "known_fix_rules": [
+    {
+      "id": "json.remove_single_trailing_comma",
+      "requires_exact_signature": "JSONDecodeError",
+      "requires_unique_invalid_file": true,
+      "requires_parser_verification": true,
+      "creates_backup": true
+    },
+    {
+      "id": "python.add_missing_compound_header_colon",
+      "requires_exact_signature": "SyntaxError: expected ':'",
+      "requires_unique_invalid_file": true,
+      "requires_parser_verification": true,
+      "creates_backup": true
+    }
+  ],
+  "protected_paths": [
+    ".github/",
+    ".cerebro/config.json",
+    ".cerebro/policies/",
+    ".cerebro/memory/",
+    ".cerebro/reports/",
+    ".cerebro/backups/"
+  ],
+  "allowed_actions": [
+    "inspect_repository",
+    "validate_task",
+    "run_tests",
+    "apply_known_fix",
+    "prepare_report"
+  ],
+  "github_operations": {
+    "enabled": true,
+    "default_mode": "dry_run",
+    "execution_requires_explicit_workflow_dispatch_opt_in": true,
+    "branch_prefix": "botpyton/",
+    "max_files_per_plan": 20,
+    "max_file_bytes": 200000,
+    "max_total_bytes": 500000,
+    "allowed_suffixes": [
+      ".py",
+      ".md",
+      ".json",
+      ".toml",
+      ".txt"
+    ],
+    "protected_paths": [
+      ".github/",
+      ".cerebro/config.json",
+      ".cerebro/policies/",
+      ".cerebro/memory/",
+      ".cerebro/reports/",
+      ".cerebro/backups/"
+    ],
+    "default_pull_request_type": "draft",
+    "automatic_merge": false,
+    "read_only_job_permissions": [
+      "contents: read"
+    ],
+    "submission_job_permissions": [
+      "contents: write",
+      "pull-requests: write"
+    ]
+  },
+  "github_task_orchestration": {
+    "enabled": true,
+    "task_input_schema": "JSON task object or array, validated against the source-controlled allowlist",
+    "max_tasks_per_dispatch": 25,
+    "max_json_input_bytes": 50000,
+    "max_queue_claims_per_dispatch": 100,
+    "task_dependencies_checked_against_persistent_queue": true,
+    "persistence": "GitHub Actions checkpoint artifact scoped to the current branch",
+    "checkpoint_retention_days": 90,
+    "change_plans_enabled": true,
+    "max_change_plans_per_dispatch": 10,
+    "draft_pull_requests_required": true,
+    "require_explicit_execute_prs_opt_in": true,
+    "submit_only_after_queue_job_success": true,
+    "automatic_merge": false,
+    "ai_enabled": false,
+    "external_ai_apis_enabled": false
+  }
+}

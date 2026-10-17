@@ -1,0 +1,64 @@
+from __future__ import annotations
+
+import tempfile
+import unittest
+from pathlib import Path
+from zipfile import ZipFile
+
+from bot.packaging import build_portable_package, verify_portable_archive
+
+
+class PortablePackageTests(unittest.TestCase):
+    def test_portable_archive_builds_and_verifies_member_hashes(self):
+        repo_root = Path(__file__).resolve().parents[1]
+        with tempfile.TemporaryDirectory() as tmp:
+            output = Path(tmp) / "dist"
+            result = build_portable_package(repo_root, output)
+            archive_path = Path(result["archive_path"])
+            checksum_path = Path(result["checksum_path"])
+            self.assertEqual(result["status"], "verified")
+            self.assertTrue(archive_path.is_file())
+            self.assertTrue(checksum_path.is_file())
+            self.assertEqual(verify_portable_archive(archive_path)["archive_sha256"], result["archive_sha256"])
+            with ZipFile(archive_path) as archive:
+                names = archive.namelist()
+                self.assertIn("BOTPYTON/bot/main.py", names)
+                self.assertIn("BOTPYTON/package-manifest.json", names)
+                self.assertNotIn("BOTPYTON/tests/test_pc_care.py", names)
+                self.assertFalse(any("/state.json" in name or "/reports/" in name for name in names))
+                self.assertTrue(all(name.startswith("BOTPYTON/") for name in names))
+            checksum_line = checksum_path.read_text(encoding="ascii").strip()
+            self.assertTrue(checksum_line.startswith(result["archive_sha256"] + "  "))
+
+    def test_portable_builder_is_deterministic_for_unchanged_sources(self):
+        repo_root = Path(__file__).resolve().parents[1]
+        with tempfile.TemporaryDirectory() as tmp:
+            first = build_portable_package(repo_root, Path(tmp) / "first")
+            second = build_portable_package(repo_root, Path(tmp) / "second")
+            self.assertEqual(first["archive_sha256"], second["archive_sha256"])
+            self.assertEqual(
+                Path(first["archive_path"]).read_bytes(),
+                Path(second["archive_path"]).read_bytes(),
+            )
+
+    def test_portable_verifier_rejects_missing_archives(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with self.assertRaises(ValueError):
+                verify_portable_archive(Path(tmp) / "missing.zip")
+
+    def test_portable_verifier_detects_same_size_member_corruption(self):
+        repo_root = Path(__file__).resolve().parents[1]
+        with tempfile.TemporaryDirectory() as tmp:
+            build = build_portable_package(repo_root, Path(tmp) / "source")
+            source_path = Path(build["archive_path"])
+            corrupt_path = Path(tmp) / "corrupt.zip"
+            with ZipFile(source_path, "r") as source:
+                with ZipFile(corrupt_path, "w", allowZip64=False) as target:
+                    for info in source.infolist():
+                        content = source.read(info.filename)
+                        if info.filename == "BOTPYTON/README.md":
+                            self.assertGreater(len(content), 0)
+                            content = bytes([content[0] ^ 1]) + content[1:]
+                        target.writestr(info, content)
+            with self.assertRaisesRegex(ValueError, "SHA-256 mismatch"):
+                verify_portable_archive(corrupt_path)

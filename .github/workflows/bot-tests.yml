@@ -1,0 +1,103 @@
+name: BotPyton foundation tests
+
+on:
+  push:
+    branches: [main, "bot-bootstrap/**"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - name: Set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: "3.12"
+      - name: Check Python syntax and memory schema
+        run: python -m bot.main --check
+      - name: Run unit tests
+        run: python -m unittest discover -s tests -v
+      - name: Build and verify portable package
+        run: |
+          python -m bot.main --package-portable "$RUNNER_TEMP/botpyton-dist"
+          python -m bot.main --verify-portable-package "$RUNNER_TEMP/botpyton-dist/BOTPYTON-portable.zip"
+      - name: Exercise bounded autonomous repair cycle
+        run: python -m bot.main --autonomous-cycle --cycle-max-attempts 2 --cycle-timeout 60
+      - name: Verify autonomous-cycle audit records
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          root = Path(".cerebro/reports/autonomous-cycles")
+          summaries = sorted(root.glob("*/summary.json"))
+          assert summaries, "autonomous cycle did not write a summary"
+          summary_path = summaries[-1]
+          summary = json.loads(summary_path.read_text(encoding="utf-8"))
+          assert summary["status"] == "succeeded", summary
+          assert summary["attempts_completed"] == 1, summary
+          assert summary["ai_enabled"] is False
+          assert summary["external_ai_apis_enabled"] is False
+          assert len(summary["attempt_records"]) == 1
+          attempt = json.loads((summary_path.parent / summary["attempt_records"][0]).read_text(encoding="utf-8"))
+          assert attempt["status"] == "succeeded", attempt
+          assert attempt["test_result"]["exit_code"] == 0
+          assert attempt["verification"]["ok"] is True
+          print("AUTONOMOUS CYCLE AND AUDIT RECORD PASS")
+          PY
+      - name: Validate example task
+        run: python -m bot.main --validate-task .cerebro/examples/example-task.json
+      - name: Validate dependency plan
+        run: python -m bot.main --plan .cerebro/examples/example-plan.json
+      - name: Exercise deterministic task executor
+        run: |
+          python -m bot.main --enqueue .cerebro/examples/worker-task.json --memory "$RUNNER_TEMP/botpyton-state.json"
+          python -m bot.main --work-queue 5 --memory "$RUNNER_TEMP/botpyton-state.json"
+      - name: Exercise checkpoint export and restore
+        env:
+          BOTPYTON_ORIGINAL_STATE: ${{ runner.temp }}/botpyton-state.json
+          BOTPYTON_RESTORED_STATE: ${{ runner.temp }}/restored-state.json
+        run: |
+          python -m bot.main --export-checkpoint "$RUNNER_TEMP/checkpoint-out" --memory "$BOTPYTON_ORIGINAL_STATE"
+          python -m bot.main --restore-checkpoint "$RUNNER_TEMP/checkpoint-out" --memory "$BOTPYTON_RESTORED_STATE"
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          original = json.loads(Path(os.environ["BOTPYTON_ORIGINAL_STATE"]).read_text(encoding="utf-8"))
+          restored = json.loads(Path(os.environ["BOTPYTON_RESTORED_STATE"]).read_text(encoding="utf-8"))
+          assert original == restored, "checkpoint restore changed queue state"
+          assert restored["tasks"]["TASK-EXECUTOR-CI-001"]["status"] == "succeeded"
+          print("CHECKPOINT ROUND TRIP PASS")
+          PY
+      - name: Validate GitHub change plan in dry-run mode
+        env:
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: python -m bot.main --github-plan .cerebro/examples/github-change-plan.json
+      - name: Upload portable package
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: botpyton-portable-linux
+          path: ${{ runner.temp }}/botpyton-dist/*
+          if-no-files-found: ignore
+          retention-days: 7
+      - name: Upload executor report
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: botpyton-executor-report
+          path: |
+            .cerebro/reports/*.json
+            .cerebro/reports/autonomous-cycles/**/*.json
+          if-no-files-found: warn
+          retention-days: 7

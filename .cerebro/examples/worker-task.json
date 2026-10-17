@@ -1,0 +1,23 @@
+{
+  "id": "TASK-EXECUTOR-CI-001",
+  "goal": "Inspect the repository, validate this task, run fixed unit tests, and prepare a JSON report",
+  "depends_on": [],
+  "allowed_actions": [
+    "inspect_repository",
+    "validate_task",
+    "run_tests",
+    "prepare_report"
+  ],
+  "success_conditions": [
+    "repository_inspected",
+    "task_validated",
+    "unit_tests_pass",
+    "report_created"
+  ],
+  "max_attempts": 2,
+  "verification_checks": [
+    {"type": "python_syntax"},
+    {"type": "tests_pass"},
+    {"type": "report_exists"}
+  ]
+}

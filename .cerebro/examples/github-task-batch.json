@@ -1,0 +1,19 @@
+[
+  {
+    "id": "TASK-GITHUB-EXAMPLE-001",
+    "goal": "Validate a declared task and write an execution report marker",
+    "depends_on": [],
+    "allowed_actions": [
+      "validate_task",
+      "prepare_report"
+    ],
+    "success_conditions": [
+      "task_validated",
+      "report_created"
+    ],
+    "max_attempts": 2,
+    "verification_checks": [
+      {"type": "report_exists"}
+    ]
+  }
+]

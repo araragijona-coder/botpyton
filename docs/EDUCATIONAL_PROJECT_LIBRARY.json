@@ -1,0 +1,109 @@
+{
+  "schema_version": 1,
+  "library_name": "BOTPYTON Educational Project Library",
+  "purpose": "Original, local-first learning projects inspired by software categories, not copies of commercial products.",
+  "ai_enabled": false,
+  "network_by_default": false,
+  "copyright_policy": {
+    "educational_use_is_not_automatic_permission": true,
+    "rules": [
+      "Implement behavior and concepts independently; do not copy proprietary source code or decompile products.",
+      "Do not reuse commercial logos, names as product branding, UI assets, icons, templates, music, fonts, or artwork without permission.",
+      "Use original assets, public-domain assets, or assets with licenses compatible with the intended use; retain attribution and license files.",
+      "Use official APIs only according to their terms and never bundle credentials, bypass access controls, or download content without permission.",
+      "Name learning projects descriptively and distinguish them clearly from the referenced products."
+    ]
+  },
+  "projects": [
+    {
+      "id": "image-editor-lab",
+      "display_name": "Taller de Imagen",
+      "inspiration_category": "image editing / Picsart-like learning",
+      "status": "planned",
+      "platform": ["desktop", "web"],
+      "learning_goals": ["layers", "crop and resize", "filters", "text overlays", "undo/redo", "export"],
+      "originality_requirements": ["original interface", "original icons and sample images", "no Picsart branding or copied layouts"],
+      "offline_first": true
+    },
+    {
+      "id": "streaming-studio-lab",
+      "display_name": "Estudio de Transmisión",
+      "inspiration_category": "streaming and recording / OBS-like learning",
+      "status": "planned",
+      "platform": ["desktop"],
+      "learning_goals": ["scene graph", "capture-source abstraction", "audio mixer", "recording", "hotkeys", "profiles"],
+      "originality_requirements": ["independent UI and implementation", "use supported capture APIs", "no OBS assets or branding"],
+      "offline_first": true
+    },
+    {
+      "id": "vtuber-studio-lab",
+      "display_name": "Estudio Avatar",
+      "inspiration_category": "VTuber avatar and scene tools",
+      "status": "planned",
+      "platform": ["desktop"],
+      "learning_goals": ["2D avatar layers", "mouth/eye parameter controls", "scene composition", "transparent output", "hotkeys"],
+      "originality_requirements": ["use self-made or properly licensed models", "respect model format and runtime licenses", "no unauthorized character models"],
+      "offline_first": true
+    },
+    {
+      "id": "video-channel-lab",
+      "display_name": "Canal de Vídeos Local",
+      "inspiration_category": "video hosting / YouTube-like learning",
+      "status": "planned",
+      "platform": ["web", "desktop"],
+      "learning_goals": ["local media library", "metadata", "playlists", "search", "subtitles", "creator-owned uploads"],
+      "originality_requirements": ["no YouTube branding or copied UI", "no scraping or unauthorized downloading", "no public hosting unless explicitly configured"],
+      "offline_first": true
+    },
+    {
+      "id": "media-player-lab",
+      "display_name": "Reproductor Multimedia",
+      "inspiration_category": "audio/video player",
+      "status": "planned",
+      "platform": ["desktop"],
+      "learning_goals": ["playback controls", "playlist", "seek", "volume", "subtitles", "media metadata"],
+      "originality_requirements": ["use licensed libraries and codecs", "test only with authorized media"],
+      "offline_first": true
+    },
+    {
+      "id": "translation-workbench",
+      "display_name": "Mesa de Traducción",
+      "inspiration_category": "translation tools",
+      "status": "planned",
+      "platform": ["desktop", "web"],
+      "learning_goals": ["dictionary lookup", "glossaries", "translation memory", "side-by-side editor", "local terminology"],
+      "originality_requirements": ["no claim of machine translation without an installed model or engine", "respect dictionary and corpus licenses"],
+      "offline_first": true
+    },
+    {
+      "id": "telegram-bot-lab",
+      "display_name": "Laboratorio de Bots Telegram",
+      "inspiration_category": "Telegram bots",
+      "status": "starter-available",
+      "platform": ["desktop", "server"],
+      "learning_goals": ["command routing", "configuration via environment", "handlers", "logging", "tests"],
+      "originality_requirements": ["use Telegram Bot API within its terms", "keep tokens out of source control"],
+      "offline_first": false
+    },
+    {
+      "id": "turn-based-card-rpg-lab",
+      "display_name": "Laboratorio RPG de Cartas",
+      "inspiration_category": "turn-based creature/card RPG",
+      "status": "starter-available",
+      "platform": ["web"],
+      "learning_goals": ["turn state", "elemental strengths", "deck data", "combat rules", "win/loss conditions", "save data"],
+      "originality_requirements": ["original creatures, names, artwork, rules presentation, and story; no Pokémon assets or copied text"],
+      "offline_first": true
+    },
+    {
+      "id": "desktop-utility-lab",
+      "display_name": "Laboratorio de Aplicaciones de Escritorio",
+      "inspiration_category": "desktop application fundamentals",
+      "status": "starter-available",
+      "platform": ["desktop"],
+      "learning_goals": ["windows and menus", "settings", "file dialogs", "logging", "packaging"],
+      "originality_requirements": ["original product identity and interface"],
+      "offline_first": true
+    }
+  ]
+}

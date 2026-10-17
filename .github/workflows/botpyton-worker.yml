@@ -1,0 +1,248 @@
+name: BotPyton persistent worker
+
+on:
+  workflow_dispatch:
+    inputs:
+      tasks_json:
+        description: "JSON task object or array (allowed actions only; no commands are executed from task text)"
+        required: false
+        default: "[]"
+        type: string
+      work_limit:
+        description: "Maximum number of queue claims in this run (1–100)"
+        required: true
+        default: 10
+        type: number
+      change_plans_json:
+        description: "JSON array of draft-only GitHub change plans (max 10, 50 KB)"
+        required: false
+        default: "[]"
+        type: string
+      execute_prs:
+        description: "Submit validated plans as draft PRs after queue work passes (default: false)"
+        required: true
+        default: false
+        type: boolean
+  push:
+    branches:
+      - bot-bootstrap/phase-04-persistent-checkpoint
+      - bot-bootstrap/phase-08-github-task-orchestration
+
+permissions:
+  actions: read
+  contents: read
+
+concurrency:
+  group: botpyton-worker-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  validate-inputs:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout selected branch
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.ref }}
+          persist-credentials: false
+      - name: Set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: "3.12"
+      - name: Normalize and validate both JSON inputs before queue access
+        env:
+          BOTPYTON_TASKS_JSON: ${{ inputs.tasks_json || '[]' }}
+          BOTPYTON_CHANGE_PLANS_JSON: ${{ inputs.change_plans_json || '[]' }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          BOTPYTON_WORK_LIMIT: ${{ inputs.work_limit }}
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          work = Path(os.environ["RUNNER_TEMP"])
+          raw_work_limit = os.environ.get("BOTPYTON_WORK_LIMIT", "").strip() or "10"
+          try:
+              work_limit = int(raw_work_limit)
+          except ValueError as exc:
+              raise SystemExit("work_limit must be an integer from 1 to 100") from exc
+          if not 1 <= work_limit <= 100:
+              raise SystemExit("work_limit must be an integer from 1 to 100")
+          raw_tasks = os.environ.get("BOTPYTON_TASKS_JSON", "[]")
+          raw_plans = os.environ.get("BOTPYTON_CHANGE_PLANS_JSON", "[]")
+          for label, raw in (("tasks_json", raw_tasks), ("change_plans_json", raw_plans)):
+              if len(raw.encode("utf-8")) > 50_000:
+                  raise SystemExit(f"{label} exceeds the 50,000-byte input limit")
+
+          tasks = json.loads(raw_tasks)
+          if isinstance(tasks, dict):
+              tasks = [tasks]
+          if not isinstance(tasks, list) or len(tasks) > 25:
+              raise SystemExit("tasks_json must be one task object or an array of at most 25 tasks")
+          if any(not isinstance(task, dict) for task in tasks):
+              raise SystemExit("every task must be a JSON object")
+
+          plans = json.loads(raw_plans)
+          if not isinstance(plans, list) or len(plans) > 10:
+              raise SystemExit("change_plans_json must be an array of at most 10 plans")
+          if any(not isinstance(plan, dict) for plan in plans):
+              raise SystemExit("every change plan must be a JSON object")
+
+          task_path = work / "botpyton-incoming-tasks.json"
+          plans_path = work / "botpyton-change-plans.json"
+          task_path.write_text(json.dumps(tasks, ensure_ascii=False, separators=(",", ":")) + "\n", encoding="utf-8")
+          plans_path.write_text(json.dumps(plans, ensure_ascii=False, separators=(",", ":")) + "\n", encoding="utf-8")
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
+              output.write(f"has_tasks={'true' if tasks else 'false'}\n")
+              output.write(f"has_plans={'true' if plans else 'false'}\n")
+          PY
+          python -m bot.main --validate-task-batch "$RUNNER_TEMP/botpyton-incoming-tasks.json"
+          python -m bot.main --github-plans "$RUNNER_TEMP/botpyton-change-plans.json"
+
+  worker:
+    needs: validate-inputs
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - name: Set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: "3.12"
+
+      - name: Find latest retained checkpoint from this branch
+        id: previous
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7.0.1
+        with:
+          script: |
+            const { owner, repo } = context.repo;
+            const refName = (context.ref || "").startsWith("refs/heads/")
+              ? context.ref.slice("refs/heads/".length)
+              : context.ref;
+            const response = await github.rest.actions.listWorkflowRuns({
+              owner,
+              repo,
+              workflow_id: 387184205,
+              branch: refName,
+              status: "completed",
+              per_page: 50,
+            });
+            core.info(`Found ${response.data.workflow_runs.length} completed run(s) for this worker workflow on ${refName}.`);
+            for (const run of response.data.workflow_runs) {
+              if (run.id === context.runId || run.head_branch !== refName) continue;
+              const artifactsResponse = await github.rest.actions.listWorkflowRunArtifacts({
+                owner, repo, run_id: run.id, per_page: 100,
+              });
+              const artifact = artifactsResponse.data.artifacts.find(
+                item => item.name === "botpyton-queue-checkpoint" && !item.expired
+              );
+              if (artifact) {
+                core.setOutput("found", "true");
+                core.setOutput("run_id", String(run.id));
+                core.setOutput("artifact_id", String(artifact.id));
+                core.info(`Using checkpoint artifact ${artifact.id} from run ${run.id} (sha ${run.head_sha}).`);
+                return;
+              }
+            }
+            core.setOutput("found", "false");
+            core.info("No retained checkpoint found for this branch; a fresh queue will be initialized.");
+
+      - name: Download previous checkpoint
+        if: steps.previous.outputs.found == 'true'
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: botpyton-queue-checkpoint
+          path: ${{ runner.temp }}/botpyton-checkpoint-in
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          repository: ${{ github.repository }}
+          run-id: ${{ steps.previous.outputs.run_id }}
+
+      - name: Verify and restore checkpoint
+        if: steps.previous.outputs.found == 'true'
+        run: |
+          python -m bot.main --restore-checkpoint "$RUNNER_TEMP/botpyton-checkpoint-in" --memory "$RUNNER_TEMP/botpyton-state.json"
+          python -m bot.main --resume --memory "$RUNNER_TEMP/botpyton-state.json"
+
+      - name: Initialize empty queue when no checkpoint exists
+        if: steps.previous.outputs.found != 'true'
+        run: python -m bot.main --check --memory "$RUNNER_TEMP/botpyton-state.json"
+
+      - name: Parse and validate declarative task JSON before enqueue
+        id: task_input
+        env:
+          BOTPYTON_TASKS_JSON: ${{ inputs.tasks_json || '[]' }}
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          raw = os.environ.get("BOTPYTON_TASKS_JSON", "[]")
+          if len(raw.encode("utf-8")) > 50_000:
+              raise SystemExit("tasks_json exceeds the 50,000-byte input limit")
+          tasks = json.loads(raw)
+          if isinstance(tasks, dict):
+              tasks = [tasks]
+          if not isinstance(tasks, list) or len(tasks) > 25 or any(not isinstance(task, dict) for task in tasks):
+              raise SystemExit("tasks_json must be one task object or an array of at most 25 task objects")
+          target = Path(os.environ["RUNNER_TEMP"]) / "botpyton-incoming-tasks.json"
+          target.write_text(json.dumps(tasks, ensure_ascii=False, separators=(",", ":")) + "\n", encoding="utf-8")
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
+              output.write(f"has_tasks={'true' if tasks else 'false'}\n")
+          PY
+          python -m bot.main --validate-task-batch "$RUNNER_TEMP/botpyton-incoming-tasks.json"
+
+      - name: Enqueue tasks supplied to this run
+        if: steps.task_input.outputs.has_tasks == 'true'
+        run: python -m bot.main --enqueue "$RUNNER_TEMP/botpyton-incoming-tasks.json" --memory "$RUNNER_TEMP/botpyton-state.json"
+
+      - name: Seed one smoke task on the initial phase-branch push
+        if: github.event_name == 'push' && steps.previous.outputs.found != 'true'
+        run: python -m bot.main --enqueue .cerebro/examples/worker-task.json --memory "$RUNNER_TEMP/botpyton-state.json"
+
+      - name: Execute bounded queue work
+        env:
+          BOTPYTON_WORK_LIMIT: ${{ inputs.work_limit || 10 }}
+        run: |
+          python -m bot.main --work-queue "$BOTPYTON_WORK_LIMIT" --memory "$RUNNER_TEMP/botpyton-state.json"
+
+      - name: Export validated queue checkpoint
+        if: always()
+        run: python -m bot.main --export-checkpoint "$RUNNER_TEMP/botpyton-checkpoint-out" --memory "$RUNNER_TEMP/botpyton-state.json"
+
+      - name: Upload queue checkpoint for the next run
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: botpyton-queue-checkpoint
+          path: ${{ runner.temp }}/botpyton-checkpoint-out/*
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Upload execution reports
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: botpyton-execution-reports
+          path: .cerebro/reports/*.json
+          if-no-files-found: warn
+          retention-days: 7
+
+  submit-draft-prs:
+    # I-01 fail-closed: do not run a privileged sender until an independent trust boundary is verified.
+    if: false
+    runs-on: ubuntu-latest
+    timeout-minutes: 1
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      - name: Explain why live submission is disabled
+        run: echo "Live PR submission is disabled pending verified repository trust controls."
