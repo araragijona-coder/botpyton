@@ -4,10 +4,12 @@ from __future__ import annotations
 import json
 import os
 import tempfile
+from contextlib import contextmanager
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterator
 
 from .bounded_io import BoundedReadError, enforce_json_depth, read_bounded_bytes
+from .file_lock import exclusive_file_lock
 
 MEMORY_SCHEMA_VERSION = 1
 MAX_MEMORY_BYTES = 4 * 1024 * 1024
@@ -46,7 +48,21 @@ class JsonMemory:
     def __init__(self, path: str | Path):
         self.path = Path(path)
 
+    @contextmanager
+    def transaction(self) -> Iterator[None]:
+        """Hold an exclusive thread/process lock across a read-modify-write cycle."""
+        target = self.path.expanduser().resolve(strict=False)
+        lock_path = target.with_name(f".{target.name}.botpyton.lock")
+        with exclusive_file_lock(lock_path):
+            yield
+
     def load(self) -> dict[str, Any]:
+        # Reentrant locking lets TaskQueue hold the same transaction across its
+        # entire read-modify-write operation while individual loads remain safe.
+        with self.transaction():
+            return self._load_unlocked()
+
+    def _load_unlocked(self) -> dict[str, Any]:
         if not self.path.exists():
             return {"schema_version": MEMORY_SCHEMA_VERSION, "tasks": {}, "incidents": [], "solutions": []}
         try:
@@ -65,6 +81,10 @@ class JsonMemory:
         return data
 
     def save(self, data: dict[str, Any]) -> None:
+        with self.transaction():
+            self._save_unlocked(data)
+
+    def _save_unlocked(self, data: dict[str, Any]) -> None:
         if not isinstance(data, dict) or data.get("schema_version") != MEMORY_SCHEMA_VERSION:
             raise MemoryError("Refusing to save unsupported memory schema")
         for key, expected in (("tasks", dict), ("incidents", list), ("solutions", list)):
