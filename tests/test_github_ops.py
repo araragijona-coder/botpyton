@@ -153,6 +153,11 @@ class FakeGitHub:
 
 
 class GitHubPlanValidationTests(unittest.TestCase):
+    def test_individual_plan_rejects_draft_false(self):
+        plan = make_plan(draft=False)
+        with self.assertRaisesRegex(GitHubOpsError, "draft must be true"):
+            validate_change_plan(plan)
+
     def test_fingerprint_and_branch_are_deterministic(self):
         first = validate_change_plan(make_plan())
         second = validate_change_plan(make_plan())
