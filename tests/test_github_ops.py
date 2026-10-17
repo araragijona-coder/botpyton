@@ -3,6 +3,7 @@ import hashlib
 import json
 import unittest
 import urllib.parse
+from unittest.mock import patch
 
 from bot.github_ops import (
     GitHubAPIError,
@@ -10,6 +11,7 @@ from bot.github_ops import (
     GitHubOpsError,
     submit_change_plan,
     validate_change_plan,
+    _github_cli_token,
 )
 
 
@@ -196,6 +198,30 @@ class GitHubPlanValidationTests(unittest.TestCase):
         ])
         with self.assertRaisesRegex(GitHubOpsError, "changes must be a list"):
             validate_change_plan(plan)
+
+
+class GitHubCliCredentialTests(unittest.TestCase):
+    @patch("bot.github_ops.subprocess.run")
+    @patch("bot.github_ops.shutil.which", return_value="/usr/bin/gh")
+    def test_reads_authenticated_cli_token_with_fixed_command(self, mock_which, mock_run):
+        token = "ghp_" + "a" * 40
+        mock_run.return_value = __import__("subprocess").CompletedProcess(
+            args=["gh", "auth", "token"], returncode=0, stdout=token + "\\n", stderr=""
+        )
+        self.assertEqual(_github_cli_token(), token)
+        args, kwargs = mock_run.call_args
+        self.assertEqual(args[0], ["/usr/bin/gh", "auth", "token", "--hostname", "github.com"])
+        self.assertFalse(kwargs["shell"])
+        self.assertEqual(kwargs["timeout"], 5)
+        self.assertIs(kwargs["stderr"], __import__("subprocess").DEVNULL)
+
+    @patch("bot.github_ops.subprocess.run")
+    @patch("bot.github_ops.shutil.which", return_value="/usr/bin/gh")
+    def test_rejects_invalid_or_failed_cli_token(self, mock_which, mock_run):
+        mock_run.return_value = __import__("subprocess").CompletedProcess(
+            args=["gh"], returncode=1, stdout="error", stderr=""
+        )
+        self.assertEqual(_github_cli_token(), "")
 
 
 class GitHubOperationTests(unittest.TestCase):
