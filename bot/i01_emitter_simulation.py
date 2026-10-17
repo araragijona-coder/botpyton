@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Callable
 
 
 REQUEST_FIELDS = frozenset({
@@ -163,18 +163,33 @@ class SimulationRecorder:
 class SimulationOnlyEmitter:
     """Fail-closed request gate that can only append to an in-memory recorder."""
 
-    def __init__(self, policy: EmitterPolicy, recorder: SimulationRecorder | None = None) -> None:
+    def __init__(
+        self,
+        policy: EmitterPolicy,
+        evidence_resolver: Callable[[str, str], tuple[str, str]],
+        recorder: SimulationRecorder | None = None,
+    ) -> None:
+        if not callable(evidence_resolver):
+            raise TypeError("evidence_resolver must be supplied by the trusted deployment")
         self.policy = policy
+        # The resolver is injected once at construction, not supplied per request.
+        # Production must bind this to independently authenticated transport identity
+        # and a trusted GitHub ref lookup; this simulation does not implement either.
+        self._evidence_resolver = evidence_resolver
         self.recorder = recorder if recorder is not None else SimulationRecorder()
         self._seen_request_ids: set[str] = set()
 
-    def process(
-        self,
-        request: Any,
-        *,
-        authenticated_actor: str,
-        resolved_head_sha: str,
-    ) -> dict[str, Any]:
+    def process(self, request: Any) -> dict[str, Any]:
+        if not isinstance(request, dict):
+            raise EmitterRequestError("request must be a JSON object")
+        repository = request.get("repository")
+        head_ref = request.get("head_ref")
+        try:
+            authenticated_actor, resolved_head_sha = self._evidence_resolver(
+                repository, head_ref
+            )
+        except Exception as exc:
+            raise EmitterRequestError("independent identity/ref evidence unavailable") from exc
         validated = validate_emitter_request(
             request,
             authenticated_actor=authenticated_actor,
