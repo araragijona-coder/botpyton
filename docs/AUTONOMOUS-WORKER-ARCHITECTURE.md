@@ -109,3 +109,34 @@ Los nombres son un diseño objetivo, no una afirmación de que todos esos módul
 - Puede operar sobre una rama GitHub autorizada y presentar SHA, diff y estado de CI.
 - No puede leer o modificar rutas fuera del permiso concedido.
 - Informa claramente `VERIFIED`, `FAILED`, `BLOCKED` o `UNKNOWN`; no confunde ausencia de evidencia con éxito.
+
+
+## Estado real de implementación
+
+Este apartado distingue capacidades presentes de objetivos futuros; no declara BOTPYTON terminado.
+
+### Implementado en la rama de desarrollo
+
+- CLI bajo demanda y lanzador `BOTPYTON.bat`; no instala un servicio ni se registra en el inicio de Windows.
+- Inventario de repositorios con límites de archivos/profundidad, exclusión de carpetas generadas y sin ejecutar código del proyecto.
+- Descubrimiento local de herramientas y sondeos de versión fijos.
+- Ejecutor de procesos con argumentos separados, `shell=False`, timeout, salida retenida acotada, eliminación de variables que parezcan secretos y presupuesto de memoria calculado desde la RAM disponible.
+- En Windows, el runner intenta imponer un límite de memoria por Job Object y terminar descendientes al cerrar el trabajo. **Este camino específico de Windows todavía necesita verificación en un equipo Windows**; la CI actual usa Linux y marca el límite de memoria como no aplicado en ese sistema.
+- Cola persistente, planificación por dependencias, informes JSON, ciclo acotado de prueba/reparación y diagnóstico que recopila contexto de traceback desconocido sin editar código.
+- Planes de cambios locales con rutas protegidas, hashes previos obligatorios al reemplazar archivos, backups fuera del proyecto y reversión ante errores de escritura.
+- Perfiles de pruebas/build para varias tecnologías: descubrimiento estático por defecto y ejecución solo con autorización explícita.
+- Operaciones GitHub mediante token de entorno o sesión local autenticada de GitHub CLI; la promoción/merge automático sigue deshabilitada.
+- Biblioteca educativa de proyectos y fábrica de plantillas iniciales.
+
+### Pendiente antes de declarar el trabajador listo para uso cotidiano
+
+- Prueba de instalación y ejecución en el PC Windows del usuario, incluyendo consumo real de RAM y Job Objects.
+- Agente de acceso local con permisos configurables por carpeta y registro de auditoría más completo. El lanzador actual ejecuta el núcleo local directamente; no es un servicio remoto ni un instalador independiente.
+- Mayor cobertura de herramientas, lenguajes, formatos y entornos de compilación.
+- Estrategias de experimentación para errores desconocidos. Hoy el sistema recopila evidencia y detiene la reparación automática cuando no hay una regla segura; no promete resolver cualquier error.
+- Flujo de trabajo local más completo con workspaces/ramas aisladas para cambios complejos.
+- Validación de los flujos reales de GitHub desde la cuenta local y pruebas de seguridad adicionales antes de habilitar cualquier escritura privilegiada.
+
+### Límite de órdenes sin IA
+
+Sin un modelo de IA, el núcleo no convierte cualquier frase libre en una solución de código arbitraria. Ejecuta órdenes estructuradas, perfiles conocidos y planes explícitos; puede investigar errores no registrados mediante evidencia y experimentos acotados, pero debe pedir instrucciones o detenerse cuando no haya una hipótesis verificable. No se debe presentar esta limitación como una función ya resuelta.
