@@ -507,5 +507,35 @@ class PcCareTests(unittest.TestCase):
             self.assertEqual(destination.read_bytes(), b"keep existing content")
 
 
+    def test_restore_preview_rejects_manifest_checksum_tampering(self):
+        import json
+        from bot.pc_care import QUARANTINE_CONFIRMATION, quarantine_cleanup_candidates, preview_quarantined_restore
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "temporary"
+            root.mkdir()
+            original = root / "manifest-tamper.tmp"
+            original.write_bytes(b"manifest payload")
+            now = 1_700_000_000.0
+            os.utime(original, (now - 12 * 86400, now - 12 * 86400))
+            preview = get_cleanup_preview(scan_roots=[("temporary files", root)], now=now)
+            moved = quarantine_cleanup_candidates(
+                preview, confirmation=QUARANTINE_CONFIRMATION,
+                scan_roots=[("temporary files", root)],
+                quarantine_root=Path(tmp) / "Quarantine", now=now,
+                audit_dir=Path(tmp) / "audit",
+            )
+            manifest_path = Path(moved["manifest_path"])
+            stored = manifest_path.parent / "0001-manifest-tamper.tmp"
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            manifest["items"][0]["sha256"] = "0" * 64
+            manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "manifest integrity checksum"):
+                preview_quarantined_restore(
+                    manifest_path, scan_roots=[("temporary files", root)],
+                )
+            self.assertTrue(stored.exists())
+            self.assertFalse(original.exists())
+
+
 if __name__ == "__main__":
     unittest.main()

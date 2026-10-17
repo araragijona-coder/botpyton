@@ -786,11 +786,22 @@ def _safe_restore_destination(path_value: str | Path, root: Path) -> Path | None
         return None
 
 
+def _quarantine_manifest_digest(manifest: dict) -> str:
+    """Return a deterministic checksum over the manifest excluding its checksum field."""
+    unsigned = {key: value for key, value in manifest.items() if key != "manifest_sha256"}
+    canonical = json.dumps(unsigned, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return hashlib.sha256(canonical).hexdigest()
+
+
 def _write_quarantine_manifest(manifest_path: Path, manifest: dict) -> None:
-    """Atomically persist the recovery information before/after each move."""
-    temporary_path = manifest_path.with_name(".manifest.json.tmp")
+    """Atomically persist a checksummed recovery manifest before/after each move."""
+    manifest["manifest_sha256"] = _quarantine_manifest_digest(manifest)
+    temporary_path = manifest_path.with_name(f".manifest-{time.time_ns()}.tmp")
     payload = json.dumps(manifest, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
-    temporary_path.write_text(payload, encoding="utf-8")
+    with temporary_path.open("x", encoding="utf-8", newline="\n") as stream:
+        stream.write(payload)
+        stream.flush()
+        os.fsync(stream.fileno())
     os.replace(temporary_path, manifest_path)
 
 
@@ -1039,6 +1050,11 @@ def _load_valid_quarantine_manifest(manifest_path: str | Path) -> tuple[Path, Pa
             or not isinstance(manifest.get("items"), list)
             or len(manifest["items"]) > MAX_QUARANTINE_CANDIDATES):
         raise ValueError("Quarantine manifest is invalid or exceeds its safety limits.")
+    claimed_digest = manifest.get("manifest_sha256")
+    if (not isinstance(claimed_digest, str)
+            or not re.fullmatch(r"[0-9a-f]{64}", claimed_digest)
+            or claimed_digest != _quarantine_manifest_digest(manifest)):
+        raise ValueError("Quarantine manifest integrity checksum failed.")
     return path, session_dir, manifest
 
 

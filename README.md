@@ -300,6 +300,6 @@ El único comando de consulta es \`winget list --upgrade-available --source wing
 
 ## Phase 18: integridad, vista previa de restauracion y auditoria local
 
-Cada manifiesto nuevo de cuarentena guarda el hash SHA-256 y la marca de tiempo de alta precision de cada archivo. BOTPYTON verifica el hash antes de restaurar; si el contenido cambio, falta o excede el presupuesto, se deja en cuarentena. El cálculo usa bloques de 256 KiB y limita los datos leídos a 512 MiB por operación.
+Cada manifiesto nuevo de cuarentena guarda el hash SHA-256 y la marca de tiempo de alta precision de cada archivo, ademas de un checksum del propio manifiesto que se valida antes de la restauracion. BOTPYTON verifica el hash antes de restaurar; si el contenido cambio, falta o excede el presupuesto, se deja en cuarentena. El cálculo usa bloques de 256 KiB y limita los datos leídos a 512 MiB por operación.
 
 Ejecuta \`python -m bot.main --pc-cleanup-restore-preview "PATH\\manifest.json"\` para comprobar integridad y conflictos de destino sin modificar nada. Ejecuta \`python -m bot.main --pc-audit\` para leer el registro local de operaciones. La auditoría registra tipos de operación, estado y contadores, no rutas exactas; está limitada a 200 registros mostrados, archivos/eventos y bytes acotados. Los hashes detectan cambios accidentales, pero no sustituyen una firma criptográfica ni una copia de seguridad externa. Revisa \`docs/PC-CARE-ROADMAP.md\` para los límites.

@@ -58,7 +58,7 @@ python -m bot.main --pc-cleanup-restore "C:\\path\\to\\BOTPYTON\\Quarantine\\ses
 
 ## Phase 18 — Recovery integrity, dry-run restore and operation audit — implemented on the development branch
 
-- Each quarantine manifest records the SHA-256 digest and nanosecond mtime of every candidate. Candidate and aggregate content hashing is bounded to 512 MiB per run and uses 256 KiB chunks, not full-file buffering.
+- Each quarantine manifest records the SHA-256 digest and nanosecond mtime of every candidate and a checksum over the manifest itself, revalidated before restore previews or restore execution. Candidate and aggregate content hashing is bounded to 512 MiB per run and uses 256 KiB chunks, not full-file buffering.
 - Restore checks the quarantined file against its recorded byte count and SHA-256 digest immediately before moving it. Missing, oversized, changed or tampered files are skipped and remain in quarantine.
 - \`python -m bot.main --pc-cleanup-restore-preview "PATH\\manifest.json"\` validates session structure, hashes and original destination availability without moving or writing any file.
 - \`python -m bot.main --pc-audit\` reads the bounded local operation ledger. Start/end records store operation, counts and status but intentionally omit exact file paths and contents. Each JSON record has a SHA-256 checksum.
