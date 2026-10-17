@@ -11,6 +11,7 @@ from typing import Any
 
 from .diagnostics import diagnose_failure
 from .fixes import apply_known_fix
+from .local_changes import apply_local_change_plan
 from .policy import PolicyError, validate_task
 from .verifier import verify_python_files
 
@@ -103,6 +104,11 @@ class TaskExecutor:
             return {"task_id": task["id"], "valid": True}
         if action == "run_tests":
             return self._run_tests()
+        if action == "apply_local_plan":
+            plan = task.get("local_change_plan")
+            if not isinstance(plan, dict):
+                raise PolicyError("apply_local_plan requires a local_change_plan object")
+            return apply_local_change_plan(plan, self.root)
         if action == "apply_known_fix":
             previous_error = record.get("last_error") or task.get("failure_context")
             if not previous_error:
