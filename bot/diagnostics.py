@@ -92,7 +92,7 @@ def _conflict_evidence(root: Path) -> dict[str, Any]:
 
 def _traceback_evidence(log_text: str, root: Path) -> dict[str, Any]:
     """Extract bounded traceback context from files inside the project without executing them."""
-    frame_pattern = re.compile(r'File ["\\']([^"\\']+)["\\'], line (\\d+)')
+    frame_pattern = re.compile(r"""File ["']([^"']+)["'], line (\d+)""")
     frames = []
     base = root.resolve()
     for match in frame_pattern.finditer(log_text):
@@ -131,7 +131,7 @@ def _traceback_evidence(log_text: str, root: Path) -> dict[str, Any]:
         frames.append(frame)
     last_line = next((line.strip() for line in reversed(log_text.splitlines()) if line.strip()), "")
     error_match = re.search(
-        r"\\b([A-Za-z_][A-Za-z0-9_]*(?:Error|Exception|Failure|Interrupt))\\b(?::|$)",
+        r"\b([A-Za-z_][A-Za-z0-9_]*(?:Error|Exception|Failure|Interrupt))\b(?::|$)",
         last_line,
     )
     return {
