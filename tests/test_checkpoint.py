@@ -63,7 +63,7 @@ class CheckpointTests(unittest.TestCase):
         export_checkpoint(self.source_memory, self.checkpoint_dir)
         state_path = self.checkpoint_dir / "state.json"
         normalized_text = state_path.read_text(encoding="utf-8")
-        state_path.write_bytes(normalized_text.replace("\\n", "\\r\\n").encode("utf-8"))
+        state_path.write_bytes(normalized_text.replace("\n", "\r\n").encode("utf-8"))
 
         restored = restore_checkpoint(self.checkpoint_dir, self.restore_memory)
 
