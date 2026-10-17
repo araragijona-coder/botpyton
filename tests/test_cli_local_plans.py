@@ -45,6 +45,16 @@ class LocalPlanCliTests(unittest.TestCase):
         self.assertEqual(report["status"], "discovery_complete")
         self.assertFalse(report["ai_enabled"])
 
+    def test_system_profile_cli_returns_bounded_memory_budget(self):
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            code = main(["--system-profile"])
+        self.assertEqual(code, 0)
+        report = json.loads(output.getvalue())
+        self.assertGreaterEqual(report["recommended_child_memory_limit_mb"], 64)
+        self.assertLessEqual(report["recommended_child_memory_limit_mb"], 768)
+        self.assertFalse(report["network_used"])
+
 
 if __name__ == "__main__":
     unittest.main()
