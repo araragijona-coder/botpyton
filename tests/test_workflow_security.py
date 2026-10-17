@@ -28,6 +28,38 @@ class PrivilegedWorkflowSecurityTests(unittest.TestCase):
                 self.assertNotIn("--execute-github-plan", job)
                 self.assertNotIn("--execute-github-plans", job)
 
+    def test_no_untrusted_workflow_trigger_or_write_permission_is_introduced(self):
+        for relative in (
+            ".github/workflows/botpyton-worker.yml",
+            ".github/workflows/botpyton-github-ops.yml",
+        ):
+            with self.subTest(workflow=relative):
+                source = (ROOT / relative).read_text(encoding="utf-8")
+                # These triggers can hand privileged workflow execution to code
+                # or artifacts associated with an untrusted branch/PR.
+                self.assertNotRegex(source, r"(?m)^\\s*(?:pull_request_target|workflow_run)\\s*:")
+                self.assertNotIn("secrets.GITHUB_TOKEN", source)
+                self.assertNotRegex(source, r"(?m)^\\s*(?:contents|pull-requests|actions):\\s*write\\s*$")
+                self.assertNotIn("--execute-github-plan", source)
+                self.assertNotIn("--execute-github-plans", source)
+
+    def test_sender_has_no_execution_surface_even_while_disabled(self):
+        cases = {
+            ".github/workflows/botpyton-worker.yml": "submit-draft-prs:",
+            ".github/workflows/botpyton-github-ops.yml": "submit-draft-pr:",
+        }
+        for relative, marker in cases.items():
+            with self.subTest(workflow=relative):
+                source = (ROOT / relative).read_text(encoding="utf-8")
+                start = source.index(marker)
+                tail = source[start + len(marker):]
+                next_job = re.search(r"\\n  [A-Za-z0-9_-]+:\\n", tail)
+                job = source[start:start + len(marker) + next_job.start() if next_job else len(source)]
+                self.assertNotIn("uses:", job)
+                self.assertNotIn("run: python", job)
+                self.assertNotIn("env:", job)
+                self.assertRegex(job, r"(?m)^\\s+if: false\\s*$")
+
     def test_workflows_default_to_read_only_permissions(self):
         for relative in (
             ".github/workflows/botpyton-worker.yml",
