@@ -65,6 +65,11 @@ class QueuedLocalPlanTests(unittest.TestCase):
                 "project_check_id": "python-unittest",
                 "allow_project_code_execution": True,
                 "check_timeout_seconds": 10,
+                "verification_checks": [
+                    {"type": "project_check_pass"},
+                    {"type": "tests_pass"},
+                    {"type": "report_exists"},
+                ],
             }
             validate_task(task)
             result = TaskExecutor(root).execute({"payload": task, "attempts": 1})
