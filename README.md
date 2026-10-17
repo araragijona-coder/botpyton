@@ -12,6 +12,21 @@ BotPyton is a deterministic software-work automation bot. It uses **no AI models
 - Declarative GitHub operations: create an isolated bot branch, create one commit containing the declared paths, and open a draft pull request for review.
 - No automatic merge, no arbitrary shell commands, no automatic package installation, and no AI/API calls to AI services.
 
+## Interfaz de escritorio
+
+La forma recomendada de usar BOTPYTON es **hacer doble clic en `BOTPYTON.bat`**. Se abre un panel de escritorio con categorías, botones en lenguaje común, resultados resumidos y selección manual de archivos. No hace falta memorizar comandos.
+
+- **Inicio:** análisis local del PC y herramientas de uso frecuente.
+- **Cuidado del PC:** vista previa de temporales y cachés, selección de archivos para cuarentena reversible, información de memoria, inicio, aplicaciones y discos.
+- **Proyectos:** elegir una carpeta, inspeccionarla, descubrir pruebas conocidas y ejecutar una tarea solo después de una confirmación.
+- **Más herramientas:** diagnóstico del programa, cola de tareas, pruebas y ZIP del código fuente.
+- Los resultados se explican en lenguaje común; el informe JSON completo queda disponible al pulsar **Ver JSON técnico**.
+- Solo se ejecuta una operación a la vez. La ventana no instala un servicio ni se añade al inicio de Windows. Las tareas sensibles piden confirmación y la cuarentena tiene recuperación desde `manifest.json`.
+- Requiere Python 3.11+ con Tk/Tcl habilitado. Usa la biblioteca estándar, sin dependencias de interfaz externas ni servicios de IA.
+- Para conservar el menú anterior basado en texto, ejecuta `BOTPYTON-CLI.bat`.
+
+Esta interfaz no convierte aún el proyecto en un ejecutable autónomo. El ZIP portátil sigue siendo un paquete de código fuente.
+
 ## Quick start
 
 Requires Python 3.11+.
