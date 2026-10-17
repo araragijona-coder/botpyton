@@ -116,7 +116,11 @@ pause
 goto menu
 
 :workonce
-python -m bot.main --work-once
+echo.
+set "PROJECT_PATH="
+set /p "PROJECT_PATH=Ruta del proyecto donde se ejecutara la tarea (usa . para BOTPYTON): "
+if not defined PROJECT_PATH set "PROJECT_PATH=."
+python -m bot.main --work-once --project-root "%PROJECT_PATH%"
 echo.
 pause
 goto menu
