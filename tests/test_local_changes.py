@@ -2,6 +2,7 @@ import hashlib
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from bot.local_changes import (
     LocalChangeError,
@@ -86,6 +87,24 @@ class LocalChangePlanTests(unittest.TestCase):
                 validate_local_change_plan(plan, root)
             with self.assertRaises(LocalChangeError):
                 validate_local_change_plan({"schema_version": 1, "task_id": "x", "changes": []}, root)
+
+    def test_rejects_reparse_point_in_path_components(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            linked_dir = root / "linked"
+            linked_dir.mkdir()
+            plan = {
+                "schema_version": 1,
+                "task_id": "reparse-guard",
+                "changes": [{"path": "linked/new.py", "content": "safe = True\\n"}],
+            }
+
+            def reparse_probe(path):
+                return Path(path) == linked_dir
+
+            with patch("bot.local_changes._is_link_or_reparse", side_effect=reparse_probe):
+                with self.assertRaisesRegex(LocalChangeError, "reparse-point"):
+                    validate_local_change_plan(plan, root)
 
     def test_reads_bounded_json_plan(self):
         with tempfile.TemporaryDirectory() as temp:
