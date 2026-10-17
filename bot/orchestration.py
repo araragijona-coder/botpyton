@@ -63,7 +63,12 @@ def validate_task_batch(value: Any) -> dict[str, Any]:
 
 
 def _canonical_plan(plan: Any) -> dict[str, Any]:
-    normalized = validate_change_plan(plan)
+    try:
+        normalized = validate_change_plan(plan)
+    except GitHubOpsError as exc:
+        # Keep the orchestration API stable while preserving the common draft-only
+        # policy enforced by the GitHub operations layer.
+        raise OrchestrationError(str(exc)) from exc
     if not normalized.draft:
         raise OrchestrationError(
             f"Plan {normalized.task_id!r} must set draft=true for human review"
