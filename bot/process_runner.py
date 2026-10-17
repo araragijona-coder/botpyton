@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Mapping, Sequence
 
 from .tool_registry import TOOL_SPECS
+from .system_profile import recommended_child_memory_limit_mb
 
 MAX_TIMEOUT_SECONDS = 300
 MAX_OUTPUT_BYTES = 64_000
@@ -167,7 +168,7 @@ def run_process(
     timeout_seconds: int = 30,
     output_limit_bytes: int = MAX_OUTPUT_BYTES,
     env_overrides: Mapping[str, str] | None = None,
-    memory_limit_mb: int = 768,
+    memory_limit_mb: int | None = None,
 ) -> dict:
     """Run an approved executable with bounded output and a Windows Job Object memory cap."""
     if isinstance(argv, (str, bytes)) or not argv:
@@ -176,6 +177,8 @@ def run_process(
         raise ProcessRunnerError(f"timeout_seconds must be from 1 to {MAX_TIMEOUT_SECONDS}")
     if not isinstance(output_limit_bytes, int) or isinstance(output_limit_bytes, bool) or not 1 <= output_limit_bytes <= MAX_OUTPUT_BYTES:
         raise ProcessRunnerError(f"output_limit_bytes must be from 1 to {MAX_OUTPUT_BYTES}")
+    if memory_limit_mb is None:
+        memory_limit_mb = recommended_child_memory_limit_mb()
     if not isinstance(memory_limit_mb, int) or isinstance(memory_limit_mb, bool) or not 64 <= memory_limit_mb <= 1024:
         raise ProcessRunnerError("memory_limit_mb must be from 64 to 1024")
     normalized_argv = []
