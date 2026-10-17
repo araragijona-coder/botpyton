@@ -289,3 +289,32 @@ No hay evidencia de que se haya producido una condición de agotamiento de memor
 - MITRE CWE-789: asignaciones de memoria excesivas por entradas sin límites, mitigadas validando cantidades y limitando recursos: https://cwe.mitre.org/data/definitions/789.html
 
 El cambio no agrega dependencias ni servicios. Mantiene intactos el esquema del checkpoint y el flujo de tareas válidas; añade límites explícitos para restauración y exportación que se pueden verificar con CI.
+
+
+## Phase 20 — Límites efectivos al leer JSON local y memoria persistente (2026-10-17)
+
+### Referencias oficiales revisadas
+
+- La documentación oficial de Python advierte que analizar JSON sin límites puede consumir cantidades considerables de CPU y memoria; recomienda limitar el tamaño de los datos y señala que la biblioteca estándar no establece por sí sola un límite general de anidamiento: https://docs.python.org/3/library/json.html
+- OWASP enumera los límites de tamaño total y la prevención de asignaciones impulsadas por entradas como defensas frente al agotamiento de recursos: https://cheatsheetseries.owasp.org/cheatsheets/Denial_of_Service_Cheat_Sheet.html
+- La documentación de pathlib describe `read_bytes()` y `read_text()` como operaciones que devuelven el contenido del archivo completo, mientras `Path.open()` permite una lectura incremental y acotada: https://docs.python.org/3/library/pathlib.html
+
+### Hallazgo concreto
+
+Las funciones `bot/main.py::_read_bounded_json` y `bot/local_changes.py::read_local_plan` consultaban primero `stat().st_size`, pero luego utilizaban `read_bytes()`, que lee el archivo completo. El segundo control de longitud se ejecutaba después de la asignación. Si un archivo crecía o era reemplazado entre ambas operaciones, el tamaño de lectura real podía exceder el límite pretendido antes de que BOTPYTON lo rechazara. El diagnóstico de logs también leía el texto completo tras una comprobación de tamaño previa. Además, `JsonMemory.load()` leía la memoria persistente completa sin límite de bytes ni de profundidad JSON; esta función se usa habitualmente al consultar o modificar la cola de tareas.
+
+No hay evidencia de explotación en el equipo del usuario. Es un hueco de robustez y control de recursos, relevante para un proceso que debe funcionar con memoria limitada.
+
+### Corrección implementada en la rama candidata
+
+- Se añade `bot/bounded_io.py`: abre archivos regulares, compara identidad y metadatos antes/después de la apertura, lee como máximo `límite + 1` bytes y falla explícitamente si detecta crecimiento o cambio durante la lectura.
+- El CLI, los planes de cambio local y la lectura de logs de diagnóstico emplean ahora la lectura acotada, incluso si cambia el tamaño entre la comprobación previa y la lectura.
+- La entrada JSON acepta una profundidad máxima de 64 niveles y transforma JSON inválido, demasiado profundo o cambiante en errores controlados; el recorrido de profundidad usa una pila de iteradores para evitar crear una gran lista auxiliar.
+- La memoria persistente se limita a 4 MiB, alineada con el tamaño máximo actual de checkpoint, y a 64 niveles JSON. La escritura también verifica el límite en streaming antes de reemplazar el archivo original, de modo que un guardado sobredimensionado falla sin destruir la última memoria válida.
+- Se agregan pruebas para archivos sobredimensionados, una discrepancia simulada entre `stat` y la apertura, JSON profundo y preservación de la memoria anterior cuando el guardado supera el límite.
+
+### Consideración operativa
+
+El archivo de memoria conserva las tareas históricas; al alcanzar 4 MiB, BOTPYTON informa un error en lugar de seguir creciendo indefinidamente o consumir memoria sin límite. Antes de mantener una cola histórica de mayor tamaño, será necesario diseñar una política explícita de archivo/retención compatible con las dependencias entre tareas. No se borra historial automáticamente ni se agregan llamadas de red, IA, servicios residentes o dependencias externas.
+
+Esta fase queda sujeta a las pruebas de CI Linux y Windows de la rama candidata y a la verificación posterior a la fusión en `main`.

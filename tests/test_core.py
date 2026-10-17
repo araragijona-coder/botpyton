@@ -4,6 +4,7 @@ import unittest
 from pathlib import Path
 
 from bot.memory import JsonMemory, MemoryError
+from unittest.mock import patch
 from bot.planner import order_tasks
 from bot.policy import PolicyError, validate_relative_path
 from bot.recovery import classify_failure
@@ -55,6 +56,42 @@ class MemoryTests(unittest.TestCase):
             path.write_text(json.dumps({"schema_version": 999}), encoding="utf-8")
             with self.assertRaises(MemoryError):
                 JsonMemory(path).load()
+
+    def test_rejects_oversized_memory_before_parsing(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "state.json"
+            with patch("bot.memory.MAX_MEMORY_BYTES", 32):
+                path.write_bytes(b" " * 33)
+                with self.assertRaisesRegex(MemoryError, "exceeds 32 bytes"):
+                    JsonMemory(path).load()
+
+    def test_rejects_deeply_nested_memory(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "state.json"
+            nested = "0"
+            for _ in range(70):
+                nested = "[" + nested + "]"
+            path.write_text(
+                '{"schema_version":1,"tasks":{},"incidents":[],"solutions":['
+                + nested + ']}',
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(MemoryError, "nesting depth"):
+                JsonMemory(path).load()
+
+    def test_oversized_save_preserves_existing_memory(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "state.json"
+            memory = JsonMemory(path)
+            original = memory.load()
+            memory.save(original)
+            existing = path.read_bytes()
+            oversized = memory.load()
+            oversized["solutions"].append("x" * 500)
+            with patch("bot.memory.MAX_MEMORY_BYTES", 200):
+                with self.assertRaisesRegex(MemoryError, "exceeds 200 bytes"):
+                    memory.save(oversized)
+            self.assertEqual(path.read_bytes(), existing)
 
 class RecoveryTests(unittest.TestCase):
     def test_known_error_is_classified(self):

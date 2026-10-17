@@ -10,6 +10,7 @@ from pathlib import Path, PurePosixPath
 from typing import Any
 
 from .application_cache import _is_link_or_reparse
+from .bounded_io import BoundedReadError, enforce_json_depth, read_bounded_bytes
 
 MAX_FILES = 20
 MAX_FILE_BYTES = 200_000
@@ -319,14 +320,10 @@ def apply_local_change_plan(
 
 def read_local_plan(path: str | Path, *, max_bytes: int = MAX_PLAN_BYTES) -> Any:
     plan_path = Path(path).expanduser().resolve()
-    if not plan_path.is_file():
-        raise LocalChangeError("Local plan path must be an existing regular file")
-    if plan_path.stat().st_size > max_bytes:
-        raise LocalChangeError(f"Plan exceeds {max_bytes} bytes")
-    raw = plan_path.read_bytes()
-    if len(raw) > max_bytes:
-        raise LocalChangeError(f"Plan exceeds {max_bytes} bytes")
     try:
-        return json.loads(raw.decode("utf-8"))
-    except (UnicodeError, json.JSONDecodeError) as exc:
-        raise LocalChangeError(f"Plan is not valid UTF-8 JSON: {exc}") from exc
+        raw = read_bounded_bytes(plan_path, limit_bytes=max_bytes, label="Local change plan")
+        value = json.loads(raw.decode("utf-8"))
+        enforce_json_depth(value, label="Local change plan")
+        return value
+    except (BoundedReadError, UnicodeError, json.JSONDecodeError, RecursionError) as exc:
+        raise LocalChangeError(f"Plan is not safe UTF-8 JSON: {exc}") from exc

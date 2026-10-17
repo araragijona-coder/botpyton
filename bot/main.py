@@ -7,6 +7,7 @@ import sys
 from pathlib import Path
 
 from .autonomy import AutonomousCycleError, run_autonomous_cycle
+from .bounded_io import BoundedReadError, enforce_json_depth, read_bounded_bytes
 from .checkpoint import CheckpointError, export_checkpoint, restore_checkpoint
 from .diagnostics import diagnose_failure
 from .executor import TaskExecutor
@@ -49,15 +50,15 @@ def _print_json(value: object) -> None:
 
 
 def _read_bounded_json(path_text: str, *, limit_bytes: int = 50_000) -> object:
-    # This helper only reads bounded JSON input; workflow callers use RUNNER_TEMP
-    # absolute paths. No input content is executed or used as a shell command.
-    path = Path(path_text)
-    if path.stat().st_size > limit_bytes:
-        raise OrchestrationError(f"JSON input exceeds {limit_bytes} bytes")
-    raw = path.read_bytes()
-    if len(raw) > limit_bytes:
-        raise OrchestrationError(f"JSON input exceeds {limit_bytes} bytes")
-    return json.loads(raw.decode("utf-8"))
+    # Keep the read bounded even if another process grows the file after stat().
+    # Input content is parsed as JSON only; it is never executed as a command.
+    try:
+        raw = read_bounded_bytes(path_text, limit_bytes=limit_bytes, label="JSON input")
+        value = json.loads(raw.decode("utf-8"))
+        enforce_json_depth(value, label="JSON input")
+        return value
+    except (BoundedReadError, UnicodeError, json.JSONDecodeError, RecursionError) as exc:
+        raise OrchestrationError(f"Invalid or unsafe JSON input: {exc}") from exc
 
 
 def _run_claimed(queue: TaskQueue, record: dict, executor: TaskExecutor) -> dict:
@@ -416,11 +417,11 @@ def main(argv: list[str] | None = None) -> int:
         if args.diagnose:
             project_root = Path(args.project_root).expanduser().resolve()
             log_path = project_root / validate_relative_path(args.diagnose)
-            if log_path.stat().st_size > 50_000:
-                raise OrchestrationError("Diagnostic log exceeds 50000 bytes")
-            log_text = log_path.read_text(encoding="utf-8")
-            if len(log_text.encode("utf-8")) > 50_000:
-                raise OrchestrationError("Diagnostic log exceeds 50000 bytes")
+            try:
+                log_raw = read_bounded_bytes(log_path, limit_bytes=50_000, label="Diagnostic log")
+                log_text = log_raw.decode("utf-8")
+            except (BoundedReadError, UnicodeError) as exc:
+                raise OrchestrationError(str(exc)) from exc
             _print_json(diagnose_failure(log_text, project_root))
             return 0
         if args.check:
