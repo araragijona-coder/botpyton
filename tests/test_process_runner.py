@@ -80,6 +80,14 @@ class ProcessRunnerTests(unittest.TestCase):
                     approved_executables=[sys.executable],
                     timeout_seconds=999,
                 )
+            with self.assertRaises(ProcessRunnerError):
+                run_process(
+                    [sys.executable, "--version"],
+                    cwd=temp,
+                    allowed_root=temp,
+                    approved_executables=[sys.executable],
+                    memory_limit_mb=2048,
+                )
 
 
 if __name__ == "__main__":
