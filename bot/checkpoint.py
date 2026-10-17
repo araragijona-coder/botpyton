@@ -60,7 +60,11 @@ def _read_bounded_checkpoint_file(path: Path, *, byte_limit: int, label: str) ->
             or after_path.st_size != after_open.st_size
         ):
             raise CheckpointError(f"Checkpoint {label} changed during bounded reading")
-        return raw.decode("utf-8")
+        # Preserve universal-newline semantics from the previous text-mode reader.
+        # The manifest digest is computed over canonical LF text, while Windows may
+        # store the same text with CRLF line endings on disk.
+        decoded = raw.decode("utf-8")
+        return decoded.replace("\r\n", "\n").replace("\r", "\n")
     except CheckpointError:
         raise
     except (OSError, UnicodeError) as exc:
