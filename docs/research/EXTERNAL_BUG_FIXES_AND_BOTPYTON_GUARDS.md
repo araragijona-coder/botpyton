@@ -277,7 +277,7 @@ No hay evidencia de que se haya producido una condición de agotamiento de memor
 - Se define un máximo de 4 MiB para `state.json` y 32 KiB para `manifest.json`.
 - Antes de parsear se comprueba que cada archivo sea regular, no un enlace/reparse point, y que su tamaño esté dentro del límite.
 - La lectura usa un límite duro de `cap + 1` bytes y compara la identidad del archivo abierto con la ruta antes y después, para detectar sustituciones durante la lectura.
-- Los archivos que exceden el límite se rechazan antes del parseo; los JSON demasiado anidados se convierten en `CheckpointError` controlado.
+- Los archivos que exceden el límite se rechazan antes del parseo; se rechaza cualquier JSON cuya profundidad estructural supere 64 niveles; las excepciones de recursión del decodificador/serializador también se convierten en `CheckpointError` controlado.
 - La exportación también rechaza un estado que exceda el límite admitido, evitando producir un checkpoint que la restauración no pueda aceptar.
 - Se añadieron pruebas para estado excesivo, manifiesto excesivo, JSON profundamente anidado y archivo de estado simbólico. Las pruebas verifican que una restauración fallida no sobrescriba la memoria existente.
 
