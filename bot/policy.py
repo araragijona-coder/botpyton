@@ -59,6 +59,12 @@ def validate_task(task: dict[str, Any]) -> None:
         check_id = task.get("project_check_id")
         if not isinstance(check_id, str) or not check_id.strip():
             raise PolicyError("run_project_check requires a non-empty project_check_id")
+        memory_limit = task.get("child_memory_limit_mb")
+        if memory_limit is not None and (
+            not isinstance(memory_limit, int) or isinstance(memory_limit, bool)
+            or not 64 <= memory_limit <= 1024
+        ):
+            raise PolicyError("child_memory_limit_mb must be an integer from 64 to 1024")
     verification_checks = task.get("verification_checks")
     if verification_checks is not None:
         allowed_check_types = {
