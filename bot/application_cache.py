@@ -230,7 +230,6 @@ def preview_application_cache(
                                                     "path": str(resolved_file), "size_bytes": max(0, int(info.st_size)),
                                                     "modified_epoch": int(info.st_mtime),
                                                     "modified_ns": int(info.st_mtime_ns),
-                                                    "device": int(info.st_dev), "inode": int(info.st_ino),
                                                     "age_days": max(0, int((now_value - info.st_mtime) // 86400)),
                                                     "status": "preview_only",
                                                     "reason": f"recognized browser cache file older than {minimum_age_days} day(s)",

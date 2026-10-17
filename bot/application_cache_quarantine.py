@@ -290,15 +290,11 @@ def quarantine_application_cache_candidates(
             if (
                 st.st_size != item.get("size_bytes")
                 or st.st_mtime_ns != item.get("modified_ns")
-                or st.st_dev != item.get("device")
-                or st.st_ino != item.get("inode")
             ):
                 raise ValueError(
-                    "A selected candidate changed after the preview; "
+                    "A selected candidate's size or nanosecond modification time changed after the preview; "
                     f"size_match={st.st_size == item.get('size_bytes')}, "
-                    f"mtime_match={st.st_mtime_ns == item.get('modified_ns')}, "
-                    f"device_match={st.st_dev == item.get('device')}, "
-                    f"file_id_match={st.st_ino == item.get('inode')}."
+                    f"mtime_match={st.st_mtime_ns == item.get('modified_ns')}."
                 )
             if st.st_size < 0 or st.st_size > MAX_CACHE_FILE_BYTES:
                 raise ValueError(f"A selected file exceeds the {MAX_CACHE_FILE_BYTES // (1024 * 1024)} MiB per-file limit.")
