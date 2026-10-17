@@ -56,9 +56,16 @@ python -m bot.main --pc-cleanup-restore "C:\\path\\to\\BOTPYTON\\Quarantine\\ses
 
 
 
-## Phase 18 — Broader backup, restore and operation audit — planned
+## Phase 18 — Recovery integrity, dry-run restore and operation audit — implemented on the development branch
 
-Extend recovery protection beyond temporary-file quarantine: validate backups, retain integrity hashes, produce durable audit records, and provide a dry-run restore checklist. The existing quarantine manifest is a first narrow recovery mechanism, not a general system backup.
+- Each quarantine manifest records the SHA-256 digest and nanosecond mtime of every candidate. Candidate and aggregate content hashing is bounded to 512 MiB per run and uses 256 KiB chunks, not full-file buffering.
+- Restore checks the quarantined file against its recorded byte count and SHA-256 digest immediately before moving it. Missing, oversized, changed or tampered files are skipped and remain in quarantine.
+- \`python -m bot.main --pc-cleanup-restore-preview "PATH\\manifest.json"\` validates session structure, hashes and original destination availability without moving or writing any file.
+- \`python -m bot.main --pc-audit\` reads the bounded local operation ledger. Start/end records store operation, counts and status but intentionally omit exact file paths and contents. Each JSON record has a SHA-256 checksum.
+- Audit read is bounded to 200 displayed records, 5,000 scanned directory entries, 16 KB per record and 2 MB total; malformed/modified records are surfaced as integrity errors.
+- Quarantine and restore do not proceed if their audit-start record cannot be written. Audit finalization failures are included in operation reports.
+- SHA-256 event checksums detect accidental changes but are not a cryptographic signature against a person able to rewrite both the file and checksum. Local audit is not a backup or a remote log.
+- Regression tests cover manifest integrity, tampering, restore preview/no-overwrite, audit verification and checksum failure. CI must pass for this branch SHA before calling the phase verified. No test has changed files on the user's PC.
 
 ## Phase 19 — Windows smoke tests, packaging and resource measurements — planned
 

@@ -24,7 +24,7 @@ from .repository_analyzer import inspect_repository
 from .process_runner import ProcessRunnerError, run_tool_probe
 from .tool_registry import discover_tools
 from .system_profile import get_system_profile
-from .pc_care import get_pc_care_report, QUARANTINE_CONFIRMATION, RESTORE_CONFIRMATION, quarantine_cleanup_candidates, restore_quarantined_files, check_application_updates
+from .pc_care import get_pc_care_report, QUARANTINE_CONFIRMATION, RESTORE_CONFIRMATION, quarantine_cleanup_candidates, restore_quarantined_files, check_application_updates, preview_quarantined_restore, read_pc_care_audit
 from .project_checks import ProjectCheckError, discover_project_checks, run_project_check
 from .policy import PolicyError, validate_task, validate_relative_path
 from .queue import QueueError, TaskQueue
@@ -83,6 +83,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--pc-cleanup-preview", action="store_true", help="list exact eligible temporary-file candidates without deleting anything")
     parser.add_argument("--pc-cleanup-quarantine", action="store_true", help="move verified temporary-file candidates to reversible quarantine after typed confirmation")
     parser.add_argument("--pc-cleanup-restore", metavar="MANIFEST_JSON", help="restore a BOTPYTON quarantine session without overwriting existing files")
+    parser.add_argument("--pc-cleanup-restore-preview", metavar="MANIFEST_JSON", help="dry-run integrity and destination check for a BOTPYTON quarantine manifest")
+    parser.add_argument("--pc-audit", action="store_true", help="read the bounded local PC-care operation audit and verify checksums")
     parser.add_argument("--pc-apps", action="store_true", help="list installed Windows application metadata without running uninstallers")
     parser.add_argument("--pc-update-check", action="store_true", help="opt in to a bounded WinGet update-availability listing; never installs or upgrades packages")
     parser.add_argument("--tools", action="store_true", help="list installed developer tools without running them")
@@ -181,20 +183,24 @@ def main(argv: list[str] | None = None) -> int:
             result = quarantine_cleanup_candidates(preview, confirmation=typed)
             _print_json(result)
             return 0 if result["status"] in {"completed", "no_candidates", "partial"} else 1
+        if args.pc_cleanup_restore_preview:
+            _print_json(preview_quarantined_restore(args.pc_cleanup_restore_preview))
+            return 0
+        if args.pc_audit:
+            _print_json(read_pc_care_audit())
+            return 0
         if args.pc_cleanup_restore:
-            from .pc_care import MAX_QUARANTINE_CANDIDATES
             manifest_path = Path(args.pc_cleanup_restore).expanduser()
-            if manifest_path.stat().st_size > 200_000:
-                raise ValueError("Quarantine manifest exceeds 200000 bytes")
-            manifest_preview = json.loads(manifest_path.read_text(encoding="utf-8-sig"))
-            entries = manifest_preview.get("items", []) if isinstance(manifest_preview, dict) else []
-            if not isinstance(entries, list) or len(entries) > MAX_QUARANTINE_CANDIDATES:
-                raise ValueError("Quarantine manifest is invalid or exceeds its safety limits")
+            preview = preview_quarantined_restore(manifest_path)
             print("RESTORE PREVIEW — no existing file will be overwritten.")
-            for entry in entries:
+            for entry in preview["items"]:
                 if isinstance(entry, dict):
-                    print(f"  [{entry.get('status', 'unknown')}] {entry.get('original_path', '(path missing)')}")
-            typed = input(f'Type exactly "{RESTORE_CONFIRMATION}" to restore these entries: ')
+                    print(f"  [{entry.get('status', 'unknown')}] {entry.get('path', '(path missing)')}")
+            print(f"Ready to restore: {preview['ready_count']}; skipped: {preview['files_skipped']}")
+            if preview["ready_count"] == 0:
+                _print_json(preview)
+                return 0
+            typed = input(f'Type exactly "{RESTORE_CONFIRMATION}" to restore ready entries: ')
             if typed != RESTORE_CONFIRMATION:
                 print("CANCELLED: confirmation did not match; no files were restored.")
                 return 2

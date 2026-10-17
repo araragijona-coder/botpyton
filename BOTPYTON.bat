@@ -34,8 +34,12 @@ echo  K. Inventario de aplicaciones instaladas (solo lectura)
 echo  L. Limpiar archivos temporales mediante cuarentena reversible
 echo  M. Restaurar una cuarentena usando su manifest.json
 echo  N. Comprobar actualizaciones de aplicaciones (optativo; sin instalar)
+echo  O. Ver auditoria local de PC Care (solo lectura)
+echo  P. Vista previa de restauracion (integridad; no restaura)
 echo.
-choice /c 123456789ABCDEFGHIJKLMN /n /m "Selecciona una opcion: "
+choice /c 123456789ABCDEFGHIJKLMNOp /n /m "Selecciona una opcion: "
+if errorlevel 25 goto restorepreview
+if errorlevel 24 goto auditcheck
 if errorlevel 23 goto updatecheck
 if errorlevel 22 goto restorecleanup
 if errorlevel 21 goto quarantinecleanup
@@ -280,6 +284,25 @@ echo.
 echo Comprobacion optativa de actualizaciones con WinGet.
 echo Puede usar red; solo enumera paquetes y NO instala ni actualiza nada.
 python -m bot.main --pc-update-check
+echo.
+pause
+goto menu
+
+
+:restorepreview
+echo.
+set "MANIFEST_PATH="
+set /p "MANIFEST_PATH=Ruta completa del manifest.json de la cuarentena: "
+if not defined MANIFEST_PATH goto menu
+python -m bot.main --pc-cleanup-restore-preview "%MANIFEST_PATH%"
+echo.
+pause
+goto menu
+
+:auditcheck
+echo.
+echo Registro local limitado; no publica rutas de archivos exactas.
+python -m bot.main --pc-audit
 echo.
 pause
 goto menu

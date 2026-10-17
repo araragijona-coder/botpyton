@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import csv
 import io
+import hashlib
 import json
 import os
 import re
@@ -634,6 +635,7 @@ def get_cleanup_preview(
                                 "root_label": label,
                                 "size_bytes": max(0, int(info.st_size)),
                                 "modified_epoch": int(info.st_mtime),
+                                "modified_ns": int(info.st_mtime_ns),
                                 "age_days": max(0, int((now_value - info.st_mtime) // 86400)),
                                 "status": "candidate_not_deleted",
                                 "reason": f"temporary file older than {minimum_age_days} days",
@@ -680,6 +682,12 @@ def get_cleanup_preview(
 QUARANTINE_CONFIRMATION = "QUARANTINE OLD TEMP FILES"
 RESTORE_CONFIRMATION = "RESTORE BOTPYTON QUARANTINE"
 MAX_QUARANTINE_CANDIDATES = 100
+MAX_QUARANTINE_HASH_BYTES = 512 * 1024 * 1024
+HASH_CHUNK_BYTES = 256 * 1024
+MAX_AUDIT_RECORDS = 200
+MAX_AUDIT_SCAN_FILES = 5_000
+MAX_AUDIT_TOTAL_BYTES = 2_000_000
+MAX_AUDIT_RECORD_BYTES = 16_000
 QUARANTINE_MANIFEST_SCHEMA = 1
 
 
@@ -803,6 +811,305 @@ def _path_is_inside_any_root(path: Path, roots: dict[str, Path]) -> bool:
         return True
 
 
+
+def _sha256_file(path: str | Path, *, byte_limit: int) -> str:
+    """Hash a regular file with bounded memory and detect concurrent modification."""
+    target = Path(path)
+    before = target.stat(follow_symlinks=False)
+    if before.st_size < 0 or before.st_size > byte_limit:
+        raise ValueError("file exceeds the configured integrity-hash byte budget")
+    digest = hashlib.sha256()
+    total = 0
+    with target.open("rb") as stream:
+        while True:
+            chunk = stream.read(HASH_CHUNK_BYTES)
+            if not chunk:
+                break
+            total += len(chunk)
+            if total > byte_limit:
+                raise ValueError("file exceeded the integrity-hash byte budget while being read")
+            digest.update(chunk)
+    after = target.stat(follow_symlinks=False)
+    if (total != before.st_size or after.st_size != before.st_size
+            or after.st_mtime_ns != before.st_mtime_ns):
+        raise ValueError("file changed while its integrity hash was being calculated")
+    return digest.hexdigest()
+
+
+def _default_pc_care_audit_dir() -> Path:
+    local_app_data = os.environ.get("LOCALAPPDATA")
+    if local_app_data:
+        base = Path(local_app_data).expanduser()
+    else:
+        base = Path.home() / "AppData" / "Local"
+    return base / "BOTPYTON" / "PC-Care" / "audit"
+
+
+def _persist_pc_care_audit_event(
+    operation: str,
+    phase: str,
+    status: str,
+    *,
+    item_count: int = 0,
+    succeeded_count: int = 0,
+    skipped_count: int = 0,
+    session_id: str | None = None,
+    audit_dir: str | Path | None = None,
+) -> dict:
+    """Append a local, checksummed event without storing user file paths or contents."""
+    allowed_operations = {"quarantine", "restore"}
+    allowed_phases = {"started", "completed"}
+    if operation not in allowed_operations or phase not in allowed_phases:
+        raise ValueError("unsupported PC-care audit event type")
+    for value in (item_count, succeeded_count, skipped_count):
+        if not isinstance(value, int) or isinstance(value, bool) or value < 0 or value > MAX_QUARANTINE_CANDIDATES:
+            raise ValueError("audit counters are outside the permitted range")
+    if session_id is not None and (not isinstance(session_id, str) or not re.fullmatch(r"session-[0-9]{1,30}", session_id)):
+        raise ValueError("audit session identifier is invalid")
+    directory = Path(audit_dir).expanduser() if audit_dir is not None else _default_pc_care_audit_dir()
+    if not _no_link_components(directory):
+        raise ValueError("PC-care audit directory contains a link/reparse point")
+    directory.mkdir(parents=True, exist_ok=True)
+    if _is_link_or_reparse(directory) or not _no_link_components(directory):
+        raise ValueError("PC-care audit directory failed path-safety validation")
+    event_id = time.time_ns()
+    record = {
+        "product": "BOTPYTON PC Care",
+        "schema_version": 1,
+        "event_id": event_id,
+        "timestamp_epoch": int(time.time()),
+        "operation": operation,
+        "phase": phase,
+        "status": str(status)[:80],
+        "item_count": item_count,
+        "succeeded_count": succeeded_count,
+        "skipped_count": skipped_count,
+        "session_id": session_id,
+        "files_deleted": 0,
+        "network_used": False,
+    }
+    canonical = json.dumps(record, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    record["sha256"] = hashlib.sha256(canonical).hexdigest()
+    payload = json.dumps(record, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
+    final_path = directory / f"event-{event_id}-{operation}-{phase}.json"
+    temporary_path = directory / f".event-{event_id}.tmp"
+    if final_path.exists() or temporary_path.exists():
+        raise OSError("audit event filename collision")
+    with temporary_path.open("x", encoding="utf-8", newline="\n") as stream:
+        stream.write(payload)
+        stream.flush()
+        os.fsync(stream.fileno())
+    os.replace(temporary_path, final_path)
+    return {key: value for key, value in record.items() if key != "sha256"} | {"integrity": "written"}
+
+
+def read_pc_care_audit(*, audit_dir: str | Path | None = None, limit: int = MAX_AUDIT_RECORDS) -> dict:
+    """Read the bounded local operation ledger and validate each event checksum."""
+    if not isinstance(limit, int) or isinstance(limit, bool) or not 1 <= limit <= MAX_AUDIT_RECORDS:
+        raise ValueError(f"limit must be between 1 and {MAX_AUDIT_RECORDS}")
+    directory = Path(audit_dir).expanduser() if audit_dir is not None else _default_pc_care_audit_dir()
+    base_report = {
+        "product": "BOTPYTON PC Care",
+        "schema_version": 1,
+        "read_only": True,
+        "network_used": False,
+        "records_returned": 0,
+        "records_examined": 0,
+        "integrity_status": "verified",
+        "items": [],
+        "limitations": [
+            "The ledger is local and bounded; it is not remote backup.",
+            "SHA-256 checksums detect accidental changes but do not authenticate a maliciously rewritten ledger.",
+            "Event records intentionally omit exact file paths and file contents.",
+        ],
+    }
+    if not directory.exists():
+        return {**base_report, "status": "not_present"}
+    if _is_link_or_reparse(directory) or not directory.is_dir() or not _no_link_components(directory):
+        return {**base_report, "status": "unsafe_audit_directory", "integrity_status": "unavailable"}
+    entries: list[Path] = []
+    access_limited = False
+    try:
+        with os.scandir(directory) as scan:
+            for entry in scan:
+                if len(entries) >= MAX_AUDIT_SCAN_FILES:
+                    access_limited = True
+                    break
+                if not entry.name.startswith("event-") or not entry.name.endswith(".json"):
+                    continue
+                try:
+                    target = Path(entry.path)
+                    if entry.is_symlink() or _is_link_or_reparse(target) or not entry.is_file(follow_symlinks=False):
+                        access_limited = True
+                        continue
+                    info = entry.stat(follow_symlinks=False)
+                    if info.st_size > MAX_AUDIT_RECORD_BYTES:
+                        access_limited = True
+                        continue
+                    entries.append(target)
+                except OSError:
+                    access_limited = True
+    except OSError:
+        return {**base_report, "status": "read_error", "integrity_status": "unavailable"}
+    entries.sort(key=lambda item: item.name, reverse=True)
+    records = []
+    total_bytes = 0
+    corrupt_count = 0
+    for target in entries[:MAX_AUDIT_SCAN_FILES]:
+        try:
+            info = target.stat(follow_symlinks=False)
+            total_bytes += info.st_size
+            if total_bytes > MAX_AUDIT_TOTAL_BYTES:
+                access_limited = True
+                break
+            record = json.loads(target.read_text(encoding="utf-8"))
+            if not isinstance(record, dict):
+                raise ValueError("audit event is not an object")
+            claimed = record.pop("sha256", None)
+            canonical = json.dumps(record, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+            actual = hashlib.sha256(canonical).hexdigest()
+            valid = isinstance(claimed, str) and re.fullmatch(r"[0-9a-f]{64}", claimed) and claimed == actual
+            if not valid or record.get("product") != "BOTPYTON PC Care" or record.get("schema_version") != 1:
+                corrupt_count += 1
+                records.append({
+                    "event_id": record.get("event_id"),
+                    "operation": record.get("operation", "unknown"),
+                    "phase": record.get("phase", "unknown"),
+                    "status": "integrity_error",
+                    "integrity": "failed",
+                })
+            else:
+                record["integrity"] = "verified"
+                records.append(record)
+        except (OSError, UnicodeError, json.JSONDecodeError, ValueError):
+            corrupt_count += 1
+            records.append({"operation": "unknown", "phase": "unknown", "status": "unreadable_record", "integrity": "failed"})
+    visible = records[:limit]
+    integrity_status = "error" if corrupt_count else ("partial" if access_limited else "verified")
+    return {
+        **base_report,
+        "status": "integrity_error" if corrupt_count else ("partial" if access_limited else "collected"),
+        "records_returned": len(visible),
+        "records_examined": len(records),
+        "integrity_status": integrity_status,
+        "items": visible,
+    }
+
+
+def _load_valid_quarantine_manifest(manifest_path: str | Path) -> tuple[Path, Path, dict]:
+    """Validate a BOTPYTON session location and bounded manifest syntax."""
+    path = Path(manifest_path).expanduser()
+    if not path.is_absolute() or path.name != "manifest.json" or _is_link_or_reparse(path):
+        raise ValueError("Select a regular manifest.json inside a BOTPYTON quarantine session.")
+    session_dir = path.parent
+    base = session_dir.parent
+    if not session_dir.name.startswith("session-") or base.name.casefold() != "quarantine":
+        raise ValueError("Manifest is not in a recognized BOTPYTON Quarantine session.")
+    if _is_link_or_reparse(session_dir) or _is_link_or_reparse(base) or not _no_link_components(path):
+        raise ValueError("Manifest or quarantine path contains a link/reparse point.")
+    if path.stat().st_size > 200_000:
+        raise ValueError("Quarantine manifest exceeds 200000 bytes.")
+    manifest = json.loads(path.read_text(encoding="utf-8-sig"))
+    if (not isinstance(manifest, dict) or manifest.get("product") != "BOTPYTON PC Care"
+            or manifest.get("schema_version") != QUARANTINE_MANIFEST_SCHEMA
+            or manifest.get("session_id") != session_dir.name
+            or not isinstance(manifest.get("items"), list)
+            or len(manifest["items"]) > MAX_QUARANTINE_CANDIDATES):
+        raise ValueError("Quarantine manifest is invalid or exceeds its safety limits.")
+    return path, session_dir, manifest
+
+
+def _inspect_quarantine_item(
+    item: dict,
+    session_dir: Path,
+    roots: dict[str, Path],
+    *,
+    hash_budget_remaining: int,
+) -> tuple[dict, int]:
+    """Read-only integrity and restore-destination check for one manifest item."""
+    original_value = item.get("original_path")
+    label = item.get("root_label")
+    name = item.get("quarantine_name")
+    if item.get("status") == "restored":
+        return ({"path": original_value, "status": "already_restored", "ready": False}, 0)
+    if (not isinstance(original_value, str) or not isinstance(label, str) or label not in roots
+            or not isinstance(name, str) or Path(name).name != name or name in {"", ".", ".."}):
+        return ({"path": original_value, "status": "skipped_unapproved_manifest_path", "ready": False}, 0)
+    quarantine_file = session_dir / name
+    if _is_link_or_reparse(quarantine_file) or not _no_link_components(quarantine_file, stop_at=session_dir):
+        return ({"path": original_value, "status": "skipped_unsafe_quarantine_file", "ready": False}, 0)
+    try:
+        info = quarantine_file.stat(follow_symlinks=False)
+        import stat as stat_module
+        if not stat_module.S_ISREG(info.st_mode):
+            return ({"path": original_value, "status": "skipped_non_regular_quarantine_file", "ready": False}, 0)
+    except OSError:
+        return ({"path": original_value, "status": "skipped_quarantine_file_missing", "ready": False}, 0)
+    expected_size = item.get("size_bytes")
+    expected_hash = item.get("sha256")
+    if not isinstance(expected_size, int) or isinstance(expected_size, bool) or info.st_size != expected_size:
+        return ({"path": original_value, "status": "skipped_quarantine_file_changed", "ready": False}, 0)
+    if not isinstance(expected_hash, str) or not re.fullmatch(r"[0-9a-f]{64}", expected_hash):
+        return ({"path": original_value, "status": "skipped_invalid_integrity_metadata", "ready": False}, 0)
+    if info.st_size > hash_budget_remaining:
+        return ({"path": original_value, "status": "skipped_hash_budget", "ready": False}, 0)
+    try:
+        actual_hash = _sha256_file(quarantine_file, byte_limit=hash_budget_remaining)
+    except (OSError, ValueError):
+        return ({"path": original_value, "status": "skipped_hash_unavailable_or_changed", "ready": False}, 0)
+    bytes_used = info.st_size
+    if actual_hash != expected_hash:
+        return ({"path": original_value, "status": "skipped_integrity_mismatch", "ready": False}, bytes_used)
+    destination = _safe_restore_destination(original_value, roots[label])
+    if destination is None:
+        return ({"path": original_value, "status": "skipped_destination_exists_or_unsafe", "ready": False}, bytes_used)
+    return ({"path": original_value, "status": "ready_to_restore", "ready": True}, bytes_used)
+
+
+def preview_quarantined_restore(
+    manifest_path: str | Path,
+    *,
+    scan_roots: list[tuple[str, Path]] | None = None,
+) -> dict:
+    """Dry-run recovery checklist; never creates, replaces, or moves files."""
+    path, session_dir, manifest = _load_valid_quarantine_manifest(manifest_path)
+    roots = _approved_temporary_roots(scan_roots)
+    results = []
+    total_hashed = 0
+    for item in manifest["items"]:
+        if not isinstance(item, dict):
+            results.append({"status": "skipped_invalid_manifest_entry", "ready": False})
+            continue
+        inspected, used = _inspect_quarantine_item(
+            item, session_dir, roots, hash_budget_remaining=MAX_QUARANTINE_HASH_BYTES - total_hashed
+        )
+        total_hashed += used
+        results.append(inspected)
+    ready_count = sum(1 for item in results if item.get("ready") is True)
+    skipped_count = sum(1 for item in results if item.get("ready") is False and item.get("status") != "already_restored")
+    return {
+        "product": "BOTPYTON PC Care",
+        "schema_version": 1,
+        "status": "preview_complete" if skipped_count == 0 else "preview_partial",
+        "read_only": True,
+        "network_used": False,
+        "manifest_path": str(path),
+        "manifest_status": manifest.get("status", "unknown"),
+        "candidate_count": len(results),
+        "ready_count": ready_count,
+        "files_restored": 0,
+        "files_skipped": skipped_count,
+        "hash_bytes_examined": total_hashed,
+        "items": results,
+        "limitations": [
+            "Dry-run only: no files are restored or changed.",
+            "Files with missing or mismatched SHA-256 metadata, a path collision, a link/reparse component, or an unavailable hash are not eligible for restoration.",
+            "At most 512 MiB of file contents are hashed during one checklist.",
+        ],
+    }
+
+
+
 def quarantine_cleanup_candidates(
     preview: dict,
     *,
@@ -810,6 +1117,7 @@ def quarantine_cleanup_candidates(
     scan_roots: list[tuple[str, Path]] | None = None,
     quarantine_root: str | Path | None = None,
     now: float | None = None,
+    audit_dir: str | Path | None = None,
 ) -> dict:
     """Move verified stale files to a same-volume quarantine; never unlink files."""
     if confirmation != QUARANTINE_CONFIRMATION:
@@ -837,6 +1145,7 @@ def quarantine_cleanup_candidates(
     ready: list[dict] = []
     skipped: list[dict] = []
     seen_paths: set[str] = set()
+    total_hash_bytes = 0
 
     for index, candidate in enumerate(candidates, start=1):
         if not isinstance(candidate, dict):
@@ -859,23 +1168,42 @@ def quarantine_cleanup_candidates(
         try:
             expected_size = candidate["size_bytes"]
             expected_mtime = candidate["modified_epoch"]
+            expected_mtime_ns = candidate["modified_ns"]
             if (not isinstance(expected_size, int) or isinstance(expected_size, bool)
-                    or not isinstance(expected_mtime, (int, float)) or isinstance(expected_mtime, bool)):
+                    or not isinstance(expected_mtime, (int, float)) or isinstance(expected_mtime, bool)
+                    or not isinstance(expected_mtime_ns, int) or isinstance(expected_mtime_ns, bool)):
                 raise ValueError
         except (KeyError, TypeError, ValueError):
             skipped.append({"index": index, "path": path_value, "status": "skipped_invalid_metadata"})
             continue
-        if info.st_size != expected_size or int(info.st_mtime) != int(expected_mtime):
+        if info.st_size != expected_size or int(info.st_mtime) != int(expected_mtime) or info.st_mtime_ns != expected_mtime_ns:
             skipped.append({"index": index, "path": path_value, "status": "skipped_changed_since_preview"})
             continue
         if info.st_mtime > cutoff:
             skipped.append({"index": index, "path": path_value, "status": "skipped_not_old_enough"})
             continue
+        remaining_hash_budget = MAX_QUARANTINE_HASH_BYTES - total_hash_bytes
+        if info.st_size > remaining_hash_budget:
+            skipped.append({"index": index, "path": path_value, "status": "skipped_hash_budget"})
+            continue
+        try:
+            digest = _sha256_file(path_value, byte_limit=remaining_hash_budget)
+            after_hash = _safe_regular_file_info(path_value, roots[label])
+        except (OSError, ValueError):
+            digest = None
+            after_hash = None
+        if (digest is None or after_hash is None or after_hash.st_size != expected_size
+                or after_hash.st_mtime_ns != expected_mtime_ns):
+            skipped.append({"index": index, "path": path_value, "status": "skipped_hash_unavailable_or_changed"})
+            continue
+        total_hash_bytes += after_hash.st_size
         ready.append({
             "original_path": str(Path(path_value)),
             "root_label": label,
-            "size_bytes": int(info.st_size),
-            "modified_epoch": int(info.st_mtime),
+            "size_bytes": int(after_hash.st_size),
+            "modified_epoch": int(after_hash.st_mtime),
+            "modified_ns": int(after_hash.st_mtime_ns),
+            "sha256": digest,
         })
 
     report = {
@@ -934,6 +1262,18 @@ def quarantine_cleanup_candidates(
     _write_quarantine_manifest(manifest_path, manifest)
     report["manifest_path"] = str(manifest_path)
     report["status"] = "in_progress"
+    report["audit_status"] = "unavailable"
+    try:
+        _persist_pc_care_audit_event(
+            "quarantine", "started", "in_progress",
+            item_count=len(manifest_items), session_id=session_name, audit_dir=audit_dir,
+        )
+    except (OSError, ValueError):
+        report["status"] = "audit_unavailable"
+        report["files_quarantined"] = 0
+        report["audit_status"] = "write_failed"
+        return report
+    report["audit_status"] = "written"
 
     for item in manifest_items:
         source = Path(item["original_path"])
@@ -941,6 +1281,7 @@ def quarantine_cleanup_candidates(
         fresh_info = _safe_regular_file_info(source, source_root)
         if (fresh_info is None or fresh_info.st_size != item["size_bytes"]
                 or int(fresh_info.st_mtime) != item["modified_epoch"]
+                or fresh_info.st_mtime_ns != item["modified_ns"]
                 or fresh_info.st_mtime > cutoff):
             item["status"] = "skipped_changed_before_move"
             report["items"].append({"path": item["original_path"], "status": item["status"]})
@@ -992,6 +1333,16 @@ def quarantine_cleanup_candidates(
     report["files_skipped"] = sum(1 for item in report["items"] if str(item.get("status", "")).startswith("skipped") or item.get("status") == "move_failed")
     if report["status"] != "manifest_write_failed":
         report["status"] = "completed" if report["files_skipped"] == 0 else "partial"
+    try:
+        _persist_pc_care_audit_event(
+            "quarantine", "completed", report["status"],
+            item_count=len(manifest_items), succeeded_count=report["files_quarantined"],
+            skipped_count=report["files_skipped"], session_id=session_name, audit_dir=audit_dir,
+        )
+    except (OSError, ValueError):
+        report["audit_status"] = "final_write_failed"
+        if report["status"] == "completed":
+            report["status"] = "audit_write_failed"
     return report
 
 
@@ -1000,67 +1351,61 @@ def restore_quarantined_files(
     *,
     confirmation: str,
     scan_roots: list[tuple[str, Path]] | None = None,
+    audit_dir: str | Path | None = None,
 ) -> dict:
-    """Restore quarantined files to their original approved temp locations; never overwrite."""
+    """Restore verified quarantined files to their original approved temp locations; never overwrite."""
     if confirmation != RESTORE_CONFIRMATION:
         raise ValueError("Restore cancelled: the exact confirmation phrase was not supplied.")
-    path = Path(manifest_path).expanduser()
-    if not path.is_absolute() or path.name != "manifest.json" or _is_link_or_reparse(path):
-        raise ValueError("Select a regular manifest.json inside a BOTPYTON quarantine session.")
-    session_dir = path.parent
-    base = session_dir.parent
-    if not session_dir.name.startswith("session-") or base.name.casefold() != "quarantine":
-        raise ValueError("Manifest is not in a recognized BOTPYTON Quarantine session.")
-    if _is_link_or_reparse(session_dir) or _is_link_or_reparse(base) or not _no_link_components(path):
-        raise ValueError("Manifest or quarantine path contains a link/reparse point.")
-    if path.stat().st_size > 200_000:
-        raise ValueError("Quarantine manifest exceeds 200000 bytes.")
-    manifest = json.loads(path.read_text(encoding="utf-8-sig"))
-    if (not isinstance(manifest, dict) or manifest.get("product") != "BOTPYTON PC Care"
-            or manifest.get("schema_version") != QUARANTINE_MANIFEST_SCHEMA
-            or manifest.get("session_id") != session_dir.name
-            or not isinstance(manifest.get("items"), list)
-            or len(manifest["items"]) > MAX_QUARANTINE_CANDIDATES):
-        raise ValueError("Quarantine manifest is invalid or exceeds its safety limits.")
-
+    path, session_dir, manifest = _load_valid_quarantine_manifest(manifest_path)
     roots = _approved_temporary_roots(scan_roots)
+    try:
+        _persist_pc_care_audit_event(
+            "restore", "started", "in_progress",
+            item_count=len(manifest["items"]), session_id=session_dir.name, audit_dir=audit_dir,
+        )
+    except (OSError, ValueError):
+        return {
+            "product": "BOTPYTON PC Care", "schema_version": 1,
+            "status": "audit_unavailable", "read_only": False, "network_used": False,
+            "files_restored": 0, "files_skipped": len(manifest["items"]),
+            "files_deleted": 0, "settings_changed": False, "manifest_path": str(path),
+            "items": [], "audit_status": "write_failed",
+            "limitations": ["Restore was not started because its audit start record could not be persisted."],
+        }
+
     restored: list[dict] = []
     skipped: list[dict] = []
+    total_hashed = 0
     for item in manifest["items"]:
         if not isinstance(item, dict):
             skipped.append({"status": "skipped_invalid_manifest_entry"})
             continue
-        if item.get("status") == "restored":
-            skipped.append({"path": item.get("original_path"), "status": "already_restored"})
+        inspected, used = _inspect_quarantine_item(
+            item, session_dir, roots,
+            hash_budget_remaining=MAX_QUARANTINE_HASH_BYTES - total_hashed,
+        )
+        total_hashed += used
+        if inspected["status"] == "already_restored":
+            skipped.append({"path": inspected.get("path"), "status": "already_restored"})
             continue
-        original_value = item.get("original_path")
-        label = item.get("root_label")
-        name = item.get("quarantine_name")
-        if (not isinstance(original_value, str) or not isinstance(label, str)
-                or label not in roots or not isinstance(name, str)
-                or Path(name).name != name or name in {"", ".", ".."}):
-            skipped.append({"path": original_value, "status": "skipped_unapproved_manifest_path"})
+        if not inspected.get("ready"):
+            skipped.append({"path": inspected.get("path"), "status": inspected["status"]})
             continue
+        original_value = item["original_path"]
+        name = item["quarantine_name"]
         quarantine_file = session_dir / name
-        if _is_link_or_reparse(quarantine_file) or not _no_link_components(quarantine_file, stop_at=session_dir):
-            skipped.append({"path": original_value, "status": "skipped_unsafe_quarantine_file"})
-            continue
-        try:
-            quarantine_info = quarantine_file.stat(follow_symlinks=False)
-            import stat as stat_module
-            if not stat_module.S_ISREG(quarantine_info.st_mode):
-                skipped.append({"path": original_value, "status": "skipped_non_regular_quarantine_file"})
-                continue
-            expected_size = item.get("size_bytes")
-            if not isinstance(expected_size, int) or isinstance(expected_size, bool) or quarantine_info.st_size != expected_size:
-                skipped.append({"path": original_value, "status": "skipped_quarantine_file_changed"})
-                continue
-        except OSError:
-            skipped.append({"path": original_value, "status": "skipped_quarantine_file_missing"})
-            continue
-        destination = _safe_restore_destination(original_value, roots[label])
+        destination = _safe_restore_destination(original_value, roots[item["root_label"]])
         if destination is None:
             skipped.append({"path": original_value, "status": "skipped_destination_exists_or_unsafe"})
+            continue
+        # Revalidate integrity immediately before moving; never overwrite an existing destination.
+        repeated, repeated_bytes = _inspect_quarantine_item(
+            item, session_dir, roots,
+            hash_budget_remaining=MAX_QUARANTINE_HASH_BYTES - total_hashed,
+        )
+        total_hashed += repeated_bytes
+        if not repeated.get("ready"):
+            skipped.append({"path": original_value, "status": repeated["status"]})
             continue
         item["status"] = "restoring"
         _write_quarantine_manifest(path, manifest)
@@ -1070,11 +1415,7 @@ def restore_quarantined_files(
             item["status"] = "quarantined"
             item["failure_type"] = type(exc).__name__
             _write_quarantine_manifest(path, manifest)
-            skipped.append({
-                "path": original_value,
-                "status": "restore_failed",
-                "failure_type": type(exc).__name__,
-            })
+            skipped.append({"path": original_value, "status": "restore_failed", "failure_type": type(exc).__name__})
             continue
         item["status"] = "restored"
         _write_quarantine_manifest(path, manifest)
@@ -1085,22 +1426,38 @@ def restore_quarantined_files(
         for item in manifest["items"]
     ) else "partial"
     _write_quarantine_manifest(path, manifest)
+    final_status = "restored" if not skipped else ("partial" if restored else "no_files_restored")
+    audit_status = "written"
+    try:
+        _persist_pc_care_audit_event(
+            "restore", "completed", final_status,
+            item_count=len(manifest["items"]), succeeded_count=len(restored),
+            skipped_count=len(skipped), session_id=session_dir.name, audit_dir=audit_dir,
+        )
+    except (OSError, ValueError):
+        audit_status = "final_write_failed"
+        if final_status == "restored":
+            final_status = "audit_write_failed"
     return {
         "product": "BOTPYTON PC Care",
         "schema_version": 1,
-        "status": "restored" if not skipped else ("partial" if restored else "no_files_restored"),
+        "status": final_status,
         "read_only": False,
         "network_used": False,
         "files_restored": len(restored),
         "files_skipped": len(skipped),
         "manifest_path": str(path),
+        "hash_bytes_examined": total_hashed,
+        "audit_status": audit_status,
         "items": restored + skipped,
         "files_deleted": 0,
         "settings_changed": False,
         "limitations": [
+            "SHA-256 integrity must match the quarantine manifest before a file is restored.",
             "Existing original paths are never overwritten.",
             "Restoration is restricted to approved temporary roots recorded in the manifest.",
             "Cross-volume moves may be rejected; a failed restore leaves the file in quarantine.",
+            "At most 512 MiB of file contents are hashed per run.",
         ],
     }
 

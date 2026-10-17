@@ -296,3 +296,10 @@ Restore with \`python -m bot.main --pc-cleanup-restore "PATH\\manifest.json"\` a
 Ejecuta manualmente \`python -m bot.main --pc-update-check\` o elige N en \`BOTPYTON.bat\`. Esta opción puede utilizar la red, pero solo lista las aplicaciones para las que WinGet informa una actualización disponible. Antes de consultar el origen, BOTPYTON valida que el alias de WinGet corresponda al WindowsApps del usuario y que la fuente \`winget\` esté marcada como fiable y apunte exactamente a \`https://cdn.winget.microsoft.com/cache\`.
 
 El único comando de consulta es \`winget list --upgrade-available --source winget --disable-interactivity\`, con timeout de 30 segundos y salida limitada. BOTPYTON no ejecuta \`winget upgrade\`, \`winget install\`, \`--all\`, instaladores ni acepta acuerdos por el usuario. Si no puede verificar la fuente, se niega a consultar. Esto no comprueba controladores, Windows Update ni actualizaciones de Microsoft Store. La referencia del comando está en [Microsoft Learn: list](https://learn.microsoft.com/en-us/windows/package-manager/winget/list) y [Microsoft Learn: source](https://learn.microsoft.com/en-us/windows/package-manager/winget/source).
+
+
+## Phase 18: integridad, vista previa de restauracion y auditoria local
+
+Cada manifiesto nuevo de cuarentena guarda el hash SHA-256 y la marca de tiempo de alta precision de cada archivo. BOTPYTON verifica el hash antes de restaurar; si el contenido cambio, falta o excede el presupuesto, se deja en cuarentena. El cálculo usa bloques de 256 KiB y limita los datos leídos a 512 MiB por operación.
+
+Ejecuta \`python -m bot.main --pc-cleanup-restore-preview "PATH\\manifest.json"\` para comprobar integridad y conflictos de destino sin modificar nada. Ejecuta \`python -m bot.main --pc-audit\` para leer el registro local de operaciones. La auditoría registra tipos de operación, estado y contadores, no rutas exactas; está limitada a 200 registros mostrados, archivos/eventos y bytes acotados. Los hashes detectan cambios accidentales, pero no sustituyen una firma criptográfica ni una copia de seguridad externa. Revisa \`docs/PC-CARE-ROADMAP.md\` para los límites.

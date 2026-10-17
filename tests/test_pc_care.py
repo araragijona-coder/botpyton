@@ -165,7 +165,7 @@ class PcCareTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 quarantine_cleanup_candidates(
                     preview, confirmation="yes", scan_roots=[("temporary files", temp_root)],
-                    quarantine_root=quarantine_root, now=now,
+                    quarantine_root=quarantine_root, now=now, audit_dir=Path(tmp) / "audit",
                 )
             self.assertTrue(old_file.exists())
             self.assertFalse(quarantine_root.exists())
@@ -200,7 +200,7 @@ class PcCareTests(unittest.TestCase):
             self.assertTrue((manifest_path.parent / "0001-old.tmp").is_file())
             restored = restore_quarantined_files(
                 manifest_path, confirmation=RESTORE_CONFIRMATION,
-                scan_roots=[("temporary files", temp_root)],
+                scan_roots=[("temporary files", temp_root)], audit_dir=Path(tmp) / "audit",
             )
             self.assertEqual(restored["status"], "restored")
             self.assertEqual(restored["files_restored"], 1)
@@ -223,7 +223,7 @@ class PcCareTests(unittest.TestCase):
                 quarantine_cleanup_candidates(
                     preview, confirmation=QUARANTINE_CONFIRMATION,
                     scan_roots=[("temporary files", root)],
-                    quarantine_root=Path(tmp) / "Quarantine", now=now,
+                    quarantine_root=Path(tmp) / "Quarantine", now=now, audit_dir=Path(tmp) / "audit",
                 )
             self.assertTrue(old_file.exists())
 
@@ -270,7 +270,7 @@ class PcCareTests(unittest.TestCase):
             old_file.write_bytes(b"user's new file")
             restored = restore_quarantined_files(
                 moved["manifest_path"], confirmation=RESTORE_CONFIRMATION,
-                scan_roots=[("temporary files", root)],
+                scan_roots=[("temporary files", root)], audit_dir=Path(tmp) / "audit",
             )
             self.assertEqual(restored["files_restored"], 0)
             self.assertEqual(old_file.read_bytes(), b"user's new file")
@@ -380,6 +380,119 @@ class PcCareTests(unittest.TestCase):
         self.assertEqual(result["status"], "timeout")
         self.assertTrue(result["network_access_requested"])
         self.assertEqual(result["updates_installed"], 0)
+
+    def test_quarantine_manifest_contains_sha256_and_audit_is_verified(self):
+        import hashlib
+        import json
+        from bot.pc_care import (
+            QUARANTINE_CONFIRMATION, _persist_pc_care_audit_event, read_pc_care_audit,
+            quarantine_cleanup_candidates,
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "temporary"
+            root.mkdir()
+            quarantine_root = Path(tmp) / "Quarantine"
+            audit_dir = Path(tmp) / "audit"
+            old_file = root / "old.tmp"
+            content = b"recoverable payload"
+            old_file.write_bytes(content)
+            now = 1_700_000_000.0
+            os.utime(old_file, (now - 12 * 86400, now - 12 * 86400))
+            preview = get_cleanup_preview(scan_roots=[("temporary files", root)], now=now)
+            result = quarantine_cleanup_candidates(
+                preview, confirmation=QUARANTINE_CONFIRMATION,
+                scan_roots=[("temporary files", root)], quarantine_root=quarantine_root,
+                now=now, audit_dir=audit_dir,
+            )
+            self.assertEqual(result["status"], "completed")
+            manifest = json.loads(Path(result["manifest_path"]).read_text(encoding="utf-8"))
+            self.assertEqual(manifest["items"][0]["sha256"], hashlib.sha256(content).hexdigest())
+            event = _persist_pc_care_audit_event(
+                "restore", "started", "test-only", item_count=1, audit_dir=audit_dir,
+            )
+            self.assertEqual(event["integrity"], "written")
+            audit = read_pc_care_audit(audit_dir=audit_dir)
+            self.assertEqual(audit["integrity_status"], "verified")
+            self.assertGreaterEqual(audit["records_returned"], 3)
+            self.assertTrue(all("path" not in item for item in audit["items"]))
+
+    def test_restore_rejects_tampered_quarantine_content_by_sha256(self):
+        from bot.pc_care import (
+            QUARANTINE_CONFIRMATION, RESTORE_CONFIRMATION,
+            quarantine_cleanup_candidates, restore_quarantined_files,
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "temporary"
+            root.mkdir()
+            quarantine_root = Path(tmp) / "Quarantine"
+            audit_dir = Path(tmp) / "audit"
+            original = root / "tamper.tmp"
+            original.write_bytes(b"original")
+            now = 1_700_000_000.0
+            os.utime(original, (now - 12 * 86400, now - 12 * 86400))
+            preview = get_cleanup_preview(scan_roots=[("temporary files", root)], now=now)
+            moved = quarantine_cleanup_candidates(
+                preview, confirmation=QUARANTINE_CONFIRMATION,
+                scan_roots=[("temporary files", root)], quarantine_root=quarantine_root,
+                now=now, audit_dir=audit_dir,
+            )
+            self.assertEqual(moved["files_quarantined"], 1)
+            stored = Path(moved["manifest_path"]).parent / "0001-tamper.tmp"
+            stored.write_bytes(b"tampered")
+            result = restore_quarantined_files(
+                moved["manifest_path"], confirmation=RESTORE_CONFIRMATION,
+                scan_roots=[("temporary files", root)], audit_dir=audit_dir,
+            )
+            self.assertEqual(result["files_restored"], 0)
+            self.assertEqual(result["files_skipped"], 1)
+            self.assertIn(result["items"][0]["status"], {"skipped_integrity_mismatch", "skipped_quarantine_file_changed"})
+            self.assertFalse(original.exists())
+            self.assertTrue(stored.exists())
+
+    def test_restore_preview_is_read_only_and_detects_destination_conflict(self):
+        from bot.pc_care import QUARANTINE_CONFIRMATION, quarantine_cleanup_candidates, preview_quarantined_restore
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "temporary"
+            root.mkdir()
+            quarantine_root = Path(tmp) / "Quarantine"
+            old_file = root / "conflict.tmp"
+            old_file.write_bytes(b"original")
+            now = 1_700_000_000.0
+            os.utime(old_file, (now - 12 * 86400, now - 12 * 86400))
+            preview = get_cleanup_preview(scan_roots=[("temporary files", root)], now=now)
+            moved = quarantine_cleanup_candidates(
+                preview, confirmation=QUARANTINE_CONFIRMATION,
+                scan_roots=[("temporary files", root)], quarantine_root=quarantine_root,
+                now=now, audit_dir=Path(tmp) / "audit",
+            )
+            stored = Path(moved["manifest_path"]).parent / "0001-conflict.tmp"
+            old_file.write_bytes(b"new file created after quarantine")
+            before = old_file.read_bytes()
+            dry_run = preview_quarantined_restore(
+                moved["manifest_path"], scan_roots=[("temporary files", root)],
+            )
+            self.assertTrue(dry_run["read_only"])
+            self.assertEqual(dry_run["ready_count"], 0)
+            self.assertEqual(dry_run["files_restored"], 0)
+            self.assertEqual(dry_run["items"][0]["status"], "skipped_destination_exists_or_unsafe")
+            self.assertEqual(old_file.read_bytes(), before)
+            self.assertTrue(stored.exists())
+
+    def test_audit_detects_modified_event_checksum(self):
+        import json
+        from bot.pc_care import _persist_pc_care_audit_event, read_pc_care_audit
+        with tempfile.TemporaryDirectory() as tmp:
+            audit_dir = Path(tmp) / "audit"
+            _persist_pc_care_audit_event("quarantine", "started", "in_progress", audit_dir=audit_dir)
+            event_path = next(audit_dir.glob("event-*.json"))
+            data = json.loads(event_path.read_text(encoding="utf-8"))
+            data["status"] = "altered"
+            event_path.write_text(json.dumps(data), encoding="utf-8")
+            result = read_pc_care_audit(audit_dir=audit_dir)
+            self.assertEqual(result["status"], "integrity_error")
+            self.assertEqual(result["integrity_status"], "error")
+            self.assertEqual(result["items"][0]["integrity"], "failed")
+
 
 if __name__ == "__main__":
     unittest.main()
