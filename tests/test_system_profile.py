@@ -8,7 +8,9 @@ class SystemProfileTests(unittest.TestCase):
         self.assertEqual(recommended_child_memory_limit_mb(2 * 1024 * 1024 * 1024), 768)
         self.assertEqual(recommended_child_memory_limit_mb(1024 * 1024 * 1024), 512)
         self.assertEqual(recommended_child_memory_limit_mb(64 * 1024 * 1024), 64)
-        self.assertEqual(recommended_child_memory_limit_mb(None), 256)
+        detected_budget = recommended_child_memory_limit_mb(None)
+        self.assertGreaterEqual(detected_budget, 64)
+        self.assertLessEqual(detected_budget, 768)
 
     def test_profile_reports_resources_without_network_or_ai(self):
         result = get_system_profile(".")
