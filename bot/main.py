@@ -12,6 +12,7 @@ from .diagnostics import diagnose_failure
 from .executor import TaskExecutor
 from .github_ops import GitHubClient, GitHubOpsError, submit_change_plan
 from .memory import JsonMemory, MemoryError
+from .local_changes import LocalChangeError, apply_local_change_plan, read_local_plan, validate_local_change_plan
 from .orchestration import (
     OrchestrationError,
     submit_change_plan_batch,
@@ -74,6 +75,9 @@ def main(argv: list[str] | None = None) -> int:
                         help="bounded read-only project inventory; candidate checks are not executed")
     parser.add_argument("--tools", action="store_true", help="list installed developer tools without running them")
     parser.add_argument("--probe-tool", metavar="TOOL_ID", help="run the fixed version probe for one registered tool")
+    parser.add_argument("--local-plan", metavar="PATH", help="validate a declarative local file-change plan (dry-run by default)")
+    parser.add_argument("--execute-local-plan", action="store_true", help="apply --local-plan after hash checks and create backups")
+    parser.add_argument("--project-root", default=".", help="authorized project directory for --local-plan (default: current directory)")
     parser.add_argument("--validate-task", metavar="PATH", help="validate a JSON task record")
     parser.add_argument("--validate-task-batch", metavar="PATH",
                         help="validate a bounded JSON task object/array without queue mutation")
@@ -120,6 +124,16 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         if args.probe_tool:
             _print_json(run_tool_probe(args.probe_tool, root=Path.cwd()))
+            return 0
+        if args.execute_local_plan and not args.local_plan:
+            raise LocalChangeError("--execute-local-plan requires --local-plan")
+        if args.local_plan:
+            plan_data = read_local_plan(args.local_plan)
+            project_root = Path(args.project_root).expanduser().resolve()
+            result = (apply_local_change_plan(plan_data, project_root)
+                      if args.execute_local_plan
+                      else validate_local_change_plan(plan_data, project_root))
+            _print_json(result)
             return 0
         if args.autonomous_cycle:
             result = run_autonomous_cycle(
@@ -241,7 +255,7 @@ def main(argv: list[str] | None = None) -> int:
         parser.print_help()
         return 0
     except (OSError, UnicodeError, json.JSONDecodeError, PolicyError, MemoryError,
-            QueueError, CheckpointError, GitHubOpsError, AutonomousCycleError, ProcessRunnerError, ValueError) as exc:
+            QueueError, CheckpointError, GitHubOpsError, AutonomousCycleError, ProcessRunnerError, LocalChangeError, ValueError) as exc:
         print(f"CHECK FAIL: {exc}", file=sys.stderr)
         return 2
 
