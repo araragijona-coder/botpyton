@@ -199,7 +199,7 @@ python -m bot.main --pc-cleanup-restore "C:\\path\\to\\BOTPYTON\\Quarantine\\ses
 - Adds `python -m bot.main --pc-desktop-cache-preview` for explicitly allowlisted Discord and Slack Electron cache folders under the current user's `%APPDATA%`; this is a separate catalog from the browser-cache quarantine command.
 - Eligible locations are only `Cache`, `Code Cache`, and `GPUCache` under each recognized app root. Files at least one day old are listed with app, cache area, exact path, size and age.
 - Excludes app databases, Local Storage, IndexedDB, cookies, tokens, sessions, settings, attachments, downloads/media, and any other app/root not explicitly named. The code does not read file contents, move/delete files, change settings, contact the network, or call AI APIs.
-- Bounds: default 1,000 entries, 100 candidates, depth 3 and five seconds; hard caps 2,000 entries, 150 candidates, depth 3 and eight seconds. Links/reparse points are skipped; errors and limits mark the result partial.
+- Bounds: default 1,000 entries, 100 candidates, depth 3 and five seconds; hard caps 2,000 entries, 150 candidates, depth 3 and eight seconds. Links/reparse points are skipped; canonical app/cache roots are checked for containment before traversal; errors and limits mark the result partial.
 - Adds fixture tests and a Windows CI smoke invocation. This phase broadens **discovery only**. Discord/Slack candidates are deliberately not accepted by the existing browser quarantine/restore workflow; a future movement feature must separately review each app's lifecycle, path safety and restore behavior first.
 - Old age does not prove a file is inactive or safe to remove. Close the relevant app before any future cleanup. No target-PC files have been changed; target machine validation remains pending.
 
@@ -218,3 +218,11 @@ python -m bot.main --pc-cleanup-restore "C:\\path\\to\\BOTPYTON\\Quarantine\\ses
 - Adds a focused fixture with old files in those three cache areas and confirms that Local Storage, User/globalStorage, User/workspaceStorage, and CachedExtensionVSIXs are not candidates and remain untouched.
 - The standard profile root is grounded in the [VS Code portable-mode documentation](https://code.visualstudio.com/docs/setup/portable), which identifies %APPDATA%\Code as the normal Windows user-data directory. The [VS Code repository's selective-copy exclusions](https://github.com/microsoft/vscode/blob/main/.agents/skills/launch/scripts/launch.sh) distinguish Chromium cache folders from persistent workspace/user state.
 - Portable-mode data/user-data, custom --user-data-dir locations, Insiders, VSCodium, extension folders, and all unlisted locations remain out of scope. The command still only inventories; it does not read file contents or move/delete any VS Code data, and these candidates are not accepted by browser-cache quarantine.
+
+
+## Phase 33 — Canonical cache-root containment (preview only)
+
+- Tightens `bot/desktop_app_cache.py` after Phase 31/32 review: the resolved application root must remain an immediate child of the resolved profile base, and a resolved cache area must remain an immediate child of the canonical app root.
+- Rechecks each queued traversal directory immediately before scanning it and confirms its canonical path remains inside that cache root. This reduces the chance that a redirected cache directory or subdirectory is traversed after an earlier path check.
+- Adds a regression test that places a cache-area symlink to an external folder and verifies the scan marks the result partial, returns no candidates, and leaves the external file untouched.
+- Updates the Windows CI step label so it accurately names the Discord, Slack, and VS Code catalog. No new application profiles, file movement, deletion, or quarantine are enabled.

@@ -67,6 +67,28 @@ class DesktopAppCacheTests(unittest.TestCase):
             self.assertTrue(all(path.exists() for path in allowed))
             self.assertEqual(result["files_moved"], 0)
             self.assertEqual(result["files_deleted"], 0)
+    def test_cache_area_redirect_is_rejected(self):
+        now = 1_700_000_000.0
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            appdata = root / "Roaming"
+            external_cache = root / "outside-cache"
+            outside_file = self.old_file(external_cache / "old.bin", now)
+            redirected = appdata / "discord" / "Cache"
+            redirected.parent.mkdir(parents=True)
+            try:
+                redirected.symlink_to(external_cache, target_is_directory=True)
+            except (OSError, NotImplementedError) as exc:
+                self.skipTest(f"directory symlink unavailable in this environment: {exc}")
+
+            result = preview_desktop_app_cache(
+                env={"APPDATA": str(appdata)}, windows=True, now=now,
+            )
+            self.assertEqual(result["status"], "preview_partial")
+            self.assertGreaterEqual(result["unsafe_paths_skipped"], 1)
+            self.assertEqual(result["candidate_count"], 0)
+            self.assertTrue(outside_file.exists())
+
     def test_profile_base_with_symlinked_ancestor_is_rejected(self):
         now = 1_700_000_000.0
         with tempfile.TemporaryDirectory() as tmp:

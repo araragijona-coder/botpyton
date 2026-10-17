@@ -122,6 +122,12 @@ def preview_desktop_app_cache(*, env: dict[str, str] | None = None,
                 unsafe_count += 1
                 limited = True
                 continue
+            resolved_base_root = base_root.resolve(strict=True)
+            resolved_app_root = app_root.resolve(strict=True)
+            if resolved_app_root.parent != resolved_base_root:
+                unsafe_count += 1
+                limited = True
+                continue
             for area in CACHE_AREAS:
                 cache_root = app_root / area
                 try:
@@ -132,6 +138,12 @@ def preview_desktop_app_cache(*, env: dict[str, str] | None = None,
                         limited = True
                         continue
                     resolved_root = cache_root.resolve(strict=True)
+                    # A cache-area junction swapped in between the earlier
+                    # lstat-style check and resolve must not redirect traversal.
+                    if resolved_root.parent != resolved_app_root:
+                        unsafe_count += 1
+                        limited = True
+                        continue
                     roots += 1
                     stack: list[tuple[Path, int]] = [(resolved_root, 0)]
                     while stack and not stop:
@@ -139,7 +151,17 @@ def preview_desktop_app_cache(*, env: dict[str, str] | None = None,
                             limited = stop = True
                             break
                         current, depth = stack.pop()
-                        with os.scandir(current) as iterator:
+                        try:
+                            if _unsafe(current):
+                                unsafe_count += 1
+                                limited = True
+                                continue
+                            resolved_current = current.resolve(strict=True)
+                            if not resolved_current.is_relative_to(resolved_root):
+                                unsafe_count += 1
+                                limited = True
+                                continue
+                            with os.scandir(resolved_current) as iterator:
                             for item in iterator:
                                 if time.monotonic() >= deadline or entries >= max_entries:
                                     limited = stop = True
@@ -180,6 +202,8 @@ def preview_desktop_app_cache(*, env: dict[str, str] | None = None,
                                         break
                                 except OSError:
                                     errors += 1
+                        except OSError:
+                            errors += 1
                 except OSError:
                     errors += 1
                 if stop:
