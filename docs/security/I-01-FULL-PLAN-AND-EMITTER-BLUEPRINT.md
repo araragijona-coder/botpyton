@@ -119,3 +119,9 @@ Run the full existing test workflow on the final commit. Report exact head SHA a
 - Stage C — Adversarial simulation tests: expanded and passing on SHA 567b65cf5b52d375762be5a295a48d3d335ecf25; includes invalid identity types, malformed IDs/refs, invalid policy allowlists and limits, duplicate replay with changed payload, returned-record mutation isolation, and static checks against network/process/filesystem imports. Final candidate CI remains required.
 - Stage D — Independent trust-boundary review: NOT VERIFIED until the separate repository is explicitly authorized and created later, its owner/protection/credential path are evidenced, and the sender's trust assumptions are reviewed. No creation or activation is in scope now.
 - Final I-01 exit: blocked until every required gate is VERIFIED. No live PR submission, no merge, and no sender activation in this phase.
+
+## 6. Latest administrative evidence request and workflow audit
+
+The owner-facing remediation checklist and source-level workflow audit are maintained in [I-01-ADMIN-EVIDENCE-REQUEST-AND-WORKFLOW-AUDIT.md](I-01-ADMIN-EVIDENCE-REQUEST-AND-WORKFLOW-AUDIT.md). It records the exact branch-protection discrepancy, the administrative settings that must be inspected manually, and the scope/limits of the candidate workflow source audit. This does not modify GitHub settings or establish organization-level policy.
+
+Source audit confirms both sender jobs are disabled and have no sender execution steps at the audited candidate revision. The worker workflow still executes branch-controlled worker code with read-only token permissions, and third-party Actions are referenced by version tags rather than reviewed full SHAs. This is acceptable only as current containment; it is not a privileged trust boundary. Action pinning and effective administrative settings must be resolved before any future sender phase.
