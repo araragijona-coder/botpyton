@@ -894,7 +894,7 @@ class PcCareTests(unittest.TestCase):
         self.assertEqual(result["status"], "partial_limit")
         self.assertEqual(result["physical_disks_count"], 2)
         self.assertEqual(result["physical_disks"][0]["health_status"], "Unknown")
-        self.assertIn("not evidence", read_disk_health_inventory(windows=False)["limitations"][2])
+        self.assertIn("does not prove", read_disk_health_inventory(windows=False)["limitations"][2])
 
 
 
