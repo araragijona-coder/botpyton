@@ -65,7 +65,7 @@ def _safe_search_path(path_value: str | None, *, cwd: str | Path) -> str:
         try:
             # Reject lexical paths under cwd even if a repository-local junction/symlink
             # resolves elsewhere. Also reject external aliases which resolve back into cwd.
-            lexical = Path(os.path.abspath(str(candidate)))
+            lexical = Path(os.path.normpath(str(candidate)))
             if _path_is_same_or_within(lexical, current):
                 continue
             resolved = candidate.resolve(strict=True)
