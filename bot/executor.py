@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import json
 import os
-import subprocess
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -13,6 +12,7 @@ from .diagnostics import diagnose_failure
 from .fixes import apply_known_fix
 from .local_changes import apply_local_change_plan
 from .policy import PolicyError, validate_task
+from .process_runner import ProcessRunnerError, run_process
 from .verifier import verify_python_files
 
 _SKIP_DIRS = {".git", ".venv", "__pycache__", "node_modules", "dist", "build"}
@@ -161,31 +161,44 @@ class TaskExecutor:
         }
 
     def _run_tests(self) -> dict[str, Any]:
-        # Fixed argv only: task fields never enter the command or environment.
+        # Fixed argv only; the process runner strips credentials, caps output and
+        # applies a Windows memory Job Object limit when available.
         argv = [sys.executable, "-m", "unittest", "discover", "-s", "tests", "-v"]
         try:
-            completed = subprocess.run(
-                argv, cwd=self.root, shell=False, capture_output=True, text=True,
-                encoding="utf-8", errors="replace", timeout=self.test_timeout_seconds,
-                check=False, env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"},
+            completed = run_process(
+                argv,
+                cwd=self.root,
+                allowed_root=self.root,
+                approved_executables=[sys.executable],
+                timeout_seconds=self.test_timeout_seconds,
+                output_limit_bytes=12_000,
             )
-        except subprocess.TimeoutExpired as exc:
-            output = "\n".join(str(part) for part in (exc.stdout, exc.stderr) if part)
+        except ProcessRunnerError as exc:
             raise ActionFailure(
-                f"Fixed unit-test command timed out after {self.test_timeout_seconds}s",
-                log_text=output + "\nTimeoutExpired",
+                f"Controlled test process could not run: {exc}",
+                log_text=f"ProcessRunnerError: {exc}",
             ) from exc
-        output = (completed.stdout + "\n" + completed.stderr).strip()
+        output = (completed["stdout"] + "\\n" + completed["stderr"]).strip()
         result = {
             "command_id": "python_unittest_discovery",
-            "exit_code": completed.returncode,
-            "stdout_tail": completed.stdout[-12000:],
-            "stderr_tail": completed.stderr[-12000:],
-            "timed_out": False,
+            "exit_code": completed["exit_code"],
+            "stdout_tail": completed["stdout"],
+            "stderr_tail": completed["stderr"],
+            "stdout_truncated": completed["stdout_truncated"],
+            "stderr_truncated": completed["stderr_truncated"],
+            "timed_out": completed["timed_out"],
+            "timeout_seconds": completed["timeout_seconds"],
+            "process_memory_limit_mb": completed["process_memory_limit_mb"],
+            "process_memory_limit_enforced": completed["process_memory_limit_enforced"],
         }
-        if completed.returncode != 0:
+        if completed["timed_out"]:
             raise ActionFailure(
-                f"Fixed unit-test command failed with exit code {completed.returncode}",
+                f"Fixed unit-test command timed out after {self.test_timeout_seconds}s",
+                log_text=output + "\\nTimeoutExpired",
+            )
+        if completed["exit_code"] != 0:
+            raise ActionFailure(
+                f"Fixed unit-test command failed with exit code {completed['exit_code']}",
                 log_text=output,
             )
         return result
