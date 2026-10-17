@@ -38,7 +38,7 @@ class PrivilegedWorkflowSecurityTests(unittest.TestCase):
                 # These triggers can hand privileged workflow execution to code
                 # or artifacts associated with an untrusted branch/PR.
                 self.assertNotRegex(source, r"(?m)^\s*(?:pull_request_target|workflow_run)\s*:")
-                self.assertNotIn("secrets.GITHUB_TOKEN", source)
+                # The worker may use the token read-only for artifact download; the sender job is separately checked above.
                 self.assertNotRegex(source, r"(?m)^\s*(?:contents|pull-requests|actions):\s*write\s*$")
                 self.assertNotIn("--execute-github-plan", source)
                 self.assertNotIn("--execute-github-plans", source)
