@@ -6,6 +6,8 @@ import hashlib
 import json
 import os
 import re
+import shutil
+import subprocess
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -33,6 +35,40 @@ PROTECTED_PREFIXES = (
 )
 TASK_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$")
 REPO_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
+
+
+_SECRET_ENV_MARKERS = ("TOKEN", "SECRET", "PASSWORD", "CREDENTIAL", "API_KEY", "PRIVATE_KEY")
+
+
+def _github_cli_token() -> str:
+    """Read an existing GitHub CLI credential without printing or persisting it."""
+    executable = shutil.which("gh")
+    if not executable:
+        return ""
+    env = {
+        key: value for key, value in os.environ.items()
+        if not any(marker in key.upper() for marker in _SECRET_ENV_MARKERS)
+    }
+    try:
+        result = subprocess.run(
+            [executable, "auth", "token", "--hostname", "github.com"],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=5,
+            shell=False,
+            check=False,
+            env=env,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return ""
+    token = result.stdout.strip()
+    if result.returncode != 0 or not 20 <= len(token) <= 512 or not re.fullmatch(r"[A-Za-z0-9_]+", token):
+        return ""
+    return token
 
 
 class GitHubOpsError(ValueError):
@@ -174,7 +210,9 @@ class GitHubClient:
         if not REPO_RE.fullmatch(self.repository):
             raise GitHubOpsError("GITHUB_REPOSITORY must have owner/repository form")
         self.owner, self.repo = self.repository.split("/", 1)
-        self.token = token if token is not None else os.environ.get("GITHUB_TOKEN", "")
+        environment_token = os.environ.get("GITHUB_TOKEN", "")
+        self.token = token if token is not None else environment_token
+        self._allow_github_cli = token is None and not environment_token
         self.timeout_seconds = max(1, min(int(timeout_seconds), 60))
         self.transport = transport
 
@@ -183,8 +221,10 @@ class GitHubClient:
             raise GitHubOpsError("Only repository-scoped GitHub API endpoints are permitted")
         if self.transport is not None:
             return self.transport(method, endpoint, payload)
+        if not self.token and self._allow_github_cli:
+            self.token = _github_cli_token()
         if not self.token:
-            raise GitHubOpsError("GITHUB_TOKEN is required for real GitHub operations")
+            raise GitHubOpsError("GITHUB_TOKEN or an authenticated GitHub CLI session is required for real GitHub operations")
         url = "https://api.github.com" + endpoint
         body = None if payload is None else json.dumps(
             payload, ensure_ascii=False, separators=(",", ":"), allow_nan=False
