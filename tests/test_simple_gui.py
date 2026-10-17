@@ -1,6 +1,8 @@
 import unittest
+from types import SimpleNamespace
+from unittest.mock import patch
 
-from bot.simple_gui import ANALYSIS_STEPS, format_bytes, report_status, summarize_report
+from bot.simple_gui import ANALYSIS_STEPS, SimpleBotPytonApp, format_bytes, report_status, summarize_report
 
 
 class SimpleDashboardTests(unittest.TestCase):
@@ -48,6 +50,48 @@ class SimpleDashboardTests(unittest.TestCase):
         self.assertNotIn("Low available physical memory", output)
         self.assertNotIn("Inspect current heavy processes", output)
         self.assertIn("RAM disponible: 800 MB", output)
+
+    def test_critical_findings_override_a_nominal_report_status(self):
+        state, category = report_status({
+            "status": "collected",
+            "findings": [{"id": "disk_issue", "severity": "critical"}],
+        })
+        self.assertEqual(state, "Necesita revisión")
+        self.assertEqual(category, "error")
+
+    def test_warning_findings_are_not_hidden_by_a_nominal_report_status(self):
+        state, category = report_status({
+            "status": "collected",
+            "findings": [{"id": "memory_issue", "severity": "warning"}],
+        })
+        self.assertEqual(state, "Hay avisos para revisar")
+        self.assertEqual(category, "warning")
+
+    def test_full_scan_records_an_exception_and_continues_remaining_checks(self):
+        app = SimpleBotPytonApp.__new__(SimpleBotPytonApp)
+        app.stage_label = SimpleNamespace(configure=lambda **kwargs: None)
+        app._post = lambda callback: callback()
+        captured = []
+        app._finish_reports = lambda title, reports: captured.append((title, reports))
+        calls = []
+
+        def fake_call(argv):
+            calls.append(argv)
+            if len(calls) == 1:
+                raise OSError("simulated diagnostic failure")
+            return 0, '{"status":"collected"}'
+
+        with patch("bot.simple_gui._call_main", side_effect=fake_call):
+            app._full_scan_worker()
+
+        self.assertEqual(len(calls), len(ANALYSIS_STEPS))
+        self.assertEqual(len(captured), 1)
+        title, reports = captured[0]
+        self.assertEqual(title, "Análisis amplio del PC")
+        self.assertEqual(len(reports), len(ANALYSIS_STEPS))
+        self.assertEqual(reports[0][1], 1)
+        self.assertEqual(reports[0][3]["status"], "error")
+        self.assertEqual(reports[1][1], 0)
 
 
 if __name__ == "__main__":
