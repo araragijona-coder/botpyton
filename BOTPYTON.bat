@@ -18,10 +18,16 @@ echo  4. Validar plan de cambios locales (sin escribir)
 echo  5. Aplicar plan local (escritura explicita + backups)
 echo  6. Comprobar el nucleo
 echo  7. Ejecutar las pruebas del propio BOTPYTON
-echo  8. Salir
+echo  8. Agregar tarea JSON a la cola
+echo  9. Ejecutar una tarea pendiente
+echo  A. Ver cola de tareas
+echo  B. Salir
 echo.
-choice /c 12345678 /n /m "Selecciona una opcion: "
-if errorlevel 8 goto end
+choice /c 123456789AB /n /m "Selecciona una opcion: "
+if errorlevel 11 goto end
+if errorlevel 10 goto queue
+if errorlevel 9 goto workonce
+if errorlevel 8 goto enqueue
 if errorlevel 7 goto tests
 if errorlevel 6 goto check
 if errorlevel 5 goto applyplan
@@ -86,6 +92,28 @@ echo.
 set /p "PLAN_PATH=Ruta completa del archivo JSON del plan: "
 set /p "PROJECT_PATH=Ruta completa de la carpeta del proyecto: "
 exit /b 0
+
+:enqueue
+echo.
+set "TASK_PATH="
+set /p "TASK_PATH=Ruta completa del archivo JSON de la tarea: "
+if not defined TASK_PATH goto menu
+python -m bot.main --enqueue "%TASK_PATH%"
+echo.
+pause
+goto menu
+
+:workonce
+python -m bot.main --work-once
+echo.
+pause
+goto menu
+
+:queue
+python -m bot.main --queue
+echo.
+pause
+goto menu
 
 :check
 python -m bot.main --check
