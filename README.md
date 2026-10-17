@@ -197,3 +197,6 @@ python -m bot.main --local-plan "C:\\path\\plan.json" --project-root "C:\\path\\
 To apply a plan, add `--execute-local-plan`. Existing files require a matching `expected_sha256`; changes are limited to 20 files, 200 KB per file and 500 KB of total content. Existing files are backed up outside the project root. Protected paths, traversal and symlink path components are rejected. See `docs/LOCAL-CHANGE-PLANS.md` for the schema and protections.
 
 The process runner uses separate arguments, an explicit executable allowlist, `shell=False`, a timeout, disconnected stdin, stripped credential-like environment variables and bounded returned output. It is not a general shell and does not execute commands discovered in repository text. These controls are foundations for the worker, not a claim that free-form programming tasks can already be autonomously solved.
+
+
+Local change plans can also be submitted as queue tasks using the allowlisted action `apply_local_plan`; the plan `task_id` must match the queue task `id`. This routes structured edits through the same deterministic worker and report pipeline instead of bypassing it. The goal text is treated as a label, not as executable instructions. Without an AI model, free-form requests still need an explicit plan or a deterministic procedure supported by the worker.
