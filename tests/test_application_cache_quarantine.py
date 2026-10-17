@@ -74,6 +74,32 @@ class ApplicationCacheQuarantineTests(unittest.TestCase):
             self.assertTrue(chosen.exists())
             self.assertFalse((Path(env["LOCALAPPDATA"]) / "BOTPYTON" / "BrowserCacheQuarantine").exists())
 
+    def test_quarantine_never_overwrites_a_destination_created_during_move(self):
+        from unittest import mock
+
+        with tempfile.TemporaryDirectory() as tmp:
+            _local, chosen, _untouched, env = self._fixture(tmp, 1_700_000_000.0)
+            real_link = os.link
+            sentinel = b"pre-existing quarantine data"
+
+            def create_collision_then_link(source, destination, *args, **kwargs):
+                Path(destination).write_bytes(sentinel)
+                return real_link(source, destination, *args, **kwargs)
+
+            with mock.patch("bot.application_cache_quarantine.os.link", side_effect=create_collision_then_link):
+                result = quarantine_application_cache_candidates(
+                    [str(chosen.resolve())], confirmation=CACHE_QUARANTINE_CONFIRMATION,
+                    env=env, windows=True,
+                )
+
+            self.assertNotEqual(result["status"], "cache_quarantined")
+            self.assertTrue(chosen.exists(), "original cache must remain when exclusive quarantine fails")
+            self.assertEqual(chosen.read_bytes(), b"selected cache")
+            manifest_path = Path(result["manifest_path"])
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            destination = Path(manifest["items"][0]["quarantine_path"])
+            self.assertEqual(destination.read_bytes(), sentinel, "pre-existing destination must never be overwritten")
+
     def test_paths_outside_the_fresh_allowlisted_preview_are_rejected(self):
         with tempfile.TemporaryDirectory() as tmp:
             _local, _chosen, _untouched, env = self._fixture(tmp, 1_700_000_000.0)
