@@ -69,7 +69,7 @@ def _resolve_target(root: Path, relative: str) -> Path:
     return resolved
 
 
-def validate_local_change_plan(plan: Any, root: str | Path) -> dict:
+def _validate_local_change_plan(plan: Any, root: str | Path) -> dict:
     if not isinstance(plan, dict) or plan.get("schema_version") != 1:
         raise LocalChangeError("Plan must be a JSON object with schema_version=1")
     task_id = plan.get("task_id")
@@ -137,6 +137,22 @@ def validate_local_change_plan(plan: Any, root: str | Path) -> dict:
     }
 
 
+def _public_summary(validated: dict) -> dict:
+    """Remove file contents before returning plans to CLI output or durable reports."""
+    return {
+        **validated,
+        "changes": [
+            {key: value for key, value in item.items() if key != "content"}
+            for item in validated["changes"]
+        ],
+    }
+
+
+def validate_local_change_plan(plan: Any, root: str | Path) -> dict:
+    """Validate a plan and return a content-free summary suitable for display."""
+    return _public_summary(_validate_local_change_plan(plan, root))
+
+
 def _write_atomic(path: Path, raw: bytes) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     fd, temporary = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".botpyton-tmp", dir=path.parent)
@@ -158,7 +174,7 @@ def apply_local_change_plan(
     backup_root: str | Path | None = None,
 ) -> dict:
     """Apply validated changes; existing files require a matching hash and are backed up."""
-    validated = validate_local_change_plan(plan, root)
+    validated = _validate_local_change_plan(plan, root)
     base = Path(validated["root"])
     backup_base = Path(backup_root).expanduser().resolve() if backup_root else (
         Path.home() / ".botpyton" / "backups" / hashlib.sha256(str(base).encode("utf-8")).hexdigest()[:16]
@@ -216,7 +232,7 @@ def apply_local_change_plan(
         raise LocalChangeError(message) from exc
 
     return {
-        **validated,
+        **_public_summary(validated),
         "mode": "executed",
         "writes_performed": True,
         "backups": backup_records,
