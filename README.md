@@ -239,3 +239,15 @@ For local GitHub operations, BOTPYTON first uses `GITHUB_TOKEN` when explicitly 
 ## Investigación de errores no registrados
 
 El diagnóstico no depende exclusivamente de que un mensaje esté en la tabla de errores conocidos. Cuando no hay coincidencia exacta, marca el caso como `unknown`, extrae de forma acotada el último mensaje y los frames del traceback, lee unas pocas líneas alrededor de las ubicaciones que estén dentro del proyecto y propone un siguiente paso verificable. No modifica el código ni ejecuta comandos durante esta investigación. El ciclo autónomo existente aplica únicamente reparaciones exactas conocidas y se detiene ante fallos desconocidos o ambiguos; ampliar ese ciclo requiere nuevas estrategias con pruebas de regresión.
+
+
+## Isolated local workspaces
+
+For larger changes, create a dedicated local Git worktree instead of editing the original checkout directly:
+
+```bash
+python -m bot.main --create-workspace TASK-123 --project-root "C:\\path\\to\\clean-repository"
+python -m bot.main --workspace-status "C:\\path\\to\\workspace"
+```
+
+The source repository must be clean and committed. BOTPYTON creates a local branch/worktree outside the repository, disables Git hooks during worktree checkout, and does not push, create a PR or merge. Run queued tasks with `--work-once --project-root WORKSPACE_PATH` to target the isolated worktree. See `docs/WORKSPACES.md`.
