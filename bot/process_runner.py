@@ -37,13 +37,38 @@ class ProcessRunnerError(ValueError):
     """Raised when a process request violates execution policy."""
 
 
+def _path_is_same_or_within(path: Path, root: Path) -> bool:
+    """Compare normalized path components without confusing sibling prefixes."""
+    normalized_path = os.path.normcase(os.path.normpath(str(path)))
+    normalized_root = os.path.normcase(os.path.normpath(str(root)))
+    if normalized_path == normalized_root:
+        return True
+    root_prefix = normalized_root.rstrip(os.sep) + os.sep
+    return normalized_path.startswith(root_prefix)
+
+
+def _has_working_tree_ancestor(path: Path, root: Path) -> bool:
+    """Detect lexical descendants even when Windows short names differ from resolved paths."""
+    current = path
+    while True:
+        try:
+            ancestor_resolved = current.resolve(strict=True)
+            if _path_is_same_or_within(ancestor_resolved, root):
+                return True
+        except (OSError, RuntimeError, ValueError):
+            pass
+        parent = current.parent
+        if parent == current:
+            return False
+        current = parent
+
+
 def _safe_search_path(path_value: str | None, *, cwd: str | Path) -> str:
-    """Keep only absolute, existing PATH directories and exclude the working directory."""
+    """Keep absolute existing PATH directories outside cwd and its descendants."""
     safe: list[str] = []
     seen: set[str] = set()
     try:
         current = Path(cwd).expanduser().resolve(strict=True)
-        current_key = os.path.normcase(os.path.normpath(str(current)))
     except (OSError, RuntimeError, ValueError):
         return ""
     if not isinstance(path_value, str) or not path_value:
@@ -55,12 +80,20 @@ def _safe_search_path(path_value: str | None, *, cwd: str | Path) -> str:
         if not candidate.is_absolute():
             continue
         try:
+            # Reject lexical paths under cwd even if a repository-local junction/symlink
+            # resolves elsewhere. Also reject external aliases which resolve back into cwd.
+            lexical = Path(os.path.normpath(str(candidate)))
+            if (
+                _path_is_same_or_within(lexical, current)
+                or _has_working_tree_ancestor(lexical, current)
+            ):
+                continue
             resolved = candidate.resolve(strict=True)
-            if not resolved.is_dir():
+            if not resolved.is_dir() or _path_is_same_or_within(resolved, current):
                 continue
             resolved_text = str(resolved)
             key = os.path.normcase(os.path.normpath(resolved_text))
-            if key == current_key or key in seen:
+            if key in seen:
                 continue
         except (OSError, RuntimeError, ValueError):
             continue
