@@ -175,3 +175,25 @@ La operación atómica puede fallar si origen y destino están en sistemas de ar
 - Añadir pruebas de rechazo para overrides de `PYTHONPATH`, `NODE_OPTIONS`, `JAVA_TOOL_OPTIONS` y `LD_PRELOAD`.
 
 El cambio no modifica la selección de herramientas, no agrega dependencias y mantiene `shell=False`, el límite de memoria y los límites de tiempo/salida existentes. No es una defensa completa contra una herramienta instalada deliberadamente de forma maliciosa ni sustituye la validación de su ejecutable; aísla una clase concreta de inyección por entorno heredado. La corrección requiere pasar CI y pruebas de Windows antes de integrar en `main`.
+
+
+## Auditoría adicional — 2026-10-17: búsqueda de ejecutables y binary planting
+
+### Referencias oficiales
+
+- BleachBit 6.0.4 documenta que cambió a rutas absolutas para `ipconfig` y `taskkill` para prevenir ataques de binary planting a través de la búsqueda de ejecutables. También documenta sanitización de `PATH` y eliminación de variables de carga de código en subprocesos POSIX: https://www.bleachbit.org/news/bleachbit-604
+- Python advierte que el uso de una ruta absoluta para el ejecutable ofrece mayor fiabilidad que entregar un nombre sin calificar. La documentación de `shutil.which()` explica que la búsqueda de Windows puede anteponer el directorio actual dependiendo de la API y del entorno: https://docs.python.org/3/library/subprocess.html y https://docs.python.org/3/library/shutil.html#shutil.which
+- Microsoft explica el riesgo general de binary planting cuando un programa carga ejecutables/DLL desde directorios controlables en una ruta de búsqueda: https://learn.microsoft.com/en-us/windows/win32/dlls/dynamic-link-library-security
+
+### Hallazgo confirmado en BOTPYTON
+
+`_resolve_approved_executable()` resolvía tanto el ejecutable solicitado como los elementos de su allowlist mediante `shutil.which()`. Si el solicitante y la allowlist usaban el mismo nombre no calificado, ambos podían resolverse al mismo ejecutable del `PATH`, haciendo que la comprobación fuese circular. Además, `run_tool_probe()` buscaba nombres registrados sin suministrar un `PATH` explícito y, por tanto, dependía de las reglas implícitas de búsqueda de la plataforma. Esto podía permitir que un ejecutable con el mismo nombre en el directorio actual u otra entrada inesperada se seleccionara para una consulta de versión. No hay evidencia de que se haya ejecutado un archivo malicioso en el PC del usuario.
+
+### Corrección candidata
+
+- Requerir una ruta absoluta para el ejecutable que se va a ejecutar y para cada elemento de la allowlist; la validación no busca ni resuelve nombres mediante el mismo `PATH`.
+- Buscar las herramientas registradas únicamente en directorios absolutos existentes del `PATH`, excluyendo entradas vacías, relativas, duplicadas y el propio directorio de trabajo. La búsqueda verifica archivos candidatos directamente para que no active la búsqueda implícita del directorio actual.
+- Sanear también el `PATH` entregado a los procesos secundarios, de modo que estos no vuelvan a resolver ejecutables desde el directorio de trabajo; en Windows establecer `NoDefaultCurrentDirectoryInExePath=1`.
+- Añadir pruebas que rechacen una allowlist no calificada, simulen un ejecutable falso en la carpeta actual y verifiquen que el proceso secundario recibe un `PATH` saneado.
+
+Este cambio reduce el riesgo de binary planting desde el directorio de trabajo y hace que la allowlist sea una comparación de rutas absolutas. No puede determinar por sí solo si una carpeta absoluta del `PATH` fue comprometida o si un ejecutable instalado es malicioso; las rutas de herramientas de confianza deben seguir siendo mantenidas por el usuario/sistema. No añade dependencias ni cambia el ámbito de limpieza. La integración requiere CI general y Windows.

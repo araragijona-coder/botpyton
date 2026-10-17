@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import os
-import shutil
 import subprocess
 import threading
 from pathlib import Path
@@ -38,7 +37,71 @@ class ProcessRunnerError(ValueError):
     """Raised when a process request violates execution policy."""
 
 
-def _safe_environment(extra: Mapping[str, str] | None = None) -> dict[str, str]:
+def _safe_search_path(path_value: str | None, *, cwd: str | Path) -> str:
+    """Keep only absolute, existing PATH directories and exclude the working directory."""
+    safe: list[str] = []
+    seen: set[str] = set()
+    try:
+        current = Path(cwd).expanduser().resolve(strict=True)
+        current_key = os.path.normcase(os.path.normpath(str(current)))
+    except (OSError, RuntimeError, ValueError):
+        return ""
+    if not isinstance(path_value, str) or not path_value:
+        return ""
+    for raw_entry in path_value.split(os.pathsep):
+        if not raw_entry or not raw_entry.strip():
+            continue
+        candidate = Path(raw_entry.strip()).expanduser()
+        if not candidate.is_absolute():
+            continue
+        try:
+            resolved = candidate.resolve(strict=True)
+            if not resolved.is_dir():
+                continue
+            resolved_text = str(resolved)
+            key = os.path.normcase(os.path.normpath(resolved_text))
+            if key == current_key or key in seen:
+                continue
+        except (OSError, RuntimeError, ValueError):
+            continue
+        seen.add(key)
+        safe.append(resolved_text)
+    return os.pathsep.join(safe)
+
+
+def _find_executable_in_path(executable: str, *, path_value: str | None, cwd: str | Path) -> str | None:
+    """Resolve a registered tool using explicit sanitized PATH entries only."""
+    if not isinstance(executable, str) or not executable or chr(0) in executable:
+        raise ProcessRunnerError("Registered executable name must be a non-empty NUL-free string")
+    name = Path(executable)
+    if name.is_absolute() or name.parent != Path("."):
+        raise ProcessRunnerError("Registered tool names must be basenames, not paths")
+    safe_path = _safe_search_path(path_value, cwd=cwd)
+    if not safe_path:
+        return None
+    if os.name == "nt":
+        suffixes = [name.suffix] if name.suffix else [".COM", ".EXE", ".BAT", ".CMD"]
+    else:
+        suffixes = [""]
+    for directory in safe_path.split(os.pathsep):
+        for suffix in suffixes:
+            candidate = Path(directory) / (executable if name.suffix else executable + suffix)
+            try:
+                if not candidate.is_file():
+                    continue
+                if os.name != "nt" and not os.access(candidate, os.X_OK):
+                    continue
+                return str(candidate.resolve(strict=True))
+            except (OSError, RuntimeError, ValueError):
+                continue
+    return None
+
+
+def _safe_environment(
+    extra: Mapping[str, str] | None = None,
+    *,
+    cwd: str | Path | None = None,
+) -> dict[str, str]:
     env = {
         key: value for key, value in os.environ.items()
         if not any(marker in key.upper() for marker in SECRET_MARKERS)
@@ -49,36 +112,51 @@ def _safe_environment(extra: Mapping[str, str] | None = None) -> dict[str, str]:
         for key, value in extra.items():
             if not isinstance(key, str) or not isinstance(value, str):
                 raise ProcessRunnerError("Environment overrides must be string pairs")
-            if not key or any(ch in key for ch in "=\0"):
+            if not key or "=" in key or chr(0) in key:
                 raise ProcessRunnerError("Invalid environment variable name")
             if any(marker in key.upper() for marker in SECRET_MARKERS):
                 raise ProcessRunnerError("Secret-like environment overrides are forbidden")
             if key.upper() in CODE_LOADING_ENV_VARS:
                 raise ProcessRunnerError(f"Code-loading environment override is forbidden: {key}")
-            if "\0" in value:
+            if chr(0) in value:
                 raise ProcessRunnerError("Environment values cannot contain NUL")
             env[key] = value
+    search_root = Path.cwd() if cwd is None else cwd
+    for path_key in tuple(env):
+        if path_key.upper() == "PATH":
+            env[path_key] = _safe_search_path(env[path_key], cwd=search_root)
+    if os.name == "nt":
+        env["NoDefaultCurrentDirectoryInExePath"] = "1"
     return env
 
 
 def _resolve_approved_executable(executable: str, approved_executables: Sequence[str]) -> str:
-    if not isinstance(executable, str) or not executable or "\0" in executable:
+    if not isinstance(executable, str) or not executable or chr(0) in executable:
         raise ProcessRunnerError("Executable must be a non-empty string")
-    resolved = shutil.which(executable)
-    if resolved is None and Path(executable).is_absolute() and Path(executable).is_file():
-        resolved = str(Path(executable).resolve())
-    if resolved is None:
-        raise ProcessRunnerError(f"Executable is not available: {executable}")
-    resolved_path = str(Path(resolved).resolve())
+    requested = Path(executable).expanduser()
+    if not requested.is_absolute():
+        raise ProcessRunnerError("Executable must be an absolute path; execution never resolves names through PATH")
+    try:
+        resolved_path = str(requested.resolve(strict=True))
+        if not Path(resolved_path).is_file():
+            raise ProcessRunnerError("Executable path does not identify a regular file")
+    except (OSError, RuntimeError, ValueError) as exc:
+        raise ProcessRunnerError("Executable path could not be resolved to an existing file") from exc
     approved = set()
     for candidate in approved_executables:
-        candidate_resolved = shutil.which(candidate)
-        if candidate_resolved is None and Path(candidate).is_absolute() and Path(candidate).is_file():
-            candidate_resolved = str(Path(candidate).resolve())
-        if candidate_resolved:
-            approved.add(str(Path(candidate_resolved).resolve()).casefold())
-    if resolved_path.casefold() not in approved:
-        raise ProcessRunnerError("Executable is not in the caller's explicit allowlist")
+        if not isinstance(candidate, str) or not candidate or chr(0) in candidate:
+            raise ProcessRunnerError("Allowlisted executable paths must be non-empty NUL-free strings")
+        approved_path = Path(candidate).expanduser()
+        if not approved_path.is_absolute():
+            raise ProcessRunnerError("Every allowlisted executable must be an absolute path")
+        try:
+            resolved_candidate = str(approved_path.resolve(strict=True))
+            if Path(resolved_candidate).is_file():
+                approved.add(os.path.normcase(resolved_candidate))
+        except (OSError, RuntimeError, ValueError):
+            continue
+    if os.path.normcase(resolved_path) not in approved:
+        raise ProcessRunnerError("Executable is not in the caller's explicit absolute-path allowlist")
     return resolved_path
 
 
@@ -219,7 +297,7 @@ def run_process(
     except ValueError as exc:
         raise ProcessRunnerError("cwd must be inside allowed_root") from exc
     normalized_argv[0] = _resolve_approved_executable(normalized_argv[0], approved_executables)
-    child_env = _safe_environment(env_overrides)
+    child_env = _safe_environment(env_overrides, cwd=workdir)
     captured: dict = {}
     process = None
     memory_job = None
@@ -296,9 +374,15 @@ def run_tool_probe(
     spec = next((item for item in TOOL_SPECS if item.tool_id == tool_id), None)
     if spec is None:
         raise ProcessRunnerError(f"Unknown registered tool id: {tool_id}")
-    executable_path = shutil.which(spec.executable)
+    executable_path = _find_executable_in_path(
+        spec.executable,
+        path_value=os.environ.get("PATH"),
+        cwd=Path.cwd(),
+    )
     if executable_path is None:
-        raise ProcessRunnerError(f"Registered tool is not installed: {tool_id}")
+        raise ProcessRunnerError(
+            f"Registered tool is not available on a safe absolute PATH: {tool_id}"
+        )
     result = run_process(
         [executable_path, *spec.probe_args],
         cwd=root,
