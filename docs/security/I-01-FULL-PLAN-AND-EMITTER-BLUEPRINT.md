@@ -125,3 +125,10 @@ Run the full existing test workflow on the final commit. Report exact head SHA a
 The owner-facing remediation checklist and source-level workflow audit are maintained in [I-01-ADMIN-EVIDENCE-REQUEST-AND-WORKFLOW-AUDIT.md](I-01-ADMIN-EVIDENCE-REQUEST-AND-WORKFLOW-AUDIT.md). It records the exact branch-protection discrepancy, the administrative settings that must be inspected manually, and the scope/limits of the candidate workflow source audit. This does not modify GitHub settings or establish organization-level policy.
 
 Source audit confirms both sender jobs are disabled and have no sender execution steps at the audited candidate revision. The worker workflow still executes branch-controlled worker code with read-only token permissions, and third-party Actions are referenced by version tags rather than reviewed full SHAs. This is acceptable only as current containment; it is not a privileged trust boundary. Action pinning and effective administrative settings must be resolved before any future sender phase.
+
+
+## 7. Workflow hardening follow-up — candidate validation
+
+In this follow-up, all external actions in the three inspected workflows were pinned to full 40-character commit SHAs, with upstream version comments. Every `actions/checkout` step now sets `persist-credentials: false`. A regression test, `test_external_actions_are_pinned_to_full_commit_shas`, checks full-SHA pins and checkout credential isolation. This is supply-chain/credential hygiene, not a substitute for administrative policy or an independent sender boundary.
+
+The final SHA and exact-SHA CI result for this follow-up must be recorded only after its workflow run has completed successfully. `main` remains untouched; no live sender, repository, PR, secret, environment, or write permission was created.
