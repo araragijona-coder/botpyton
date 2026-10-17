@@ -32,6 +32,23 @@ class SimpleDashboardTests(unittest.TestCase):
         self.assertIn("Elementos detectados: 4", output)
         self.assertNotIn("available_memory_mb", output)
 
+    def test_finding_summary_translates_internal_ids_and_does_not_leak_english_detail(self):
+        output = summarize_report("Estado general", {
+            "status": "diagnostic_only",
+            "system": {"available_memory_mb": 800, "disk": {"free_gib": 8.0, "free_percent": 8.0}},
+            "findings": [{
+                "id": "available_memory_low",
+                "title": "Low available physical memory",
+                "detail": "An internal technical explanation",
+                "recommendation": "Inspect current heavy processes",
+                "severity": "warning",
+            }],
+        })
+        self.assertIn("Hay poca memoria disponible en este momento", output)
+        self.assertNotIn("Low available physical memory", output)
+        self.assertNotIn("Inspect current heavy processes", output)
+        self.assertIn("RAM disponible: 800 MB", output)
+
 
 if __name__ == "__main__":
     unittest.main()
