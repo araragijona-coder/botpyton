@@ -19,6 +19,7 @@ from .orchestration import (
     validate_task_batch,
 )
 from .planner import order_tasks
+from .repository_analyzer import inspect_repository
 from .policy import PolicyError, validate_task, validate_relative_path
 from .queue import QueueError, TaskQueue
 from .verifier import verify_python_files
@@ -67,6 +68,8 @@ def _run_claimed(queue: TaskQueue, record: dict, executor: TaskExecutor) -> dict
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="BotPyton deterministic no-AI worker")
     parser.add_argument("--check", action="store_true", help="validate Python syntax and memory schema")
+    parser.add_argument("--inspect-repository", metavar="PATH", nargs="?", const=".",
+                        help="bounded read-only project inventory; candidate checks are not executed")
     parser.add_argument("--validate-task", metavar="PATH", help="validate a JSON task record")
     parser.add_argument("--validate-task-batch", metavar="PATH",
                         help="validate a bounded JSON task object/array without queue mutation")
@@ -105,6 +108,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--memory", default=".cerebro/memory/state.json", help="memory file path")
     args = parser.parse_args(argv)
     try:
+        if args.inspect_repository is not None:
+            _print_json(inspect_repository(args.inspect_repository))
+            return 0
         if args.autonomous_cycle:
             result = run_autonomous_cycle(
                 Path.cwd(),
