@@ -48,6 +48,8 @@ class EmitterPolicy:
             for x in self.allowed_head_prefixes
         ):
             raise ValueError("policy must define allowed head-ref prefixes ending in '/'")
+        if type(self.max_title_chars) is not int or type(self.max_body_chars) is not int:
+            raise ValueError("policy text limits must be integers")
         if not 1 <= self.max_title_chars <= 200 or not 0 <= self.max_body_chars <= 20_000:
             raise ValueError("policy text limits exceed hard maximums")
 
@@ -75,6 +77,8 @@ def validate_emitter_request(
     authenticated_actor and resolved_head_sha must come from the trusted caller,
     not from fields in request. This prototype does not fetch either value.
     """
+    if not isinstance(authenticated_actor, str) or not authenticated_actor.strip():
+        raise EmitterRequestError("authenticated identity is missing or invalid")
     if authenticated_actor not in policy.authorized_actors:
         raise EmitterRequestError("requesting identity is not authorized")
     if not isinstance(request, dict):
