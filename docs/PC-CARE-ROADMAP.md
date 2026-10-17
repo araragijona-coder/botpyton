@@ -192,3 +192,13 @@ python -m bot.main --pc-cleanup-restore "C:\\path\\to\\BOTPYTON\\Quarantine\\ses
 - All actions are local and sequential. No background service, network call, AI API, registry edit or browser launch is performed. Locked files, changed files, incomplete scans, hash/size cap hits and I/O errors fail closed or produce explicit partial reports.
 - Tests use temporary synthetic profiles to verify selected-only movement, integrity checks, wrong confirmation, outside-root path rejection, changed-file rejection, restore, manifest tampering and no-overwrite conflicts. Windows CI runs the focused fixture suite. A CI pass is not target-PC validation.
 - Limits: this is still a deliberately narrow cache-cleaning feature, not full CCleaner parity. Close browsers first. Manifests contain local file paths; inspect them before sharing. SHA-256 detects changes but is not a digital signature. Atomic moves can be rejected if the filesystem/volume does not support them.
+
+
+## Phase 30 — Expanded desktop application cache catalog (preview only)
+
+- Adds `python -m bot.main --pc-desktop-cache-preview` for explicitly allowlisted Discord and Slack Electron cache folders under the current user's `%APPDATA%`; this is a separate catalog from the browser-cache quarantine command.
+- Eligible locations are only `Cache`, `Code Cache`, and `GPUCache` under each recognized app root. Files at least one day old are listed with app, cache area, exact path, size and age.
+- Excludes app databases, Local Storage, IndexedDB, cookies, tokens, sessions, settings, attachments, downloads/media, and any other app/root not explicitly named. The code does not read file contents, move/delete files, change settings, contact the network, or call AI APIs.
+- Bounds: default 1,000 entries, 100 candidates, depth 3 and five seconds; hard caps 2,000 entries, 150 candidates, depth 3 and eight seconds. Links/reparse points are skipped; errors and limits mark the result partial.
+- Adds fixture tests and a Windows CI smoke invocation. This phase broadens **discovery only**. Discord/Slack candidates are deliberately not accepted by the existing browser quarantine/restore workflow; a future movement feature must separately review each app's lifecycle, path safety and restore behavior first.
+- Old age does not prove a file is inactive or safe to remove. Close the relevant app before any future cleanup. No target-PC files have been changed; target machine validation remains pending.

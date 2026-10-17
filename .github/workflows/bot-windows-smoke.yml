@@ -45,6 +45,19 @@ jobs:
           }
           if ($code -ne 0) { exit $code }
           if ($report.operation_assessment.outcome -ne 'reported_success') { throw 'Application-cache preview result was not recognized as a valid success.' }
+      - name: Preview allowlisted Discord and Slack caches (read-only)
+        shell: pwsh
+        run: |
+          $output = python -m bot.main --pc-desktop-cache-preview
+          $code = $LASTEXITCODE
+          $output | Write-Output
+          $report = ($output -join [Environment]::NewLine) | ConvertFrom-Json
+          if ($code -eq 2 -and $report.operation_assessment.outcome -eq 'partial') {
+            Write-Host 'PASS: desktop-app cache preview explicitly reported a bounded partial result.'
+            exit 0
+          }
+          if ($code -ne 0) { exit $code }
+          if ($report.operation_assessment.outcome -ne 'reported_success') { throw 'Desktop-app cache preview result was not recognized as a valid success.' }
       - name: Inventory startup entry targets (read-only)
         shell: pwsh
         run: |
