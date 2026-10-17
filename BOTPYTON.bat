@@ -43,8 +43,10 @@ echo  T. Inventario de controladores locales (solo lectura; no actualiza)
 echo  U. Estado reportado de discos (solo lectura; no repara)
 echo  V. Diagnostico previo: requisitos, memoria y siguientes pasos (solo lectura)
 echo  W. Analizar destinos de programas de inicio (solo lectura; no desactiva nada)
+echo  X. Vista previa de cachés de navegadores (solo lectura; no borra nada)
 echo.
-choice /c 123456789ABCDEFGHIJKLMNOPQRSTUVW /n /m "Selecciona una opcion: "
+choice /c 123456789ABCDEFGHIJKLMNOPQRSTUVWX /n /m "Selecciona una opcion: "
+if errorlevel 33 goto appcachepreview
 if errorlevel 32 goto startupadvisor
 if errorlevel 31 goto doctor
 if errorlevel 30 goto diskhealth
@@ -393,6 +395,12 @@ echo.
 echo Analisis local de destinos de inicio; no desactiva programas ni ejecuta comandos.
 echo No mide el impacto real en el arranque y no recomienda desactivar por nombre solamente.
 python -m bot.main --pc-startup-advisor
+echo.
+pause
+goto menu
+
+:appcachepreview
+python -m bot.main --pc-app-cleanup-preview
 echo.
 pause
 goto menu

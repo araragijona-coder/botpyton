@@ -168,3 +168,15 @@ python -m bot.main --pc-cleanup-restore "C:\\path\\to\\BOTPYTON\\Quarantine\\ses
 - Extracts only an executable/script token from recognized command formats, never returns command arguments, and reports target present/missing/unresolved. Startup shortcuts remain explicitly unresolved because the tool does not invoke shell/COM to resolve them.
 - Does not disable entries, execute commands, change registry/settings, access the network, or claim boot impact from a name. It reports local paths and warns that they should be reviewed before sharing.
 - Includes parser tests and a Windows smoke step. Target path checks on the user's own PC remain unverified until the command is run there.
+
+
+## Phase 28 — Read-only application cache profiles — implemented on the development branch
+
+- Run **python -m bot.main --pc-app-cleanup-preview** or choose **X** in BOTPYTON.bat.
+- Adds a separate application-cache catalog for recognized Google Chrome, Microsoft Edge, Brave and Firefox profile layouts. It looks only inside fixed cache locations (Cache/Cache_Data, Code Cache, GPUCache, and Firefox cache2) under recognized Default / Profile N / Firefox profile directories.
+- Reports exact file paths, browser, profile, cache area, size and age for cache files at least one day old by default. This is a **preview only**: no file contents are read, moved or deleted; no settings change; no network/API use.
+- Cookies, history, saved passwords, autofill, sessions, downloads, bookmarks, extensions, browser databases and arbitrary application folders are not eligible. Guest/unknown Chromium profile names are not traversed.
+- Bounds: 3,000 entries, 200 candidate files, 100 profile-directory entries and five seconds by default; hard caps are 5,000 entries / 300 candidates / 10 seconds. Linked/reparse roots and files are skipped; access failures, unsafe paths, timeouts and budget limits are reported as partial rather than exhaustive.
+- Automated tests cover supported browser paths, privacy-sensitive exclusions, unsupported platforms and scan/candidate caps. Windows CI smoke invokes the command on the candidate SHA.
+- This phase expands the **preview/catalog** gap only. It does not yet perform browser-cache cleanup, measure boot/performance impact, resolve publisher/signature metadata, or prove that every cache file is safe to remove. Do not infer reclaimable bytes from cache size alone.
+- Local paths may contain user-specific folder names. Inspect output before sharing. The report never authorizes an automatic or background cleanup.
