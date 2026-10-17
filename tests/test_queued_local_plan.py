@@ -41,6 +41,32 @@ class QueuedLocalPlanTests(unittest.TestCase):
         with self.assertRaises(PolicyError):
             validate_task(task)
 
+    def test_queued_project_check_requires_explicit_approval_and_runs(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            tests = root / "tests"
+            tests.mkdir()
+            (tests / "test_smoke.py").write_text(
+                "import unittest\\nclass Smoke(unittest.TestCase):\\n"
+                "    def test_true(self): self.assertTrue(True)\\n",
+                encoding="utf-8",
+            )
+            task = {
+                "id": "worker-python-check",
+                "goal": "Run the reviewed Python test profile",
+                "allowed_actions": ["run_project_check"],
+                "success_conditions": ["The selected test profile exits successfully"],
+                "project_check_id": "python-unittest",
+                "allow_project_code_execution": True,
+                "check_timeout_seconds": 10,
+            }
+            validate_task(task)
+            result = TaskExecutor(root).execute({"payload": task, "attempts": 1})
+            self.assertTrue(result["ok"])
+            details = result["actions"][0]["details"]
+            self.assertTrue(details["ok"])
+            self.assertTrue(details["project_code_execution_approved"])
+
 
 if __name__ == "__main__":
     unittest.main()
