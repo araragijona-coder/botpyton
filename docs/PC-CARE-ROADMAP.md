@@ -123,3 +123,13 @@ python -m bot.main --pc-cleanup-restore "C:\\path\\to\\BOTPYTON\\Quarantine\\ses
 - Reports and manifests may contain local paths. Inspect them before sharing publicly.
 - Development changes remain isolated on the development branch. No automatic merge into \`main\` and no test cleanup on the user's PC.
 
+
+
+## Phase 23 — Local Windows disk-status snapshot — implemented on the development branch
+
+- Run python -m bot.main --pc-disk-health or select **U** in BOTPYTON.bat.
+- Queries the fixed local Windows PowerShell executable with fixed commands: Get-PhysicalDisk and Get-CimInstance -ClassName Win32_DiskDrive. No user text is interpolated into the script.
+- Returns status/operational status where exposed, media/bus/interface type and size metadata. Separate provider lists avoid implying that the same drive is necessarily represented identically by both providers.
+- Caps each provider at 100 returned records (requests 101 to detect a cap), output at 500 KB, field lengths at 200 characters and execution at 15 seconds. No shell, network, repair, formatting, optimization, update or disk modification.
+- The report explicitly says this is not a full S.M.A.R.T. attribute report. Missing, Unknown, OK, or Healthy status is not a guarantee that a disk has no fault; hardware/bridge/controller support varies.
+- Automated tests cover non-Windows gating, query shape, output normalization, record caps and timeout/invalid-output handling. The Windows smoke workflow exercises the command. Real-device coverage and timing on the target PC remain unverified until locally run.

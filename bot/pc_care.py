@@ -1001,6 +1001,201 @@ def read_device_driver_inventory(*, windows: bool | None = None, limit: int = DR
     }
 
 
+
+DISK_HEALTH_TIMEOUT_SECONDS = 15
+DISK_HEALTH_LIMIT = 100
+DISK_HEALTH_STDOUT_MAX_BYTES = 500_000
+DISK_HEALTH_FIELD_MAX_CHARS = 200
+
+
+def read_disk_health_inventory(*, windows: bool | None = None, limit: int = DISK_HEALTH_LIMIT) -> dict:
+    """Read bounded local Windows disk and Storage-provider status metadata; no repair or changes."""
+    is_windows = os.name == "nt" if windows is None else windows
+    if not isinstance(limit, int) or isinstance(limit, bool) or not 1 <= limit <= DISK_HEALTH_LIMIT:
+        raise ValueError(f"limit must be between 1 and {DISK_HEALTH_LIMIT}")
+    base_report = {
+        "product": "BOTPYTON PC Care",
+        "schema_version": 1,
+        "source": "local Windows PowerShell: Get-PhysicalDisk and Win32_DiskDrive",
+        "status": "unavailable",
+        "read_only": True,
+        "network_used": False,
+        "disks_modified": 0,
+        "settings_changed": False,
+        "physical_health_available": False,
+        "physical_disks_count": 0,
+        "windows_disks_count": 0,
+        "physical_disks": [],
+        "windows_disks": [],
+        "limit_per_provider": limit,
+        "limitations": [
+            "This is a local status snapshot, not a full S.M.A.R.T. attribute report or a guarantee that a disk is healthy.",
+            "Windows Storage health data may be unavailable for USB bridges, RAID controllers, virtual disks, or some storage drivers.",
+            "An empty or unavailable provider result does not prove that the disk is healthy; use the drive/vendor diagnostic when symptoms or warnings exist.",
+            "No repair, scan-and-fix, formatting, optimization, driver update, or other disk modification is performed.",
+            f"Each provider is capped at {limit} records; the command has a {DISK_HEALTH_TIMEOUT_SECONDS}-second timeout.",
+        ],
+    }
+    if not is_windows:
+        return {**base_report, "status": "unsupported_platform", "note": "Disk health inventory requires Windows."}
+
+    system_root = os.environ.get("SystemRoot") or os.environ.get("WINDIR")
+    if not system_root:
+        return {**base_report, "status": "unavailable", "note": "The Windows system directory was not found."}
+    executable = Path(system_root) / "System32" / "WindowsPowerShell" / "v1.0" / "powershell.exe"
+    try:
+        if not executable.is_file() or _is_link_or_reparse(executable):
+            return {**base_report, "status": "unavailable", "note": "The standard Windows PowerShell executable was not found or did not pass path checks."}
+        executable = executable.resolve(strict=True)
+    except (OSError, RuntimeError, ValueError):
+        return {**base_report, "status": "unavailable", "note": "The standard Windows PowerShell executable could not be validated."}
+
+    script = (
+        "[Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false); "
+        "$ErrorActionPreference = 'Stop'; "
+        "$physical = @(); $physicalError = ''; "
+        "try { $physical = @(Get-PhysicalDisk -ErrorAction Stop | Select-Object -First 101 "
+        "@{Name='name';Expression={[string]$_.FriendlyName}}, "
+        "@{Name='health_status';Expression={[string]$_.HealthStatus}}, "
+        "@{Name='operational_status';Expression={(@($_.OperationalStatus | ForEach-Object { [string]$_ }) -join ',')}}, "
+        "@{Name='media_type';Expression={[string]$_.MediaType}}, "
+        "@{Name='bus_type';Expression={[string]$_.BusType}}, "
+        "@{Name='size_bytes';Expression={[string]$_.Size}}) } "
+        "catch { $physicalError = $_.Exception.GetType().Name }; "
+        "$windowsDisks = @(Get-CimInstance -ClassName Win32_DiskDrive -ErrorAction Stop | Select-Object -First 101 "
+        "@{Name='name';Expression={[string]$_.Model}}, "
+        "@{Name='status';Expression={[string]$_.Status}}, "
+        "@{Name='media_type';Expression={[string]$_.MediaType}}, "
+        "@{Name='interface_type';Expression={[string]$_.InterfaceType}}, "
+        "@{Name='size_bytes';Expression={[string]$_.Size}}, "
+        "@{Name='partitions';Expression={[string]$_.Partitions}}); "
+        "[PSCustomObject]@{physical_disks=$physical; windows_disks=$windowsDisks; physical_query_error=$physicalError} | "
+        "ConvertTo-Json -Compress -Depth 4"
+    )
+    try:
+        result = subprocess.run(
+            [str(executable), "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", script],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=DISK_HEALTH_TIMEOUT_SECONDS,
+            check=False,
+            shell=False,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+    except subprocess.TimeoutExpired:
+        return {**base_report, "status": "timeout", "note": f"Local disk health query exceeded {DISK_HEALTH_TIMEOUT_SECONDS} seconds; no changes were made."}
+    except OSError as exc:
+        return {**base_report, "status": "query_unavailable", "note": f"Local disk inventory could not start ({type(exc).__name__}); no changes were made."}
+
+    if result.returncode != 0:
+        return {
+            **base_report, "status": "query_error", "return_code": int(result.returncode),
+            "note": "Windows could not complete the read-only disk inventory; no repair or change was attempted.",
+        }
+    output = result.stdout or ""
+    if len(output.encode("utf-8", errors="replace")) > DISK_HEALTH_STDOUT_MAX_BYTES:
+        return {**base_report, "status": "output_too_large", "note": "Disk inventory exceeded the output safety cap; results were rejected."}
+    try:
+        decoded = json.loads(output) if output.strip() else None
+    except (TypeError, json.JSONDecodeError):
+        return {**base_report, "status": "invalid_output", "note": "Windows disk inventory output was not valid JSON; no status was inferred."}
+    if not isinstance(decoded, dict):
+        return {**base_report, "status": "invalid_output", "note": "Windows disk inventory had an unexpected result shape."}
+    raw_physical = decoded.get("physical_disks", [])
+    raw_windows = decoded.get("windows_disks", [])
+    if raw_physical is None:
+        raw_physical = []
+    if raw_windows is None:
+        raw_windows = []
+    if isinstance(raw_physical, dict):
+        raw_physical = [raw_physical]
+    if isinstance(raw_windows, dict):
+        raw_windows = [raw_windows]
+    if not isinstance(raw_physical, list) or not isinstance(raw_windows, list):
+        return {**base_report, "status": "invalid_output", "note": "Windows disk inventory returned an unexpected collection shape."}
+    if any(not isinstance(row, dict) for row in raw_physical + raw_windows):
+        return {**base_report, "status": "invalid_output", "note": "Windows disk inventory returned a record with an unexpected shape."}
+
+    def safe_text(record: dict, key: str) -> str:
+        value = record.get(key, "")
+        if value is None:
+            return ""
+        if isinstance(value, (str, int, float, bool)):
+            return str(value).strip()[:DISK_HEALTH_FIELD_MAX_CHARS]
+        return ""
+
+    def safe_size(record: dict) -> int | None:
+        value = safe_text(record, "size_bytes")
+        if not value or not value.isdecimal():
+            return None
+        try:
+            parsed = int(value)
+        except (TypeError, ValueError):
+            return None
+        return parsed if 0 <= parsed <= 2**63 - 1 else None
+
+    def safe_count(record: dict, key: str) -> int | None:
+        value = safe_text(record, key)
+        if not value or not value.isdecimal():
+            return None
+        try:
+            parsed = int(value)
+        except (TypeError, ValueError):
+            return None
+        return parsed if 0 <= parsed <= 1_000_000 else None
+
+    physical = []
+    for record in raw_physical[:limit]:
+        physical.append({
+            "name": safe_text(record, "name"),
+            "health_status": safe_text(record, "health_status") or "Unknown",
+            "operational_status": safe_text(record, "operational_status") or "Unknown",
+            "media_type": safe_text(record, "media_type") or "Unknown",
+            "bus_type": safe_text(record, "bus_type") or "Unknown",
+            "size_bytes": safe_size(record),
+        })
+    windows_rows = []
+    for record in raw_windows[:limit]:
+        windows_rows.append({
+            "name": safe_text(record, "name"),
+            "reported_status": safe_text(record, "status") or "Unknown",
+            "media_type": safe_text(record, "media_type") or "Unknown",
+            "interface_type": safe_text(record, "interface_type") or "Unknown",
+            "size_bytes": safe_size(record),
+            "partitions": safe_count(record, "partitions"),
+        })
+    physical_capped = len(raw_physical) > limit
+    windows_capped = len(raw_windows) > limit
+    physical_error = safe_text(decoded, "physical_query_error")
+    has_provider_data = bool(physical or windows_rows)
+    status = "partial_limit" if physical_capped or windows_capped else ("collected" if has_provider_data else "empty_inventory")
+    note = (
+        "A provider reached its result cap; inventory may be incomplete."
+        if status == "partial_limit" else
+        "No disk records were returned. This is not evidence that storage is healthy."
+        if not has_provider_data else
+        "Read-only status snapshot. Windows Storage health is not a full S.M.A.R.T. diagnosis; a blank or OK status is not a health guarantee."
+    )
+    if physical_error:
+        note += f" Get-PhysicalDisk was unavailable ({physical_error}); Windows disk metadata may still be present."
+    return {
+        **base_report,
+        "status": status,
+        "physical_health_available": bool(physical),
+        "physical_disks_count": len(physical),
+        "windows_disks_count": len(windows_rows),
+        "physical_disks": physical,
+        "windows_disks": windows_rows,
+        "provider_records_seen": {
+            "physical_disks": min(len(raw_physical), DISK_HEALTH_LIMIT + 1),
+            "windows_disks": min(len(raw_windows), DISK_HEALTH_LIMIT + 1),
+        },
+        "note": note,
+    }
+
+
 def find_duplicate_files(
     root: str | Path,
     *,

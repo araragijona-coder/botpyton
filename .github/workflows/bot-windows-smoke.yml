@@ -32,6 +32,8 @@ jobs:
         run: python -m bot.main --pc-benchmark
       - name: Inventory local device-driver metadata (read-only)
         run: python -m bot.main --pc-drivers
+      - name: Inspect Windows disk status metadata (read-only)
+        run: python -m bot.main --pc-disk-health
       - name: Build and verify portable package
         run: |
           python -m bot.main --package-portable "$env:RUNNER_TEMP\botpyton-dist"

@@ -26,7 +26,7 @@ from .tool_registry import discover_tools
 from .system_profile import get_system_profile
 from .pc_care import get_pc_care_report, QUARANTINE_CONFIRMATION, RESTORE_CONFIRMATION, quarantine_cleanup_candidates, restore_quarantined_files, check_application_updates, preview_quarantined_restore, read_pc_care_audit
 from .packaging import build_portable_package, verify_portable_archive
-from .pc_care import get_pc_care_benchmark, analyze_storage_path, find_duplicate_files, read_device_driver_inventory
+from .pc_care import get_pc_care_benchmark, analyze_storage_path, find_duplicate_files, read_device_driver_inventory, read_disk_health_inventory
 from .project_checks import ProjectCheckError, discover_project_checks, run_project_check
 from .policy import PolicyError, validate_task, validate_relative_path
 from .queue import QueueError, TaskQueue
@@ -95,6 +95,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--pc-storage", metavar="FOLDER_PATH", help="analyze storage metadata in one explicitly selected folder; bounded, read-only, no file contents opened")
     parser.add_argument("--pc-duplicates", metavar="FOLDER_PATH", help="find exact duplicate files by SHA-256 in a selected folder; bounded, read-only, never deletes files")
     parser.add_argument("--pc-drivers", action="store_true", help="inventory local Windows device-driver metadata only; never rates or updates drivers")
+    parser.add_argument("--pc-disk-health", action="store_true", help="read a bounded local Windows disk status snapshot; no repair or modification")
     parser.add_argument("--tools", action="store_true", help="list installed developer tools without running them")
     parser.add_argument("--probe-tool", metavar="TOOL_ID", help="run the fixed version probe for one registered tool")
     parser.add_argument("--local-plan", metavar="PATH", help="validate a declarative local file-change plan (dry-run by default)")
@@ -185,6 +186,9 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         if args.pc_drivers:
             _print_json(read_device_driver_inventory())
+            return 0
+        if args.pc_disk_health:
+            _print_json(read_disk_health_inventory())
             return 0
         if args.pc_cleanup_quarantine and args.pc_cleanup_restore:
             raise ValueError("Choose either --pc-cleanup-quarantine or --pc-cleanup-restore, not both")

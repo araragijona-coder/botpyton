@@ -803,5 +803,100 @@ class PcCareTests(unittest.TestCase):
         self.assertFalse(result["items"][0]["is_signed"])
 
 
+    def test_disk_health_inventory_is_unsupported_off_windows_without_process(self):
+        from bot.pc_care import read_disk_health_inventory
+        with patch("bot.pc_care.subprocess.run") as run:
+            result = read_disk_health_inventory(windows=False)
+        self.assertEqual(result["status"], "unsupported_platform")
+        self.assertTrue(result["read_only"])
+        self.assertFalse(result["network_used"])
+        self.assertEqual(result["disks_modified"], 0)
+        run.assert_not_called()
+
+    def test_disk_health_inventory_uses_fixed_local_powershell_query(self):
+        import json
+        from bot.pc_care import read_disk_health_inventory
+        with tempfile.TemporaryDirectory() as tmp:
+            powershell = Path(tmp) / "System32" / "WindowsPowerShell" / "v1.0" / "powershell.exe"
+            powershell.parent.mkdir(parents=True)
+            powershell.write_bytes(b"test placeholder")
+            payload = json.dumps({
+                "physical_disks": [{
+                    "name": "NVMe Example",
+                    "health_status": "Healthy",
+                    "operational_status": "OK",
+                    "media_type": "SSD",
+                    "bus_type": "NVMe",
+                    "size_bytes": "1000000000",
+                }],
+                "windows_disks": [{
+                    "name": "NVMe Example",
+                    "status": "OK",
+                    "media_type": "Fixed hard disk media",
+                    "interface_type": "SCSI",
+                    "size_bytes": "1000000000",
+                    "partitions": "3",
+                }],
+                "physical_query_error": "",
+            })
+            with patch.dict(os.environ, {"SystemRoot": tmp}, clear=False):
+                with patch("bot.pc_care.subprocess.run", return_value=Mock(returncode=0, stdout=payload, stderr="")) as run:
+                    result = read_disk_health_inventory(windows=True)
+        self.assertEqual(result["status"], "collected")
+        self.assertTrue(result["physical_health_available"])
+        self.assertEqual(result["physical_disks"][0]["health_status"], "Healthy")
+        self.assertEqual(result["windows_disks"][0]["reported_status"], "OK")
+        self.assertEqual(result["windows_disks"][0]["size_bytes"], 1_000_000_000)
+        self.assertEqual(result["windows_disks"][0]["partitions"], 3)
+        self.assertFalse(result["network_used"])
+        self.assertEqual(result["disks_modified"], 0)
+        command = run.call_args.args[0]
+        self.assertIn("-NoProfile", command)
+        self.assertIn("-NonInteractive", command)
+        self.assertIn("Get-PhysicalDisk", command[-1])
+        self.assertIn("Get-CimInstance -ClassName Win32_DiskDrive", command[-1])
+        self.assertIn("Select-Object -First 101", command[-1])
+        self.assertFalse(run.call_args.kwargs["shell"])
+        self.assertEqual(run.call_args.kwargs["timeout"], 15)
+
+    def test_disk_health_inventory_timeout_and_invalid_output_fail_closed(self):
+        import subprocess
+        from bot.pc_care import read_disk_health_inventory
+        with tempfile.TemporaryDirectory() as tmp:
+            powershell = Path(tmp) / "System32" / "WindowsPowerShell" / "v1.0" / "powershell.exe"
+            powershell.parent.mkdir(parents=True)
+            powershell.write_bytes(b"test placeholder")
+            with patch.dict(os.environ, {"SystemRoot": tmp}, clear=False):
+                with patch("bot.pc_care.subprocess.run", side_effect=subprocess.TimeoutExpired(cmd="powershell.exe", timeout=15)):
+                    timeout_result = read_disk_health_inventory(windows=True)
+                with patch("bot.pc_care.subprocess.run", return_value=Mock(returncode=0, stdout="not json", stderr="")):
+                    invalid_result = read_disk_health_inventory(windows=True)
+        self.assertEqual(timeout_result["status"], "timeout")
+        self.assertEqual(invalid_result["status"], "invalid_output")
+        self.assertEqual(timeout_result["disks_modified"], 0)
+        self.assertEqual(invalid_result["disks_modified"], 0)
+
+    def test_disk_health_inventory_caps_records_and_does_not_call_empty_result_healthy(self):
+        import json
+        from bot.pc_care import read_disk_health_inventory
+        with tempfile.TemporaryDirectory() as tmp:
+            powershell = Path(tmp) / "System32" / "WindowsPowerShell" / "v1.0" / "powershell.exe"
+            powershell.parent.mkdir(parents=True)
+            powershell.write_bytes(b"test placeholder")
+            payload = json.dumps({
+                "physical_disks": [{"name": f"Disk {i}", "health_status": "Unknown"} for i in range(3)],
+                "windows_disks": [],
+                "physical_query_error": "",
+            })
+            with patch.dict(os.environ, {"SystemRoot": tmp}, clear=False):
+                with patch("bot.pc_care.subprocess.run", return_value=Mock(returncode=0, stdout=payload, stderr="")):
+                    result = read_disk_health_inventory(windows=True, limit=2)
+        self.assertEqual(result["status"], "partial_limit")
+        self.assertEqual(result["physical_disks_count"], 2)
+        self.assertEqual(result["physical_disks"][0]["health_status"], "Unknown")
+        self.assertIn("not evidence", read_disk_health_inventory(windows=False)["limitations"][2])
+
+
+
 if __name__ == "__main__":
     unittest.main()

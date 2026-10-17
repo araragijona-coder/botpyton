@@ -40,8 +40,10 @@ echo  Q. Medir recursos con un diagnostico de una pasada (solo lectura)
 echo  R. Analizar una carpeta para localizar archivos grandes (solo lectura)
 echo  S. Buscar archivos duplicados por SHA-256 (solo lectura; no borra)
 echo  T. Inventario de controladores locales (solo lectura; no actualiza)
+echo  U. Estado reportado de discos (solo lectura; no repara)
 echo.
-choice /c 123456789ABCDEFGHIJKLMNOPQRST /n /m "Selecciona una opcion: "
+choice /c 123456789ABCDEFGHIJKLMNOPQRSTU /n /m "Selecciona una opcion: "
+if errorlevel 30 goto diskhealth
 if errorlevel 29 goto driverinventory
 if errorlevel 28 goto duplicateanalysis
 if errorlevel 27 goto storageanalysis
@@ -358,6 +360,16 @@ echo.
 echo Inventario local de controladores Plug-and-Play.
 echo No consulta Internet, no declara controladores obsoletos y no instala ni actualiza nada.
 python -m bot.main --pc-drivers
+echo.
+pause
+goto menu
+
+
+:diskhealth
+echo.
+echo Instantanea local de estado de discos; no es un diagnostico S.M.A.R.T. completo.
+echo No repara, formatea, optimiza ni modifica discos.
+python -m bot.main --pc-disk-health
 echo.
 pause
 goto menu

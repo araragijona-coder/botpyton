@@ -339,3 +339,12 @@ La salida estima el espacio potencialmente duplicado, pero no elimina archivos: 
 Ejecuta \`python -m bot.main --pc-drivers\` o elige T en el menú. Obtiene del proveedor local de Windows una lista limitada de controladores Plug-and-Play: dispositivo, clase, fabricante/proveedor, versión, fecha, estado de firma e INF. Omite identificadores de dispositivo. La consulta utiliza PowerShell local con timeout de 15 segundos, límite de 200 registros y sin shell ni red.
 
 Esto es solo inventario. Una fecha antigua no demuestra que el controlador esté obsoleto, y esta fase no consulta catálogos de fabricantes ni descarga, instala, quita o desactiva controladores.
+
+
+## Phase 23 — Local disk status snapshot (Windows)
+
+Run python -m bot.main --pc-disk-health or choose **U** in BOTPYTON.bat.
+
+BOTPYTON asks the local Windows PowerShell providers Get-PhysicalDisk and Win32_DiskDrive for bounded device/status metadata. It reports the health and operational status that Windows exposes, plus basic disk/interface metadata. Each provider is capped at 100 records, output is capped, the command has a 15-second timeout and uses no shell or network connection.
+
+This is **not** a complete S.M.A.R.T. attribute reader, and an OK, Healthy, blank, or missing result is not a guarantee of drive health. Some USB bridges, RAID controllers, virtual disks and storage drivers do not expose the same fields. If Windows reports a warning or the drive behaves abnormally, use the drive manufacturer's diagnostic and maintain a current backup. The feature does not run repair, CHKDSK, formatting, optimization, driver updates or other disk-changing operations. The Windows smoke workflow exercises the command; the actual target PC still needs a local run.
