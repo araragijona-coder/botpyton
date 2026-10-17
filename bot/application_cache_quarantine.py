@@ -366,7 +366,12 @@ def quarantine_application_cache_candidates(
                     failed_count += 1
                     _atomic_write_manifest(manifest_path, manifest)
                     continue
-                os.replace(source, destination)
+                # Create the quarantine name exclusively: os.replace() could overwrite
+                # a file created at the destination between the check above and the move.
+                # A hard link fails atomically if the destination already exists; unlink
+                # the source only after the quarantine name has been created successfully.
+                os.link(source, destination)
+                source.unlink()
                 item["state"] = "moved"
                 moved_count += 1
                 try:
