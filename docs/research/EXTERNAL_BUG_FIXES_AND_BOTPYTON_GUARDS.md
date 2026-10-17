@@ -240,3 +240,26 @@ Referencias:
 Las acciones nuevas usan Node.js 24 y requieren un runner compatible; los workflows regulares del proyecto usan runners hospedados por GitHub. La ejecución del PR verificará su funcionamiento en Linux y Windows.
 
 No cambia el código de limpieza local ni se agregan dependencias de runtime, servicios residentes, llamadas de IA o acciones del sistema operativo.
+
+## Phase 18 — Excluir subdirectorios del proyecto del PATH de procesos secundarios (2026-10-17)
+
+### Hallazgo confirmado
+
+La fase anterior saneaba `PATH` para eliminar la carpeta de trabajo exacta, entradas relativas/vacías y duplicados. Sin embargo, una entrada absoluta como `<proyecto>\\tools` seguía aceptándose aunque fuera un subdirectorio de la carpeta donde se ejecuta el proceso. Si un ejecutable aprobado invoca posteriormente otra herramienta por nombre, esa subcarpeta podría contener un ejecutable auxiliar no confiable que el proceso secundario resolviera desde `PATH`. No hay evidencia de explotación en el equipo del usuario; el defecto era una laguna en el límite que la función de saneamiento pretendía imponer.
+
+Las notas oficiales de BleachBit 6.0.4 describen el uso de rutas absolutas para `ipconfig` y `taskkill` para prevenir binary planting mediante la búsqueda de ejecutables, así como saneamiento de `PATH` para procesos externos. Microsoft explica que `PATH` define los directorios de búsqueda de ejecutables y advierte que un directorio actual/directorio de búsqueda controlable puede introducir riesgos de planting. Son referencias para orientar la defensa; la condición reproducible específica se encontró en `bot/process_runner.py`.
+
+### Corrección
+
+- La lista saneada descarta una entrada si su ruta absoluta normalizada está dentro del directorio de trabajo, no solo cuando coincide exactamente con él.
+- También descarta alias de symlink/junction ubicados léxicamente bajo el directorio de trabajo, incluso si su destino resuelto apunta fuera; además, rechaza entradas externas cuyo destino canónico vuelva a caer dentro del árbol de trabajo.
+- La comprobación usa límites de componentes de ruta (`os.path.commonpath` + normalización de plataforma), evitando comparaciones de prefijos textuales que confundan, por ejemplo, `project-tools` con `project`.
+- Se agregaron regresiones para subdirectorios de herramientas, alias simbólicos y el `PATH` observado por un proceso secundario.
+
+### Fuentes oficiales
+
+- BleachBit 6.0.4, notas oficiales — defensa contra binary planting y saneamiento de PATH: https://www.bleachbit.org/news/bleachbit-604
+- Microsoft Learn, comando PATH — define los directorios de búsqueda de ejecutables: https://learn.microsoft.com/en-us/windows-server/administration/windows-commands/path
+- Python, `shutil.which()` — especifica cómo se consideran PATH y directorio actual en Windows: https://docs.python.org/3/library/shutil.html
+
+La corrección afecta solo al entorno de los procesos secundarios; no cambia las acciones de limpieza del PC, no instala dependencias y no añade servicios residentes. Requiere suite completa y smoke de Windows antes de integrarse.
