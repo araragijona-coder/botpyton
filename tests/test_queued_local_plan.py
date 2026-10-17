@@ -47,8 +47,8 @@ class QueuedLocalPlanTests(unittest.TestCase):
             tests = root / "tests"
             tests.mkdir()
             (tests / "test_smoke.py").write_text(
-                "import unittest\\nclass Smoke(unittest.TestCase):\\n"
-                "    def test_true(self): self.assertTrue(True)\\n",
+                "import unittest\nclass Smoke(unittest.TestCase):\n"
+                "    def test_true(self): self.assertTrue(True)\n",
                 encoding="utf-8",
             )
             task = {
