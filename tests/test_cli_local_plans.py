@@ -93,7 +93,7 @@ class LocalPlanCliTests(unittest.TestCase):
                 "local_change_plan": {
                     "schema_version": 1,
                     "task_id": "cli-target-project",
-                    "changes": [{"path": "created.py", "content": "VALUE = 7\\n"}],
+                    "changes": [{"path": "created.py", "content": "VALUE = 7\n"}],
                 },
             }
             TaskQueue(JsonMemory(memory_path)).enqueue_many([task])
@@ -103,7 +103,7 @@ class LocalPlanCliTests(unittest.TestCase):
                     "--work-once", "--project-root", str(project), "--memory", str(memory_path)
                 ])
             self.assertEqual(code, 0)
-            self.assertEqual((project / "created.py").read_text(encoding="utf-8"), "VALUE = 7\\n")
+            self.assertEqual((project / "created.py").read_text(encoding="utf-8"), "VALUE = 7\n")
             self.assertTrue((project / ".cerebro" / "reports").is_dir())
 
 
