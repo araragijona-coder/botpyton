@@ -90,6 +90,29 @@ def _conflict_evidence(root: Path) -> dict[str, Any]:
 
 
 
+def _redact_sensitive_text(value: str) -> str:
+    """Avoid copying common credential values from logs or source snippets into reports."""
+    text = re.sub(
+        r"(?i)(authorization\s*[:=]\s*bearer\s+)[A-Za-z0-9._~-]+",
+        r"\1[REDACTED]",
+        value,
+    )
+    text = re.sub(r"(?i)\b(?:gh[pousr]_[A-Za-z0-9_]{12,}|github_pat_[A-Za-z0-9_]{12,})\b",
+                  "[REDACTED_GITHUB_TOKEN]", text)
+    text = re.sub(
+        r"(?i)(\b(?:token|secret|password|api[_-]?key|private[_-]?key)\b\s*[:=]\s*)[^\s,;]+",
+        r"\1[REDACTED]",
+        text,
+    )
+    return text[:1000]
+
+
+def _redact_source_line(value: str) -> str:
+    if re.search(r"(?i)\b(?:token|secret|password|api[_-]?key|private[_-]?key)\b", value):
+        return "[REDACTED: credential-like identifier in source line]"
+    return _redact_sensitive_text(value)[:300]
+
+
 def _traceback_evidence(log_text: str, root: Path) -> dict[str, Any]:
     """Extract bounded traceback context from files inside the project without executing them."""
     frame_pattern = re.compile(r"""File ["']([^"']+)["'], line (\d+)""")
@@ -120,7 +143,7 @@ def _traceback_evidence(log_text: str, root: Path) -> dict[str, Any]:
                     start = max(1, line_number - 2)
                     end = min(len(lines), line_number + 2)
                     frame["context"] = [
-                        {"line": number, "text": lines[number - 1][:300]}
+                        {"line": number, "text": _redact_source_line(lines[number - 1])}
                         for number in range(start, end + 1)
                     ]
                     frame["source_read"] = True
@@ -129,7 +152,9 @@ def _traceback_evidence(log_text: str, root: Path) -> dict[str, Any]:
         except (OSError, UnicodeError) as exc:
             frame["reason"] = f"source read failed: {type(exc).__name__}"
         frames.append(frame)
-    last_line = next((line.strip() for line in reversed(log_text.splitlines()) if line.strip()), "")
+    last_line = _redact_sensitive_text(
+        next((line.strip() for line in reversed(log_text.splitlines()) if line.strip()), "")
+    )
     error_match = re.search(
         r"\b([A-Za-z_][A-Za-z0-9_]*(?:Error|Exception|Failure|Interrupt))\b(?::|$)",
         last_line,
