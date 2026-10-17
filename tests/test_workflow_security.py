@@ -73,6 +73,7 @@ class PrivilegedWorkflowSecurityTests(unittest.TestCase):
     def test_external_actions_are_pinned_to_full_commit_shas(self):
         workflows = (
             ".github/workflows/bot-tests.yml",
+            ".github/workflows/bot-windows-smoke.yml",
             ".github/workflows/botpyton-worker.yml",
             ".github/workflows/botpyton-github-ops.yml",
         )
