@@ -27,6 +27,39 @@ def _unsafe(path: Path) -> bool:
     except OSError:
         return True
 
+def _safe_profile_base(path: Path) -> bool:
+    """Accept only absolute paths on a local fixed Windows drive (or test fixtures)."""
+    if not path.is_absolute():
+        return False
+    # Unit tests can emulate Windows paths using temporary POSIX paths. On real
+    # Windows, reject UNC roots before any existence check could touch a share.
+    if os.name != "nt":
+        return True
+    if str(path).startswith(("\\\\", "//")) or not path.drive:
+        return False
+    try:
+        import ctypes
+
+        get_drive_type = ctypes.windll.kernel32.GetDriveTypeW
+        get_drive_type.argtypes = [ctypes.c_wchar_p]
+        get_drive_type.restype = ctypes.c_uint
+        # DRIVE_FIXED=3. Unknown/removable/network volumes fail closed.
+        return get_drive_type(path.drive + "\\\\") == 3
+    except (AttributeError, OSError):
+        return False
+
+
+def _unsafe_component_chain(path: Path) -> bool:
+    """Reject a profile base if it or any existing ancestor is a link/junction."""
+    current = path
+    while True:
+        if _unsafe(current):
+            return True
+        parent = current.parent
+        if parent == current:
+            return False
+        current = parent
+
 
 def preview_desktop_app_cache(*, env: dict[str, str] | None = None,
                               windows: bool | None = None, now: float | None = None,
@@ -67,8 +100,21 @@ def preview_desktop_app_cache(*, env: dict[str, str] | None = None,
         base = environ.get(env_key)
         if not base:
             continue
-        app_root = Path(base).expanduser() / dirname
+        base_root = Path(base).expanduser()
+        # Fail closed before touching a possible UNC share or mapped network
+        # drive; profile redirection is not part of this local-only inventory.
+        if not _safe_profile_base(base_root):
+            unsafe_count += 1
+            limited = True
+            continue
         try:
+            if not base_root.exists():
+                continue
+            if not base_root.is_dir() or _unsafe_component_chain(base_root):
+                unsafe_count += 1
+                limited = True
+                continue
+            app_root = base_root / dirname
             if not app_root.exists():
                 continue
             if not app_root.is_dir() or _unsafe(app_root):

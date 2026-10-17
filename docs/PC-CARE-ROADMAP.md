@@ -202,3 +202,11 @@ python -m bot.main --pc-cleanup-restore "C:\\path\\to\\BOTPYTON\\Quarantine\\ses
 - Bounds: default 1,000 entries, 100 candidates, depth 3 and five seconds; hard caps 2,000 entries, 150 candidates, depth 3 and eight seconds. Links/reparse points are skipped; errors and limits mark the result partial.
 - Adds fixture tests and a Windows CI smoke invocation. This phase broadens **discovery only**. Discord/Slack candidates are deliberately not accepted by the existing browser quarantine/restore workflow; a future movement feature must separately review each app's lifecycle, path safety and restore behavior first.
 - Old age does not prove a file is inactive or safe to remove. Close the relevant app before any future cleanup. No target-PC files have been changed; target machine validation remains pending.
+
+
+## Phase 31 — Desktop-cache profile path hardening (preview only)
+
+- Refuses relative profile roots and, on Windows, rejects UNC paths and any profile drive that the OS does not report as a fixed local drive. If drive classification fails, the scanner fails closed rather than touching a possible network share.
+- Checks the configured `%APPDATA%` path and every ancestor for symbolic links/reparse points before exploring Discord or Slack; the application and cache directory entries continue to be checked individually.
+- Adds a fixture test for a redirected/symlinked ancestor. The test confirms the report becomes partial, no candidate is returned, and the original cache file remains untouched.
+- No new app types are enabled and no quarantine/delete action is added. The command remains an inventory-only, bounded, read-only operation.
