@@ -110,6 +110,7 @@ def run_project_check(
     *,
     execute_project_code: bool = False,
     timeout_seconds: int = 120,
+    memory_limit_mb: int | None = None,
 ) -> dict:
     """Run one discovered fixed profile only after explicit project-code approval."""
     if execute_project_code is not True:
@@ -131,6 +132,7 @@ def run_project_check(
             approved_executables=[selected["executable"]],
             timeout_seconds=timeout_seconds,
             output_limit_bytes=64_000,
+            memory_limit_mb=memory_limit_mb,
         )
     except ProcessRunnerError as exc:
         raise ProjectCheckError(str(exc)) from exc
