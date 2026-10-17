@@ -9,6 +9,8 @@ import tomllib
 import zipfile
 from pathlib import Path, PurePosixPath
 
+from .application_cache import _is_link_or_reparse
+
 PACKAGE_SCHEMA_VERSION = 1
 PACKAGE_ROOT = "BOTPYTON"
 PACKAGE_MANIFEST = f"{PACKAGE_ROOT}/package-manifest.json"
@@ -17,6 +19,36 @@ MAX_PACKAGE_TOTAL_BYTES = 30 * 1024 * 1024
 MAX_PACKAGE_FILES = 1_000
 COPY_CHUNK_BYTES = 256 * 1024
 FIXED_ZIP_TIME = (2020, 1, 1, 0, 0, 0)
+
+
+def _has_link_or_reparse_component(path: str | Path, *, stop_at: str | Path | None = None) -> bool:
+    """Reject symlinks, Windows junctions, and other reparse points in a package path."""
+    try:
+        current = Path(os.path.abspath(str(Path(path).expanduser())))
+        boundary = (
+            Path(os.path.abspath(str(Path(stop_at).expanduser())))
+            if stop_at is not None else None
+        )
+        if boundary is not None:
+            current.relative_to(boundary)
+        while True:
+            try:
+                current.lstat()
+            except FileNotFoundError:
+                pass
+            except OSError:
+                return True
+            else:
+                if _is_link_or_reparse(current):
+                    return True
+            if boundary is not None and current == boundary:
+                return False
+            parent = current.parent
+            if parent == current:
+                return boundary is not None
+            current = parent
+    except (OSError, RuntimeError, ValueError):
+        return True
 
 
 def _stream_sha256(path: Path, *, byte_limit: int) -> str:
@@ -49,7 +81,7 @@ def _collect_package_files(root: Path) -> list[tuple[str, Path]]:
     ]
     for relative in fixed_files:
         path = root / relative
-        if path.is_symlink() or not path.is_file():
+        if _has_link_or_reparse_component(path, stop_at=root) or not path.is_file():
             raise ValueError(f"required portable package file is missing or linked: {relative}")
         selected[relative] = path
 
@@ -60,19 +92,20 @@ def _collect_package_files(root: Path) -> list[tuple[str, Path]]:
     ]
     for relative_root, allowed_extensions in tree_rules:
         source_root = root / relative_root
-        if source_root.is_symlink() or not source_root.is_dir():
+        if _has_link_or_reparse_component(source_root, stop_at=root) or not source_root.is_dir():
             raise ValueError(f"required package folder is missing or linked: {relative_root}")
         for current, directory_names, file_names in os.walk(source_root, topdown=True, followlinks=False):
             current_path = Path(current)
             directory_names[:] = sorted(
                 name for name in directory_names
-                if name not in {"__pycache__", ".git", ".venv", "venv"} and not (current_path / name).is_symlink()
+                if name not in {"__pycache__", ".git", ".venv", "venv"}
+                and not _has_link_or_reparse_component(current_path / name, stop_at=root)
             )
             for name in sorted(file_names):
                 file_path = current_path / name
                 if file_path.suffix.casefold() not in allowed_extensions:
                     continue
-                if file_path.is_symlink() or not file_path.is_file():
+                if _has_link_or_reparse_component(file_path, stop_at=root) or not file_path.is_file():
                     continue
                 relative = file_path.relative_to(root).as_posix()
                 selected[relative] = file_path
@@ -218,7 +251,10 @@ def build_portable_package(source_root: str | Path, output_dir: str | Path) -> d
     """Create a reproducible source ZIP and SHA-256 sidecar without bundling runtime/user data."""
     import json
 
-    root = Path(source_root).expanduser().resolve(strict=True)
+    source_input = Path(source_root).expanduser()
+    if _has_link_or_reparse_component(source_input):
+        raise ValueError("package source path contains a symlink, junction, or reparse point")
+    root = source_input.resolve(strict=True)
     output = Path(output_dir).expanduser().resolve()
     files = _collect_package_files(root)
     project = tomllib.loads((root / "pyproject.toml").read_text(encoding="utf-8"))
