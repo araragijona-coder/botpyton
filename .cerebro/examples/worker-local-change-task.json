@@ -11,6 +11,12 @@
     "A JSON execution report was written"
   ],
   "max_attempts": 1,
+  "verification_checks": [
+    {"type": "local_plan_applied"},
+    {"type": "file_exists", "path": "botpyton_demo_output/hello.py"},
+    {"type": "python_syntax"},
+    {"type": "report_exists"}
+  ],
   "local_change_plan": {
     "schema_version": 1,
     "task_id": "TASK-LOCAL-PLAN-EXAMPLE-001",
