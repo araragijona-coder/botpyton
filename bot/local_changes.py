@@ -182,7 +182,13 @@ def validate_local_change_plan(plan: Any, root: str | Path) -> dict:
     return _public_summary(_validate_local_change_plan(plan, root))
 
 
-def _write_atomic(path: Path, raw: bytes, *, replace_existing: bool = True) -> None:
+def _write_atomic(
+    path: Path,
+    raw: bytes,
+    *,
+    replace_existing: bool = True,
+    expected_current_sha256: str | None = None,
+) -> None:
     """Publish a complete file atomically; optionally require an unused destination."""
     _reject_link_components(path.parent, "Write destination")
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -199,6 +205,10 @@ def _write_atomic(path: Path, raw: bytes, *, replace_existing: bool = True) -> N
         _reject_link_components(path.parent, "Write destination")
         _reject_link_components(path, "Write destination")
         if replace_existing:
+            if expected_current_sha256 is not None:
+                _reject_link_components(path, "Write destination")
+                if _sha256(path.read_bytes()) != expected_current_sha256:
+                    raise OSError("write aborted because destination content changed before publication")
             os.replace(temporary, path)
         else:
             os.link(temporary, path)
@@ -266,7 +276,12 @@ def apply_local_change_plan(
                     "backup_path": str(backup_path),
                     "sha256": _sha256(original),
                 })
-            _write_atomic(target, item["content"].encode("utf-8"), replace_existing=bool(item["exists"]))
+            _write_atomic(
+                target,
+                item["content"].encode("utf-8"),
+                replace_existing=bool(item["exists"]),
+                expected_current_sha256=item["expected_sha256"],
+            )
             written.append(target)
             written_hashes[target] = item["new_sha256"]
     except Exception as exc:
@@ -283,7 +298,7 @@ def apply_local_change_plan(
                 if original is None:
                     target.unlink()
                 else:
-                    _write_atomic(target, original)
+                    _write_atomic(target, original, expected_current_sha256=written_hashes[target])
             except (OSError, LocalChangeError) as rollback_exc:
                 rollback_errors.append(f"{target}: {type(rollback_exc).__name__}")
         message = f"Local change failed and rollback was attempted: {type(exc).__name__}: {exc}"
