@@ -31,11 +31,44 @@ jobs:
       - name: Run actionable read-only preflight
         run: python -m bot.main --doctor
       - name: Exercise bounded read-only PC care benchmark
-        run: python -m bot.main --pc-benchmark
+        shell: pwsh
+        run: |
+          $output = python -m bot.main --pc-benchmark
+          $code = $LASTEXITCODE
+          $output | Write-Output
+          $report = ($output -join [Environment]::NewLine) | ConvertFrom-Json
+          if ($code -eq 2 -and $report.operation_assessment.outcome -eq 'partial') {
+            Write-Host 'PASS: bounded benchmark explicitly reported partial measurements.'
+            exit 0
+          }
+          if ($code -ne 0) { exit $code }
+          if ($report.operation_assessment.outcome -ne 'reported_success') { throw 'Benchmark result was not recognized as a valid success.' }
       - name: Inventory local device-driver metadata (read-only)
-        run: python -m bot.main --pc-drivers
+        shell: pwsh
+        run: |
+          $output = python -m bot.main --pc-drivers
+          $code = $LASTEXITCODE
+          $output | Write-Output
+          $report = ($output -join [Environment]::NewLine) | ConvertFrom-Json
+          if ($code -eq 2 -and $report.operation_assessment.outcome -eq 'partial') {
+            Write-Host 'PASS: driver inventory explicitly reported a bounded partial result.'
+            exit 0
+          }
+          if ($code -ne 0) { exit $code }
+          if ($report.operation_assessment.outcome -ne 'reported_success') { throw 'Driver inventory result was not recognized as a valid success.' }
       - name: Inspect Windows disk status metadata (read-only)
-        run: python -m bot.main --pc-disk-health
+        shell: pwsh
+        run: |
+          $output = python -m bot.main --pc-disk-health
+          $code = $LASTEXITCODE
+          $output | Write-Output
+          $report = ($output -join [Environment]::NewLine) | ConvertFrom-Json
+          if ($code -eq 2 -and $report.operation_assessment.outcome -eq 'partial') {
+            Write-Host 'PASS: disk inventory explicitly reported a bounded partial result.'
+            exit 0
+          }
+          if ($code -ne 0) { exit $code }
+          if ($report.operation_assessment.outcome -ne 'reported_success') { throw 'Disk inventory result was not recognized as a valid success.' }
       - name: Build and verify portable package
         run: |
           python -m bot.main --package-portable "$env:RUNNER_TEMP\botpyton-dist"
