@@ -1,4 +1,4 @@
-"""Safety tests for Discord/Slack read-only cache catalog."""
+"""Safety tests for allowlisted desktop-app read-only cache catalog."""
 import os
 import tempfile
 import unittest
@@ -41,6 +41,32 @@ class DesktopAppCacheTests(unittest.TestCase):
             self.assertEqual(result["files_moved"], 0)
             self.assertTrue(old.exists())
 
+    def test_vscode_cache_roots_are_previewed_but_user_state_is_excluded(self):
+        now = 1_700_000_000.0
+        with tempfile.TemporaryDirectory() as tmp:
+            appdata = Path(tmp) / "Roaming"
+            allowed = [
+                self.old_file(appdata / "Code" / "Cache" / "http-cache.bin", now),
+                self.old_file(appdata / "Code" / "Code Cache" / "v8.bin", now),
+                self.old_file(appdata / "Code" / "GPUCache" / "gpu.bin", now),
+            ]
+            self.old_file(appdata / "Code" / "Local Storage" / "leveldb" / "private.ldb", now)
+            self.old_file(appdata / "Code" / "User" / "globalStorage" / "state.vscdb", now)
+            self.old_file(appdata / "Code" / "User" / "workspaceStorage" / "private.json", now)
+            self.old_file(appdata / "Code" / "CachedExtensionVSIXs" / "extension.vsix", now)
+            result = preview_desktop_app_cache(
+                env={"APPDATA": str(appdata)}, windows=True, now=now,
+            )
+            self.assertEqual(result["status"], "preview_complete")
+            self.assertEqual(result["candidate_count"], 3)
+            reported = {item["path"] for item in result["candidates"]}
+            self.assertEqual(reported, {str(path.resolve()) for path in allowed})
+            self.assertFalse(any("Local Storage" in path or "globalStorage" in path
+                                 or "workspaceStorage" in path or "CachedExtensionVSIXs" in path
+                                 for path in reported))
+            self.assertTrue(all(path.exists() for path in allowed))
+            self.assertEqual(result["files_moved"], 0)
+            self.assertEqual(result["files_deleted"], 0)
     def test_profile_base_with_symlinked_ancestor_is_rejected(self):
         now = 1_700_000_000.0
         with tempfile.TemporaryDirectory() as tmp:

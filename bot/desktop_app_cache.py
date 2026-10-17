@@ -16,6 +16,7 @@ REPARSE_POINT_ATTRIBUTE = 0x400
 APP_PROFILES = (
     ("Discord", "APPDATA", "discord"),
     ("Slack", "APPDATA", "Slack"),
+    ("Visual Studio Code", "APPDATA", "Code"),
 )
 CACHE_AREAS = ("Cache", "Code Cache", "GPUCache")
 
@@ -65,7 +66,7 @@ def preview_desktop_app_cache(*, env: dict[str, str] | None = None,
                               windows: bool | None = None, now: float | None = None,
                               minimum_age_days: int = 1, max_entries: int = 1_000,
                               max_candidates: int = 100, timeout_seconds: float = 5.0) -> dict:
-    """List old files in fixed Discord/Slack Electron cache folders; never mutates data."""
+    """List old files in fixed Discord/Slack/VS Code Electron cache folders; never mutates data."""
     is_windows = os.name == "nt" if windows is None else windows
     if not isinstance(minimum_age_days, int) or isinstance(minimum_age_days, bool) or not 1 <= minimum_age_days <= 365:
         raise ValueError("minimum_age_days must be between 1 and 365")
@@ -198,7 +199,7 @@ def preview_desktop_app_cache(*, env: dict[str, str] | None = None,
         "candidates": candidates,
         "limitations": [
             "Preview only: no contents are read, moved, or deleted; no settings are changed.",
-            "Only Discord and Slack Cache, Code Cache, and GPUCache folders are eligible.",
+            "Only the fixed Discord, Slack, and Visual Studio Code Cache, Code Cache, and GPUCache folders are eligible.",
             "Application databases, Local Storage, IndexedDB, cookies, tokens, sessions, settings, attachments and downloaded/media content are excluded.",
             "This is not connected to the browser-cache quarantine workflow; no new app profile can be quarantined in this phase.",
             "Close the application before any future separately reviewed cleanup. Old age alone does not prove a file is unused.",

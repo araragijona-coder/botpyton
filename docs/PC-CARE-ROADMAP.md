@@ -210,3 +210,11 @@ python -m bot.main --pc-cleanup-restore "C:\\path\\to\\BOTPYTON\\Quarantine\\ses
 - Checks the configured `%APPDATA%` path and every ancestor for symbolic links/reparse points before exploring Discord or Slack; the application and cache directory entries continue to be checked individually.
 - Adds a fixture test for a redirected/symlinked ancestor. The test confirms the report becomes partial, no candidate is returned, and the original cache file remains untouched.
 - No new app types are enabled and no quarantine/delete action is added. The command remains an inventory-only, bounded, read-only operation.
+
+
+## Phase 32 — Visual Studio Code cache discovery (preview only)
+
+- Extends the on-demand desktop-cache preview to include the standard %APPDATA%\Code profile root for Visual Studio Code. Only its top-level Cache, Code Cache, and GPUCache areas are scanned, with the same age, entry, candidate, depth, deadline, local-drive and reparse-point bounds as Phase 31.
+- Adds a focused fixture with old files in those three cache areas and confirms that Local Storage, User/globalStorage, User/workspaceStorage, and CachedExtensionVSIXs are not candidates and remain untouched.
+- The standard profile root is grounded in the [VS Code portable-mode documentation](https://code.visualstudio.com/docs/setup/portable), which identifies %APPDATA%\Code as the normal Windows user-data directory. The [VS Code repository's selective-copy exclusions](https://github.com/microsoft/vscode/blob/main/.agents/skills/launch/scripts/launch.sh) distinguish Chromium cache folders from persistent workspace/user state.
+- Portable-mode data/user-data, custom --user-data-dir locations, Insiders, VSCodium, extension folders, and all unlisted locations remain out of scope. The command still only inventories; it does not read file contents or move/delete any VS Code data, and these candidates are not accepted by browser-cache quarantine.

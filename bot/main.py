@@ -94,7 +94,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--pc-check", action="store_true", help="run the read-only, offline local PC-care audit")
     parser.add_argument("--pc-startup-advisor", action="store_true", help="inspect Windows startup entry targets locally; never disables entries")
     parser.add_argument("--pc-app-cleanup-preview", action="store_true", help="preview old files in recognized browser cache folders; never deletes or changes browser data")
-    parser.add_argument("--pc-desktop-cache-preview", action="store_true", help="preview old Discord/Slack cache files only; read-only, no deletion or movement")
+    parser.add_argument("--pc-desktop-cache-preview", action="store_true", help="preview old Discord/Slack/Visual Studio Code cache files only; read-only, no deletion or movement")
     parser.add_argument("--pc-app-cache-quarantine", action="store_true", help="interactively move explicitly selected browser cache files into reversible quarantine")
     parser.add_argument("--pc-app-cache-restore-preview", metavar="MANIFEST_JSON", help="verify a browser-cache quarantine manifest and show restore conflicts; no files moved")
     parser.add_argument("--pc-app-cache-restore", metavar="MANIFEST_JSON", help="restore verified browser-cache files after exact typed confirmation; never overwrite existing files")
