@@ -72,7 +72,7 @@ def _safe_search_path(path_value: str | None, *, cwd: str | Path) -> str:
 
 def _find_executable_in_path(executable: str, *, path_value: str | None, cwd: str | Path) -> str | None:
     """Resolve a registered tool using explicit sanitized PATH entries only."""
-    if not isinstance(executable, str) or not executable or "\\0" in executable:
+    if not isinstance(executable, str) or not executable or chr(0) in executable:
         raise ProcessRunnerError("Registered executable name must be a non-empty NUL-free string")
     name = Path(executable)
     if name.is_absolute() or name.parent != Path("."):
@@ -113,13 +113,13 @@ def _safe_environment(
         for key, value in extra.items():
             if not isinstance(key, str) or not isinstance(value, str):
                 raise ProcessRunnerError("Environment overrides must be string pairs")
-            if not key or any(ch in key for ch in "=\\0"):
+            if not key or "=" in key or chr(0) in key:
                 raise ProcessRunnerError("Invalid environment variable name")
             if any(marker in key.upper() for marker in SECRET_MARKERS):
                 raise ProcessRunnerError("Secret-like environment overrides are forbidden")
             if key.upper() in CODE_LOADING_ENV_VARS:
                 raise ProcessRunnerError(f"Code-loading environment override is forbidden: {key}")
-            if "\\0" in value:
+            if chr(0) in value:
                 raise ProcessRunnerError("Environment values cannot contain NUL")
             env[key] = value
     search_root = Path.cwd() if cwd is None else cwd
@@ -132,7 +132,7 @@ def _safe_environment(
 
 
 def _resolve_approved_executable(executable: str, approved_executables: Sequence[str]) -> str:
-    if not isinstance(executable, str) or not executable or "\\0" in executable:
+    if not isinstance(executable, str) or not executable or chr(0) in executable:
         raise ProcessRunnerError("Executable must be a non-empty string")
     requested = Path(executable).expanduser()
     if not requested.is_absolute():
@@ -145,7 +145,7 @@ def _resolve_approved_executable(executable: str, approved_executables: Sequence
         raise ProcessRunnerError("Executable path could not be resolved to an existing file") from exc
     approved = set()
     for candidate in approved_executables:
-        if not isinstance(candidate, str) or not candidate or "\\0" in candidate:
+        if not isinstance(candidate, str) or not candidate or chr(0) in candidate:
             raise ProcessRunnerError("Allowlisted executable paths must be non-empty NUL-free strings")
         approved_path = Path(candidate).expanduser()
         if not approved_path.is_absolute():
