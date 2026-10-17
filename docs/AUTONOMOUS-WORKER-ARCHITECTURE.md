@@ -121,7 +121,7 @@ Este apartado distingue capacidades presentes de objetivos futuros; no declara B
 - Inventario de repositorios con límites de archivos/profundidad, exclusión de carpetas generadas y sin ejecutar código del proyecto.
 - Descubrimiento local de herramientas y sondeos de versión fijos.
 - Ejecutor de procesos con argumentos separados, `shell=False`, timeout, salida retenida acotada, eliminación de variables que parezcan secretos y presupuesto de memoria calculado desde la RAM disponible.
-- En Windows, el runner intenta imponer un límite de memoria por Job Object y terminar descendientes al cerrar el trabajo. **Este camino específico de Windows todavía necesita verificación en un equipo Windows**; la CI actual usa Linux y marca el límite de memoria como no aplicado en ese sistema.
+- En Windows, el runner impone un límite de memoria por Job Object y termina descendientes al cerrar el trabajo. El workflow Windows de CI verificó el sondeo de versión y la suite de pruebas correctamente (ejecución: https://github.com/araragijona-coder/botpyton/actions/runs/39030499216). El consumo real y el comportamiento en el PC del usuario siguen pendientes de comprobar en ese equipo; en Linux el runner informa que el límite de memoria no está aplicado.
 - Cola persistente, planificación por dependencias, informes JSON, ciclo acotado de prueba/reparación y diagnóstico que recopila contexto de traceback desconocido sin editar código.
 - Planes de cambios locales con rutas protegidas, hashes previos obligatorios al reemplazar archivos, backups fuera del proyecto y reversión ante errores de escritura.
 - Perfiles de pruebas/build para varias tecnologías: descubrimiento estático por defecto y ejecución solo con autorización explícita.
