@@ -86,6 +86,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--run-project-check", metavar="CHECK_ID", help="run one detected check; requires --execute-project-code")
     parser.add_argument("--execute-project-code", action="store_true", help="explicitly authorize execution of project tests/build scripts")
     parser.add_argument("--check-timeout", type=int, default=120, help="seconds allowed for --run-project-check (maximum 300)")
+    parser.add_argument("--child-memory-limit-mb", type=int, help="explicit project-check memory cap in MB (64–1024; default adapts to available RAM)")
     parser.add_argument("--create-workspace", metavar="TASK_ID", help="create a Git worktree on a dedicated local branch from a clean project")
     parser.add_argument("--workspace-status", metavar="PATH", help="inspect a worktree's current status and diff summary")
     parser.add_argument("--workspace-parent", metavar="PATH", help="directory outside the source repository for --create-workspace")
@@ -158,6 +159,7 @@ def main(argv: list[str] | None = None) -> int:
                 args.run_project_check, args.project_root,
                 execute_project_code=args.execute_project_code,
                 timeout_seconds=args.check_timeout,
+                memory_limit_mb=args.child_memory_limit_mb,
             )
             _print_json(result)
             return 0 if result["ok"] else 1
