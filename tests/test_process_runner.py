@@ -56,7 +56,12 @@ class ProcessRunnerTests(unittest.TestCase):
             except (OSError, NotImplementedError) as exc:
                 self.skipTest(f"directory symlinks unavailable on this runner: {exc}")
             safe = _safe_search_path(os.pathsep.join([str(local_alias)]), cwd=temp)
-            self.assertEqual(safe, "")
+            self.assertEqual(
+                safe,
+                "",
+                f"temp={temp!r}, trusted={trusted!r}, alias={str(local_alias)!r}, "
+                f"alias_resolved={str(local_alias.resolve())!r}, cwd_resolved={str(Path(temp).resolve())!r}",
+            )
 
     def test_tool_lookup_never_selects_executable_from_current_directory(self):
         with tempfile.TemporaryDirectory() as temp:
