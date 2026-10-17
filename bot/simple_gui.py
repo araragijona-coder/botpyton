@@ -380,9 +380,8 @@ class SimpleBotPytonApp:
         self.details_button.configure(state="normal")
         if bad or warning_findings:
             self.status_label.configure(text="● HAY PUNTOS PARA REVISAR", fg="#FFD080")
-            count = bad + warning_findings
-            self.result_badge.configure(text=f"{count} punto(s) para revisar", bg=PALE_AMBER, fg=AMBER)
-            heading = f"Revisión terminada: {len(reports)} comprobación(es) recibieron respuesta y hay {warning_findings} aviso(s) importante(s) o {bad} resultado(s) parcial(es) para revisar."
+            self.result_badge.configure(text="Hay puntos para revisar", bg=PALE_AMBER, fg=AMBER)
+            heading = f"Revisión terminada: {len(reports)} comprobación(es) recibieron respuesta; aparecieron {warning_findings} aviso(s) importante(s) y {bad} resultado(s) parcial(es) o con acceso limitado."
         else:
             self.status_label.configure(text="● LISTO", fg="#72E0C9")
             self.result_badge.configure(text="Revisión finalizada", bg=PALE_TEAL, fg=TEAL_DARK)
