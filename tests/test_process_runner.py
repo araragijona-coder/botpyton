@@ -69,8 +69,8 @@ class ProcessRunnerTests(unittest.TestCase):
             marker = Path(temp) / "sitecustomize-ran.txt"
             payload = Path(temp) / "sitecustomize.py"
             payload.write_text(
-                "from pathlib import Path\\n"
-                f"Path({str(marker)!r}).write_text('unexpected import', encoding='utf-8')\\n",
+                "from pathlib import Path\n"
+                f"Path({str(marker)!r}).write_text('unexpected import', encoding='utf-8')\n",
                 encoding="utf-8",
             )
             with mock.patch.dict(os.environ, {"PYTHONPATH": temp}):
