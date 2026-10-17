@@ -160,7 +160,7 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         if args.autonomous_cycle:
             result = run_autonomous_cycle(
-                Path.cwd(),
+                Path(args.project_root).expanduser().resolve(),
                 max_attempts=args.cycle_max_attempts,
                 test_timeout_seconds=args.cycle_timeout,
             )
@@ -212,16 +212,17 @@ def main(argv: list[str] | None = None) -> int:
             print("\n".join(task["id"] for task in order_tasks(tasks)))
             return 0
         if args.diagnose:
-            log_path = Path(validate_relative_path(args.diagnose))
+            project_root = Path(args.project_root).expanduser().resolve()
+            log_path = project_root / validate_relative_path(args.diagnose)
             if log_path.stat().st_size > 50_000:
                 raise OrchestrationError("Diagnostic log exceeds 50000 bytes")
             log_text = log_path.read_text(encoding="utf-8")
             if len(log_text.encode("utf-8")) > 50_000:
                 raise OrchestrationError("Diagnostic log exceeds 50000 bytes")
-            _print_json(diagnose_failure(log_text, Path.cwd()))
+            _print_json(diagnose_failure(log_text, project_root))
             return 0
         if args.check:
-            errors = verify_python_files(Path.cwd())
+            errors = verify_python_files(Path(args.project_root).expanduser().resolve())
             JsonMemory(args.memory).load()
             if errors:
                 print("\n".join(errors), file=sys.stderr)
@@ -257,7 +258,7 @@ def main(argv: list[str] | None = None) -> int:
             limit = 1 if args.work_once else args.work_queue
             if limit is None or limit < 1 or limit > 100:
                 raise QueueError("worker limit must be between 1 and 100")
-            executor = TaskExecutor(Path.cwd())
+            executor = TaskExecutor(Path(args.project_root).expanduser().resolve())
             outcomes = []
             for _ in range(limit):
                 record = queue.claim_next()
