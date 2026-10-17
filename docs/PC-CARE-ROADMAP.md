@@ -145,10 +145,18 @@ python -m bot.main --pc-cleanup-restore "C:\\path\\to\\BOTPYTON\\Quarantine\\ses
 - Exit code 0 means ready or caution; exit code 2 means a blocking prerequisite was detected. A successful preflight is not a promise that later commands cannot fail.
 
 
-## Phase 25 — Fail-closed operation results and postcondition checks — candidate; CI pending
+## Phase 25 — Fail-closed operation results and postcondition checks — candidate; CI pending; partial-measurement status fix included in follow-up commit
 
 - PC-care reports for local audit, cleanup preview, process/application/update inventory, storage/duplicate scans, driver/disk inventory, benchmark, restore preview and quarantine/restore pass through a shared result guard.
 - The guard checks report structure, known status, provider return code, declared returned counts versus actual records, audit integrity, scan limits, truncated output, access errors and skipped actions.
 - Recognized partial reports exit with code 2; failed reports or failed postconditions exit with code 1; unknown report/status exits with code 3. Only reviewed success statuses exit 0.
 - No automatic retry occurs. Unknown or partial outcomes tell the operator what evidence to inspect. The guard assesses report consistency, not hardware health or completeness of Windows provider coverage.
 - Unit tests cover success, partial scan, provider failure, count mismatch, integrity error, unknown status and malformed report.
+
+
+## Phase 26 — Competitor capability audit — research baseline recorded
+
+- Added `docs/CCLEANER-PARITY-AUDIT.md` with a source-linked comparison of BOTPYTON's implemented scope against current official CCleaner product/support documentation.
+- The audit explicitly records feature gaps rather than claiming equivalence: broad application/browser cleaning, startup control, app/driver updates, performance optimizer, scheduled/real-time operation, full uninstaller, disk wipe and hardware monitoring remain absent or incomplete.
+- Future parity work must preserve BOTPYTON's constraints: on-demand startup, no AI/API calls, bounded serial work, explicit user consent, reversible file handling and truthful partial/error reporting. Any feature that needs network access must be separately opted in and documented.
+- This is a documentation/research checkpoint, not proof of comparative speed, quality, safety or RAM use. Benchmark comparisons require the target PC and identical task scopes.

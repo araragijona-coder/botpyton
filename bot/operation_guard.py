@@ -8,7 +8,7 @@ SUCCESS_STATUSES = {
     "collected", "completed", "measured", "scan_complete", "preview_complete",
     "ready_to_restore", "no_candidates", "restored", "no_files_restored", "diagnostic_only",
 }
-PARTIAL_STATUSES = {"partial", "partial_limit", "preview_partial", "scan_partial"}
+PARTIAL_STATUSES = {"partial", "partial_limit", "preview_partial", "scan_partial", "partial_measurement"}
 FAILURE_STATUSES = {
     "unavailable", "unsupported_platform", "not_present", "timeout",
     "command_unavailable", "query_unavailable", "query_error", "parse_error",

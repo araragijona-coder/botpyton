@@ -23,6 +23,18 @@ class OperationGuardTests(unittest.TestCase):
         self.assertEqual(result["exit_code"], 2)
         self.assertFalse(result["retry_recommended"])
 
+    def test_benchmark_with_partial_submeasurements_is_partial_not_unknown(self):
+        result = assess_operation_result({
+            "status": "partial_measurement",
+            "measurements": {"operations": [
+                {"name": "app_inventory", "status": "partial_limit"},
+                {"name": "cleanup_preview", "status": "preview_partial"},
+            ]},
+        })
+        self.assertEqual(result["outcome"], "partial")
+        self.assertEqual(result["exit_code"], 2)
+        self.assertFalse(result["retry_recommended"])
+
     def test_provider_failure_never_returns_success(self):
         result = assess_operation_result({"status": "completed", "return_code": 1})
         self.assertEqual(result["outcome"], "failed")

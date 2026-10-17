@@ -363,3 +363,9 @@ The doctor is local, deterministic, and read-only. It does not install packages,
 - The guard checks known status values, provider return codes, returned-record counts, integrity status, scan-limit flags, truncated output, access errors and skipped restore/quarantine actions. It never retries automatically.
 - Exit codes: `0` = recognized structurally valid result; `1` = failure/postcondition mismatch; `2` = partial/incomplete result; `3` = unknown report/status. A result marked `reported_success` is not a claim that hardware is healthy or that every OS provider exposes all devices.
 - Tests cover success, partial scans, provider failure, count mismatch, integrity failure, unknown status and malformed output. CI must pass on the exact commit before this phase is verified.
+
+
+
+## Competitive scope audit
+
+The current feature gap against CCleaner is documented in [`docs/CCLEANER-PARITY-AUDIT.md`](docs/CCLEANER-PARITY-AUDIT.md). BOTPYTON is **not yet feature-equivalent**: it prioritizes local/offline diagnostics, bounded scans and reversible actions, while CCleaner offers broader browser/application cleaning, startup controls, software and driver updating, background optimization, and scheduled/real-time features depending on edition. Do not market BOTPYTON as faster or more capable until feature and target-PC measurements support that claim.
