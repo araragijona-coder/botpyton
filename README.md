@@ -160,3 +160,18 @@ The common `validate_change_plan()` validator now rejects `draft: false`, so ind
 ## Current status
 
 **PHASE 08 — GITHUB JSON TASK ORCHESTRATION / VERIFIED ON DEVELOPMENT BRANCH.** The phase branch passed the foundation test workflow (71 unit tests plus the autonomous-cycle and audit-record checks) and the persistent worker workflow (checkpoint restored, queue work completed, next checkpoint uploaded). The change remains isolated from main; live draft-PR submission was not executed. Any promotion still requires human review.
+
+
+## Phase 11: on-demand local use and bounded repository inventory
+
+BOTPYTON is intended to run **only when the user opens it**. The optional Windows launcher `BOTPYTON.bat` does not install a service, register a startup task, or keep a background process alive after the window closes. It offers a read-only project inventory, a core check, and an explicit choice to run the test suite. Python must already be installed and available as `python` on PATH.
+
+Inspect a project without executing its code:
+
+```bash
+python -m bot.main --inspect-repository "C:\\path\\to\\project"
+```
+
+The inventory has bounds for file count, directory depth, and oversized files; skips common generated/dependency folders and symlinks; recognizes common language extensions and project manifests; and reports possible checks as suggestions only. It does not read source-file contents, install dependencies, run candidate commands, use the network, or call AI services. The default limits are 5,000 files, depth 8, and 2 MB per file for oversized-file reporting. An inventory marked `inventory_complete_with_limits` is partial and must not be treated as exhaustive.
+
+The inventory is an initial capability, not a complete local-PC agent: it does not yet edit arbitrary projects or launch arbitrary tools. Any future execution/editing capability must be separately permissioned and bounded. The educational project catalog is in `docs/EDUCATIONAL-PROJECT-LIBRARY.json`; entries marked planned are ideas, not implemented applications.
