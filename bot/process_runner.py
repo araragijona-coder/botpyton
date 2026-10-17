@@ -61,23 +61,19 @@ def _resolve_approved_executable(executable: str, approved_executables: Sequence
 
 
 def _bounded_reader(stream, limit: int, storage: dict, key: str) -> None:
-    chunks = []
-    stored = 0
+    tail = bytearray()
     truncated = False
     try:
         while True:
             chunk = stream.read(8192)
             if not chunk:
                 break
-            remaining = limit - stored
-            if remaining > 0:
-                kept = chunk[:remaining]
-                chunks.append(kept)
-                stored += len(kept)
-            if len(chunk) > max(remaining, 0):
+            tail.extend(chunk)
+            if len(tail) > limit:
+                del tail[:len(tail) - limit]
                 truncated = True
     finally:
-        storage[key] = b"".join(chunks)
+        storage[key] = bytes(tail)
         storage[key + "_truncated"] = truncated
         stream.close()
 
