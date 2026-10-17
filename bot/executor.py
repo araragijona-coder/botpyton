@@ -15,6 +15,7 @@ from .policy import PolicyError, validate_task
 from .process_runner import ProcessRunnerError, run_process
 from .project_checks import run_project_check
 from .verifier import verify_python_files
+from .verification import evaluate_verification_checks
 
 _SKIP_DIRS = {".git", ".venv", "__pycache__", "node_modules", "dist", "build"}
 MAX_REPORTS = 16
@@ -92,9 +93,29 @@ class TaskExecutor:
             "ai_enabled": False,
             "external_ai_apis_enabled": False,
         }
+        # Write once so the report_exists check can verify a real artifact, then
+        # persist the final verification result into that same report.
         report_path = self._write_report(report)
         report["report_path"] = report_path
+        verification = evaluate_verification_checks(
+            task.get("verification_checks"), self.root,
+            action_results=action_results, report_path=report_path,
+        )
+        report["verification"] = verification
+        if verification["all_passed"] is False and successful:
+            successful = False
+            failed_action = "verify_success_conditions"
+            failed_checks = [item for item in verification["checks"] if not item["ok"]]
+            error = f"{len(failed_checks)} verification check(s) failed"
+            diagnostic = diagnose_failure(error, self.root)
+            report.update({
+                "status": "failed",
+                "failed_action": failed_action,
+                "error": error,
+                "diagnostic": diagnostic,
+            })
         report["ok"] = successful
+        self._write_report(report)
         return report
 
     def _dispatch(self, action: str, task: dict[str, Any], record: dict[str, Any]) -> dict[str, Any]:
@@ -109,10 +130,17 @@ class TaskExecutor:
             check_id = task.get("project_check_id")
             if task.get("allow_project_code_execution") is not True:
                 raise PolicyError("Project-code execution was not explicitly approved")
-            return run_project_check(
+            result = run_project_check(
                 check_id, self.root, execute_project_code=True,
                 timeout_seconds=task.get("check_timeout_seconds", self.test_timeout_seconds),
+                memory_limit_mb=task.get("child_memory_limit_mb"),
             )
+            if not result["ok"]:
+                raise ActionFailure(
+                    f"Project check {check_id} failed with exit code {result['exit_code']}",
+                    log_text=(result.get("stdout", "") + "\\n" + result.get("stderr", ""))[-50_000:],
+                )
+            return result
         if action == "apply_local_plan":
             plan = task.get("local_change_plan")
             if not isinstance(plan, dict):
