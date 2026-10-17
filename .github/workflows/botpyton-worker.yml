@@ -233,40 +233,13 @@ jobs:
           retention-days: 7
 
   submit-draft-prs:
-    # I-01 fail-closed: no external trust boundary is configured/verified yet.
+    # I-01 fail-closed: do not run a privileged sender until an independent trust boundary is verified.
     if: false
-    needs: [validate-inputs, worker]
     runs-on: ubuntu-latest
-    timeout-minutes: 8
+    timeout-minutes: 1
     permissions:
-      contents: write
-      pull-requests: write
+      contents: read
+      pull-requests: read
     steps:
-      - name: Checkout selected branch
-        uses: actions/checkout@v4
-        with:
-          ref: ${{ github.ref }}
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-      - name: Submit validated draft-only change plans
-        env:
-          GITHUB_REPOSITORY: ${{ github.repository }}
-          BOTPYTON_CHANGE_PLANS_JSON: ${{ inputs.change_plans_json || '[]' }}
-        run: |
-          python - <<'PY'
-          import json
-          import os
-          from pathlib import Path
-
-          raw = os.environ.get("BOTPYTON_CHANGE_PLANS_JSON", "[]")
-          if len(raw.encode("utf-8")) > 50_000:
-              raise SystemExit("change_plans_json exceeds the 50,000-byte input limit")
-          plans = json.loads(raw)
-          if not isinstance(plans, list) or len(plans) > 10 or any(not isinstance(plan, dict) for plan in plans):
-              raise SystemExit("change_plans_json must be an array of at most 10 plan objects")
-          target = Path(os.environ["RUNNER_TEMP"]) / "botpyton-change-plans.json"
-          target.write_text(json.dumps(plans, ensure_ascii=False, separators=(",", ":")) + "\n", encoding="utf-8")
-          PY
-          python -m bot.main --github-plans "$RUNNER_TEMP/botpyton-change-plans.json" --execute-github-plans
+      - name: Explain why live submission is disabled
+        run: echo "Live PR submission is disabled pending verified repository trust controls."
