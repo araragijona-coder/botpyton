@@ -211,7 +211,7 @@ CLI equivalent (run from the BOTPYTON repository root):
 ```bash
 python -m bot.main --enqueue .cerebro/examples/worker-local-change-task.json
 python -m bot.main --queue
-python -m bot.main --work-once
+python -m bot.main --work-once --project-root "C:\\path\\to\\project"
 ```
 
 The queue stores durable state under `.cerebro/memory/state.json` by default. Tasks are JSON and actions are allowlisted. This is an auditable, deterministic work order, not natural-language AI reasoning. Review any task JSON before queueing it, especially tasks that contain `apply_local_plan`.
