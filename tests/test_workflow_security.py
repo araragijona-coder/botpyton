@@ -22,6 +22,11 @@ class PrivilegedWorkflowSecurityTests(unittest.TestCase):
                 job = source[job_start: job_start + len(job_marker) + next_match.start() if next_match else len(source)]
                 self.assertRegex(job, r"(?m)^\s+if: false\s*$")
                 self.assertNotIn("GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}", job)
+                self.assertNotIn("actions/checkout", job)
+                self.assertNotIn("contents: write", job)
+                self.assertNotIn("pull-requests: write", job)
+                self.assertNotIn("--execute-github-plan", job)
+                self.assertNotIn("--execute-github-plans", job)
 
     def test_workflows_default_to_read_only_permissions(self):
         for relative in (
