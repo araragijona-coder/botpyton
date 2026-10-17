@@ -37,9 +37,9 @@ class PrivilegedWorkflowSecurityTests(unittest.TestCase):
                 source = (ROOT / relative).read_text(encoding="utf-8")
                 # These triggers can hand privileged workflow execution to code
                 # or artifacts associated with an untrusted branch/PR.
-                self.assertNotRegex(source, r"(?m)^\\s*(?:pull_request_target|workflow_run)\\s*:")
+                self.assertNotRegex(source, r"(?m)^\s*(?:pull_request_target|workflow_run)\s*:")
                 self.assertNotIn("secrets.GITHUB_TOKEN", source)
-                self.assertNotRegex(source, r"(?m)^\\s*(?:contents|pull-requests|actions):\\s*write\\s*$")
+                self.assertNotRegex(source, r"(?m)^\s*(?:contents|pull-requests|actions):\s*write\s*$")
                 self.assertNotIn("--execute-github-plan", source)
                 self.assertNotIn("--execute-github-plans", source)
 
@@ -53,12 +53,12 @@ class PrivilegedWorkflowSecurityTests(unittest.TestCase):
                 source = (ROOT / relative).read_text(encoding="utf-8")
                 start = source.index(marker)
                 tail = source[start + len(marker):]
-                next_job = re.search(r"\\n  [A-Za-z0-9_-]+:\\n", tail)
+                next_job = re.search(r"\n  [A-Za-z0-9_-]+:\n", tail)
                 job = source[start:start + len(marker) + next_job.start() if next_job else len(source)]
                 self.assertNotIn("uses:", job)
                 self.assertNotIn("run: python", job)
                 self.assertNotIn("env:", job)
-                self.assertRegex(job, r"(?m)^\\s+if: false\\s*$")
+                self.assertRegex(job, r"(?m)^\s+if: false\s*$")
 
     def test_workflows_default_to_read_only_permissions(self):
         for relative in (
