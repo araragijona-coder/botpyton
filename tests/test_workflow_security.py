@@ -70,5 +70,33 @@ class PrivilegedWorkflowSecurityTests(unittest.TestCase):
                 self.assertRegex(source, r"(?m)^permissions:\n(?:  [a-z-]+: read\n?)+")
 
 
+    def test_external_actions_are_pinned_to_full_commit_shas(self):
+        workflows = (
+            ".github/workflows/bot-tests.yml",
+            ".github/workflows/botpyton-worker.yml",
+            ".github/workflows/botpyton-github-ops.yml",
+        )
+        for relative in workflows:
+            with self.subTest(workflow=relative):
+                source = (ROOT / relative).read_text(encoding="utf-8")
+                uses_lines = re.findall(r"(?m)^\\s+uses:\\s+([^\\s]+)", source)
+                external = [item for item in uses_lines if not item.startswith("./")]
+                self.assertTrue(external, "expected external actions to audit")
+                for action_ref in external:
+                    self.assertRegex(
+                        action_ref,
+                        r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+@[0-9a-f]{40}$",
+                        f"action is not pinned to a full commit SHA: {action_ref}",
+                    )
+
+                checkout_count = len(re.findall(r"(?m)^\\s+uses:\\s+actions/checkout@[0-9a-f]{40}\\b", source))
+                credentials_disabled_count = len(re.findall(r"(?m)^\\s+persist-credentials:\\s+false\\s*$", source))
+                self.assertEqual(
+                    checkout_count,
+                    credentials_disabled_count,
+                    "every checkout must disable persisted Git credentials",
+                )
+
+
 if __name__ == "__main__":
     unittest.main()
