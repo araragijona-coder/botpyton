@@ -1,9 +1,27 @@
+import multiprocessing
 import tempfile
+import time
 import unittest
 from pathlib import Path
 
 from bot.memory import JsonMemory
 from bot.queue import QueueError, TaskQueue
+
+
+class _SlowJsonMemory(JsonMemory):
+    """Expose a deterministic read/claim race window for process-level regression tests."""
+
+    def load(self):
+        state = super().load()
+        if self.path.exists():
+            time.sleep(0.25)
+        return state
+
+
+def _claim_worker(memory_path, start_event, results):
+    start_event.wait(10)
+    record = TaskQueue(_SlowJsonMemory(memory_path)).claim_next()
+    results.put(record["id"] if record else None)
 
 
 def task(task_id, deps=None, attempts=2):
@@ -30,6 +48,43 @@ class PersistentQueueTests(unittest.TestCase):
         second = TaskQueue(JsonMemory(self.queue.memory.path)).enqueue_many([task("A")])[0]
         self.assertEqual(first["idempotency_key"], second["idempotency_key"])
         self.assertEqual(len(self.queue.list_tasks()), 1)
+
+    def test_two_processes_cannot_claim_the_same_task(self):
+        self.queue.enqueue_many([task("A")])
+        context = multiprocessing.get_context("spawn")
+        start_event = context.Event()
+        results = context.Queue()
+        workers = [
+            context.Process(
+                target=_claim_worker,
+                args=(str(self.queue.memory.path), start_event, results),
+            )
+            for _ in range(2)
+        ]
+        try:
+            for worker in workers:
+                worker.start()
+            start_event.set()
+            for worker in workers:
+                worker.join(15)
+            self.assertTrue(
+                all(not worker.is_alive() for worker in workers),
+                "claim worker timed out, possibly while waiting for a state lock",
+            )
+            self.assertEqual([worker.exitcode for worker in workers], [0, 0])
+            outcomes = [results.get(timeout=3) for _ in workers]
+            self.assertEqual(outcomes.count("A"), 1, outcomes)
+            self.assertEqual(outcomes.count(None), 1, outcomes)
+            record = self.queue.get("A")
+            self.assertEqual(record["status"], "running")
+            self.assertEqual(record["attempts"], 1)
+        finally:
+            for worker in workers:
+                if worker.is_alive():
+                    worker.terminate()
+                    worker.join(2)
+            results.close()
+            results.join_thread()
 
     def test_same_id_different_payload_is_rejected_without_mutation(self):
         self.queue.enqueue_many([task("A")])
