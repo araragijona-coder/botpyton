@@ -27,6 +27,7 @@ class UnknownDiagnosticsTests(unittest.TestCase):
             self.assertTrue(frame["source_read"])
             self.assertEqual(target.read_text(encoding="utf-8"), original)
             self.assertIn("reversible experiment", result["details"]["recommendation"])
+            self.assertIn("identifier spelling", result["details"]["suggested_experiment"])
 
     def test_external_traceback_path_is_not_read(self):
         with tempfile.TemporaryDirectory() as temp, tempfile.TemporaryDirectory() as outside:
