@@ -46,25 +46,13 @@ jobs:
         run: python -m bot.main --github-plan "$BOTPYTON_PLAN_PATH"
 
   submit-draft-pr:
-    # I-01 fail-closed: no external trust boundary is configured/verified yet.
+    # I-01 fail-closed: do not run a privileged sender until an independent trust boundary is verified.
     if: false
-    needs: validate-plan
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 1
     permissions:
-      contents: write
-      pull-requests: write
+      contents: read
+      pull-requests: read
     steps:
-      - name: Checkout selected branch
-        uses: actions/checkout@v4
-        with:
-          ref: ${{ github.ref }}
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-      - name: Submit safe branch, commit and draft pull request
-        env:
-          GITHUB_REPOSITORY: ${{ github.repository }}
-          BOTPYTON_PLAN_PATH: ${{ inputs.plan_path }}
-        run: python -m bot.main --github-plan "$BOTPYTON_PLAN_PATH" --execute-github-plan
+      - name: Explain why live submission is disabled
+        run: echo "Live PR submission is disabled pending verified repository trust controls."
