@@ -59,6 +59,45 @@ def validate_task(task: dict[str, Any]) -> None:
         check_id = task.get("project_check_id")
         if not isinstance(check_id, str) or not check_id.strip():
             raise PolicyError("run_project_check requires a non-empty project_check_id")
+    verification_checks = task.get("verification_checks")
+    if verification_checks is not None:
+        allowed_check_types = {
+            "file_exists", "file_sha256", "python_syntax", "json_valid",
+            "tests_pass", "project_check_pass", "local_plan_applied", "report_exists",
+        }
+        if not isinstance(verification_checks, list) or not 1 <= len(verification_checks) <= 20:
+            raise PolicyError("verification_checks must contain 1–20 check objects")
+        for check in verification_checks:
+            if not isinstance(check, dict) or not isinstance(check.get("type"), str):
+                raise PolicyError("Every verification check must be an object with a type")
+            check_type = check["type"]
+            if check_type not in allowed_check_types:
+                raise PolicyError(f"Unknown verification check type: {check_type}")
+            allowed_keys = {"type"}
+            if check_type in {"file_exists", "json_valid"}:
+                allowed_keys.add("path")
+            elif check_type == "file_sha256":
+                allowed_keys.update({"path", "sha256"})
+            if set(check) != allowed_keys:
+                raise PolicyError(f"Invalid fields for verification check {check_type}")
+            if "path" in check:
+                path = validate_relative_path(check["path"])
+                if path in {"", "."} or path != check["path"]:
+                    raise PolicyError("Verification paths must be canonical file paths")
+            if check_type == "file_sha256":
+                import re
+                if not isinstance(check["sha256"], str) or not re.fullmatch(r"[0-9a-f]{64}", check["sha256"]):
+                    raise PolicyError("file_sha256 requires a lowercase SHA-256 digest")
+    if "apply_local_plan" in actions:
+        types = {item.get("type") for item in (verification_checks or []) if isinstance(item, dict)}
+        if "local_plan_applied" not in types:
+            raise PolicyError("apply_local_plan requires a local_plan_applied verification check")
+        if not types.intersection({"file_exists", "file_sha256", "python_syntax", "json_valid"}):
+            raise PolicyError("apply_local_plan requires an artifact or syntax verification check")
+    if "run_project_check" in actions:
+        types = {item.get("type") for item in (verification_checks or []) if isinstance(item, dict)}
+        if not types.intersection({"project_check_pass", "tests_pass"}):
+            raise PolicyError("run_project_check requires a project_check_pass or tests_pass verification check")
 
 
 def validate_relative_path(path: str) -> str:
