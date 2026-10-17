@@ -36,3 +36,30 @@ I-01 may be marked fully verified only when all of the following are evidenced:
 - A dry-run or mocked end-to-end boundary test demonstrates that rejected inputs cause zero write requests.
 
 Until then: live PR submission stays disabled; no merge and no promotion to `main`.
+
+## Technical audit — checkpoint authenticity and plan provenance (2026-10-17)
+
+Audited at candidate commit `2d948aa842f38c96ddbac118197f577570ba1746`.
+
+### Confirmed controls
+
+- `bot/checkpoint.py` checks the state file's SHA-256 against `manifest.json`, supported schema versions, task count, task payload policy, task IDs/statuses/attempts, idempotency fingerprints, and dependency graph before replacing queue memory.
+- Existing tests cover state-file tampering, missing manifests, incorrect task counts, and invalid idempotency keys.
+- `bot/github_ops.py` validates declarative plans, rejects protected paths and unsupported suffixes, bounds file/plan sizes, requires `draft: true`, and defaults to dry-run. Execution additionally requires the plan base branch to match the repository default branch.
+- The two live sender jobs remain disabled. No live GitHub writes were performed during this audit.
+
+### Findings / limits
+
+1. **Checkpoint digest is not authentication.** The manifest is an unsigned JSON file. The SHA-256 detects a changed state file when the manifest remains unchanged, but it does not prove who produced the state. An actor able to replace both files can calculate a matching digest. Do not describe this mechanism as a cryptographic signature or trusted provenance.
+2. **Artifact provenance is logged, not independently attested.** The worker searches completed runs of the same workflow on the same branch and logs the producing run's `head_sha`; the restore CLI validates checkpoint contents, not an independently trusted producer identity. A branch-controlled workflow/code revision remains inside the trust boundary.
+3. **Plan validation is defense-in-depth, not a trusted sender boundary.** Safe schema/path validation does not make branch-controlled workflow definitions or plan content trusted. Any future sender must live in a separately protected default-branch workflow and revalidate bounded data independently.
+4. **Administrative gate remains open.** Branch protection/ruleset and Actions approval/token-default evidence are not established by passing unit tests. Keep live submission disabled.
+
+### Required follow-up before I-01 can close
+
+- Add adversarial tests proving tampered or malformed checkpoints never overwrite existing memory, including manifest/state mismatch and invariant violations.
+- Define an explicit trusted provenance policy for checkpoint artifacts (producer workflow identity, run/branch/SHA constraints, retention and replay behavior). If a signature/MAC is proposed, its key must not be accessible to branch-controlled code; do not add secrets or enable writes as part of this phase.
+- Test that invalid/untrusted plans produce zero write API calls in a mocked end-to-end path.
+- Obtain independent administrative evidence for default-branch protection, required reviews/checks, Actions token defaults, and who may dispatch/approve privileged workflows.
+
+**Disposition: OPEN / FAIL-CLOSED / NOT CLEARED FOR LIVE SUBMISSION.** This audit note is a source-level assessment, not proof of an authenticated checkpoint boundary.
