@@ -7,8 +7,9 @@
 
 - Repository: araragijona-coder/botpyton (public).
 - main observed at ee8ca6ae800e6ed14bb67b87dc602f1289e50bc3.
-- Simulation candidate: 4c07ebbd85ddcf85866f73f0b7ec0a60215365ec.
-- CI run: https://github.com/araragijona-coder/botpyton/actions/runs/38987022365 — conclusion success; head_sha matches the candidate; test log reports 96 tests and OK.
+- Current work branch: bot-bootstrap/phase-09-i01-full-plan-candidate.
+- Latest adversarial test code SHA: 567b65cf5b52d375762be5a295a48d3d335ecf25.
+- CI run: https://github.com/araragijona-coder/botpyton/actions/runs/38987675339 — conclusion success; head_sha matches that exact test commit; test log confirms the full suite passed after the new I-01 tests. The final documentation commit is being validated separately before reporting a final SHA.
 - The run has pull_requests: []; it did not create a PR.
 - Repository-level rulesets query returned an empty list. This does not prove organization-level rulesets are absent.
 - Fresh branch API read for main returned protected:false and protection.enabled:false. This is direct evidence that GitHub's branch-protection API does not report main as protected at the time of the read. Repository-level rulesets query was empty; organization-level or other external controls remain unknown and would need separate evidence. This conflicts with the operator-reported completed checkbox and must be reconciled before I-01 can close.
@@ -31,7 +32,8 @@
 | Control | Status | Reason |
 |---|---|---|
 | main ref unchanged by this work | VERIFIED at snapshot | Ref read returned expected SHA |
-| Candidate CI on exact SHA | VERIFIED | Workflow run head SHA matches; success; 96 tests OK |
+| Adversarial test candidate CI | VERIFIED | SHA 567b65cf5b52d375762be5a295a48d3d335ecf25; run 38987675339 success on exact SHA |
+| Final candidate CI | PENDING | Must verify after final documentation commit |
 | Live sender disabled in candidate workflows | VERIFIED in candidate source | sender job has if:false and read-only permissions |
 | Repository rulesets | OBSERVED EMPTY | Does not rule out organization rulesets |
 | main branch protection | CONFLICT / REQUIRES RECONCILIATION | User checklist marked complete, but fresh branch API returned protected:false and protection.enabled:false; repository-level rulesets query empty; external/org controls not verified |
@@ -113,7 +115,7 @@ Run the full existing test workflow on the final commit. Report exact head SHA a
 ## 5. Stage gates
 
 - Stage A — Administrative audit: operator reports the four checklist controls complete; still incomplete for I-01 exit until the effective branch/ruleset, Actions policy, workflow approval policy, actor inventory, environments, and credential isolation have dated evidence from an authorized settings view.
-- Stage B — Emitter blueprint: prepared here; no repository or secret created.
-- Stage C — Adversarial simulation tests: pending implementation and CI.
-- Stage D — Independent trust-boundary review: pending separate repository, ownership/protection evidence, and review of actual credential path.
+- Stage B — Emitter blueprint: prepared; copy-ready package is documented in docs/security/I-01-EMITTER-REPO-STARTER-PACKAGE.md. No repository, secret, environment, or other external resource created.
+- Stage C — Adversarial simulation tests: expanded and passing on SHA 567b65cf5b52d375762be5a295a48d3d335ecf25; includes invalid identity types, malformed IDs/refs, invalid policy allowlists and limits, duplicate replay with changed payload, returned-record mutation isolation, and static checks against network/process/filesystem imports. Final candidate CI remains required.
+- Stage D — Independent trust-boundary review: NOT VERIFIED until the separate repository is explicitly authorized and created later, its owner/protection/credential path are evidenced, and the sender's trust assumptions are reviewed. No creation or activation is in scope now.
 - Final I-01 exit: blocked until every required gate is VERIFIED. No live PR submission, no merge, and no sender activation in this phase.
