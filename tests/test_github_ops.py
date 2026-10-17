@@ -203,6 +203,15 @@ class GitHubOperationTests(unittest.TestCase):
         self.fake = FakeGitHub()
         self.client = GitHubClient(repository="test/repo", token="fake-token", transport=self.fake)
 
+    def test_non_draft_individual_plan_rejects_before_any_mutation(self):
+        with self.assertRaisesRegex(GitHubOpsError, "draft must be true"):
+            submit_change_plan(make_plan(draft=False), client=self.client, execute=True)
+        mutations = [
+            (method, endpoint) for method, endpoint, _ in self.fake.calls
+            if method in {"POST", "PATCH"}
+        ]
+        self.assertEqual(mutations, [])
+
     def test_dry_run_performs_no_api_calls(self):
         result = submit_change_plan(make_plan(), client=self.client, execute=False)
         self.assertEqual(result["mode"], "dry_run")
