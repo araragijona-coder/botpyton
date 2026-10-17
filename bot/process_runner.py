@@ -38,12 +38,13 @@ class ProcessRunnerError(ValueError):
 
 
 def _path_is_same_or_within(path: Path, root: Path) -> bool:
-    """Compare canonical path boundaries without confusing sibling prefixes."""
-    try:
-        common = os.path.commonpath((str(path), str(root)))
-    except (OSError, ValueError):
-        return False
-    return os.path.normcase(os.path.normpath(common)) == os.path.normcase(os.path.normpath(str(root)))
+    """Compare normalized path components without confusing sibling prefixes."""
+    normalized_path = os.path.normcase(os.path.normpath(str(path)))
+    normalized_root = os.path.normcase(os.path.normpath(str(root)))
+    if normalized_path == normalized_root:
+        return True
+    root_prefix = normalized_root.rstrip(os.sep) + os.sep
+    return normalized_path.startswith(root_prefix)
 
 
 def _safe_search_path(path_value: str | None, *, cwd: str | Path) -> str:
