@@ -28,6 +28,7 @@ from .project_checks import ProjectCheckError, discover_project_checks, run_proj
 from .policy import PolicyError, validate_task, validate_relative_path
 from .queue import QueueError, TaskQueue
 from .verifier import verify_python_files
+from .workspace import WorkspaceError, create_isolated_workspace, inspect_workspace
 
 
 def _print_json(value: object) -> None:
@@ -85,6 +86,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--run-project-check", metavar="CHECK_ID", help="run one detected check; requires --execute-project-code")
     parser.add_argument("--execute-project-code", action="store_true", help="explicitly authorize execution of project tests/build scripts")
     parser.add_argument("--check-timeout", type=int, default=120, help="seconds allowed for --run-project-check (maximum 300)")
+    parser.add_argument("--create-workspace", metavar="TASK_ID", help="create a Git worktree on a dedicated local branch from a clean project")
+    parser.add_argument("--workspace-status", metavar="PATH", help="inspect a worktree's current status and diff summary")
+    parser.add_argument("--workspace-parent", metavar="PATH", help="directory outside the source repository for --create-workspace")
     parser.add_argument("--validate-task", metavar="PATH", help="validate a JSON task record")
     parser.add_argument("--validate-task-batch", metavar="PATH",
                         help="validate a bounded JSON task object/array without queue mutation")
@@ -125,6 +129,18 @@ def main(argv: list[str] | None = None) -> int:
     try:
         if args.inspect_repository is not None:
             _print_json(inspect_repository(args.inspect_repository))
+            return 0
+        if args.create_workspace and args.workspace_status:
+            raise WorkspaceError("Use either --create-workspace or --workspace-status, not both")
+        if args.workspace_parent and not args.create_workspace:
+            raise WorkspaceError("--workspace-parent requires --create-workspace")
+        if args.create_workspace:
+            _print_json(create_isolated_workspace(
+                args.project_root, args.create_workspace, workspace_parent=args.workspace_parent
+            ))
+            return 0
+        if args.workspace_status:
+            _print_json(inspect_workspace(args.workspace_status))
             return 0
         if args.system_profile:
             _print_json(get_system_profile(Path.cwd()))
