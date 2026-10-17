@@ -67,6 +67,11 @@ class SimpleDashboardTests(unittest.TestCase):
         self.assertEqual(state, "Hay avisos para revisar")
         self.assertEqual(category, "warning")
 
+    def test_nonzero_exit_code_overrides_a_nominal_report_status(self):
+        state, category = report_status({"status": "collected"}, 1)
+        self.assertEqual(state, "Necesita revisión")
+        self.assertEqual(category, "error")
+
     def test_full_scan_records_an_exception_and_continues_remaining_checks(self):
         app = SimpleBotPytonApp.__new__(SimpleBotPytonApp)
         app.stage_label = SimpleNamespace(configure=lambda **kwargs: None)
