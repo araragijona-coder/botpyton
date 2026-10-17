@@ -82,6 +82,86 @@ def _bounded_reader(stream, limit: int, storage: dict, key: str) -> None:
         stream.close()
 
 
+
+def _attach_windows_memory_job(process, memory_limit_mb: int):
+    """Apply a Windows Job Object memory cap and kill descendants when it closes."""
+    if os.name != "nt":
+        return None
+    import ctypes
+    from ctypes import wintypes
+
+    class BasicLimitInformation(ctypes.Structure):
+        _fields_ = [
+            ("PerProcessUserTimeLimit", ctypes.c_longlong),
+            ("PerJobUserTimeLimit", ctypes.c_longlong),
+            ("LimitFlags", wintypes.DWORD),
+            ("MinimumWorkingSetSize", ctypes.c_size_t),
+            ("MaximumWorkingSetSize", ctypes.c_size_t),
+            ("ActiveProcessLimit", wintypes.DWORD),
+            ("Affinity", ctypes.c_size_t),
+            ("PriorityClass", wintypes.DWORD),
+            ("SchedulingClass", wintypes.DWORD),
+        ]
+
+    class IoCounters(ctypes.Structure):
+        _fields_ = [
+            ("ReadOperationCount", ctypes.c_ulonglong),
+            ("WriteOperationCount", ctypes.c_ulonglong),
+            ("OtherOperationCount", ctypes.c_ulonglong),
+            ("ReadTransferCount", ctypes.c_ulonglong),
+            ("WriteTransferCount", ctypes.c_ulonglong),
+            ("OtherTransferCount", ctypes.c_ulonglong),
+        ]
+
+    class ExtendedLimitInformation(ctypes.Structure):
+        _fields_ = [
+            ("BasicLimitInformation", BasicLimitInformation),
+            ("IoInfo", IoCounters),
+            ("ProcessMemoryLimit", ctypes.c_size_t),
+            ("JobMemoryLimit", ctypes.c_size_t),
+            ("PeakProcessMemoryUsed", ctypes.c_size_t),
+            ("PeakJobMemoryUsed", ctypes.c_size_t),
+        ]
+
+    JOB_OBJECT_EXTENDED_LIMIT_INFORMATION = 9
+    JOB_OBJECT_LIMIT_PROCESS_MEMORY = 0x100
+    JOB_OBJECT_LIMIT_JOB_MEMORY = 0x200
+    JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE = 0x2000
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32.CreateJobObjectW.restype = wintypes.HANDLE
+    kernel32.SetInformationJobObject.argtypes = [
+        wintypes.HANDLE, ctypes.c_int, ctypes.c_void_p, wintypes.DWORD
+    ]
+    kernel32.SetInformationJobObject.restype = wintypes.BOOL
+    kernel32.AssignProcessToJobObject.argtypes = [wintypes.HANDLE, wintypes.HANDLE]
+    kernel32.AssignProcessToJobObject.restype = wintypes.BOOL
+    kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+    kernel32.CloseHandle.restype = wintypes.BOOL
+
+    job = kernel32.CreateJobObjectW(None, None)
+    if not job:
+        raise ProcessRunnerError(f"Could not create Windows memory job (winerror {ctypes.get_last_error()})")
+    limit = memory_limit_mb * 1024 * 1024
+    info = ExtendedLimitInformation()
+    info.BasicLimitInformation.LimitFlags = (
+        JOB_OBJECT_LIMIT_PROCESS_MEMORY
+        | JOB_OBJECT_LIMIT_JOB_MEMORY
+        | JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
+    )
+    info.ProcessMemoryLimit = limit
+    info.JobMemoryLimit = limit
+    if not kernel32.SetInformationJobObject(
+        job, JOB_OBJECT_EXTENDED_LIMIT_INFORMATION, ctypes.byref(info), ctypes.sizeof(info)
+    ):
+        error = ctypes.get_last_error()
+        kernel32.CloseHandle(job)
+        raise ProcessRunnerError(f"Could not set Windows memory limit (winerror {error})")
+    if not kernel32.AssignProcessToJobObject(job, wintypes.HANDLE(process._handle)):
+        error = ctypes.get_last_error()
+        kernel32.CloseHandle(job)
+        raise ProcessRunnerError(f"Could not assign process to memory job (winerror {error})")
+    return job, kernel32
+
 def run_process(
     argv: Sequence[str],
     *,
@@ -91,14 +171,17 @@ def run_process(
     timeout_seconds: int = 30,
     output_limit_bytes: int = MAX_OUTPUT_BYTES,
     env_overrides: Mapping[str, str] | None = None,
+    memory_limit_mb: int = 768,
 ) -> dict:
-    """Run an approved executable; discard excess output while draining pipes."""
+    """Run an approved executable with bounded output and a Windows Job Object memory cap."""
     if isinstance(argv, (str, bytes)) or not argv:
         raise ProcessRunnerError("argv must be a non-empty sequence of separate arguments")
     if not isinstance(timeout_seconds, int) or isinstance(timeout_seconds, bool) or not 1 <= timeout_seconds <= MAX_TIMEOUT_SECONDS:
         raise ProcessRunnerError(f"timeout_seconds must be from 1 to {MAX_TIMEOUT_SECONDS}")
     if not isinstance(output_limit_bytes, int) or isinstance(output_limit_bytes, bool) or not 1 <= output_limit_bytes <= MAX_OUTPUT_BYTES:
         raise ProcessRunnerError(f"output_limit_bytes must be from 1 to {MAX_OUTPUT_BYTES}")
+    if not isinstance(memory_limit_mb, int) or isinstance(memory_limit_mb, bool) or not 64 <= memory_limit_mb <= 1024:
+        raise ProcessRunnerError("memory_limit_mb must be from 64 to 1024")
     normalized_argv = []
     for arg in argv:
         if not isinstance(arg, str) or "\0" in arg:
@@ -119,6 +202,7 @@ def run_process(
     child_env = _safe_environment(env_overrides)
     captured: dict = {}
     process = None
+    memory_job = None
     timed_out = False
     try:
         process = subprocess.Popen(
@@ -131,6 +215,7 @@ def run_process(
             shell=False,
             close_fds=True,
         )
+        memory_job = _attach_windows_memory_job(process, memory_limit_mb)
         stdout_thread = threading.Thread(
             target=_bounded_reader, args=(process.stdout, output_limit_bytes, captured, "stdout"),
             daemon=True,
@@ -152,11 +237,15 @@ def run_process(
         if stdout_thread.is_alive() or stderr_thread.is_alive():
             raise ProcessRunnerError("Output collector did not stop after process termination")
         exit_code = process.returncode
-    except OSError as exc:
+    except (OSError, ProcessRunnerError) as exc:
         if process is not None and process.poll() is None:
             process.kill()
             process.wait()
-        raise ProcessRunnerError(f"Process launch failed: {type(exc).__name__}") from exc
+        raise ProcessRunnerError(f"Process launch failed or limits could not be applied: {type(exc).__name__}: {exc}") from exc
+    finally:
+        if memory_job is not None:
+            handle, kernel32 = memory_job
+            kernel32.CloseHandle(handle)
 
     return {
         "argv": normalized_argv,
@@ -172,6 +261,8 @@ def run_process(
         "stdin_inherited": False,
         "secret_environment_variables_forwarded": False,
         "output_capture_memory_limit_per_stream": output_limit_bytes,
+        "process_memory_limit_mb": memory_limit_mb,
+        "process_memory_limit_enforced": os.name == "nt",
     }
 
 
