@@ -56,3 +56,26 @@ El ajuste del workflow acepta ese caso **solo** cuando se cumplen a la vez `stat
 ## Alcance
 
 Este documento es una bitácora de investigación y criterios de diseño, no una certificación de seguridad completa. CI en GitHub no sustituye una prueba en el PC del usuario. Las referencias y prioridades deben actualizarse cuando se revisen nuevas notas de versiones y avisos.
+
+
+## Auditoría adicional — 2026-10-17: colisión concurrente en el registro de auditoría
+
+### Fuentes oficiales consultadas
+
+- BleachBit 6.0.3 beta, errores de carrera al guardar ajustes, enlaces/reparse points, entorno heredado en procesos, URI/SQL, XML y rutas de actualización inseguras: https://www.bleachbit.org/news/bleachbit-603-beta
+- CCleaner, historial de versiones: errores de escritura de archivos, cierres durante tareas de fondo, actualización de runtime y exclusiones que no se respetaban en limpiezas programadas: https://www.ccleaner.com/ccleaner/version-history/
+- Python, documentación de `shutil.rmtree`: algunas plataformas no tienen una implementación resistente a ataques por enlaces simbólicos; el comportamiento debe comprobarse y no suponerse: https://docs.python.org/3/library/shutil.html
+
+### Hallazgo concreto en BOTPYTON
+
+En `bot/pc_care.py`, `_persist_pc_care_audit_event()` comprobaba que el nombre final no existiera y después usaba `os.replace()`. Entre ambas operaciones, otro proceso podía crear ese nombre y el reemplazo podía sobrescribir el archivo que apareció durante la carrera. Aunque los nombres contienen un identificador temporal, la comprobación previa no garantizaba exclusividad.
+
+**Corrección aplicada en la rama candidata:** el evento se publica mediante creación de hard link exclusiva (`os.link`) desde un archivo temporal del mismo directorio. Si el destino aparece concurrentemente, la operación falla en vez de reemplazarlo; el temporal se limpia incluso ante error. Es un registro inmutable, por lo que no necesita semántica de reemplazo. Si el sistema de archivos no admite hard links, la escritura falla de forma explícita y no recurre a un reemplazo inseguro.
+
+**Prueba de regresión añadida:** simula que otro proceso crea el destino después de la comprobación inicial y comprueba que los bytes preexistentes se conservan y el archivo temporal se elimina.
+
+### Distinción importante
+
+Los puntos sobre variables de entorno heredadas, XML/URI y DLL search path de BleachBit se registran como controles preventivos a mantener en futuras funciones; no se afirma que BOTPYTON reproduzca esos fallos. BOTPYTON no debe añadir reglas de limpieza descargables ni ejecutar definiciones de limpieza suministradas por usuarios como código. Los procesos ya auditados usan `shell=False`; las futuras llamadas deben conservar ejecutables explícitos, argumentos separados y límites temporales.
+
+Esta corrección aún requiere que pasen las pruebas de CI de la rama y las pruebas posteriores a la integración en `main`. La CI no equivale a una prueba en el PC del usuario.
