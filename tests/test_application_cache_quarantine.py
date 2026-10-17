@@ -40,7 +40,7 @@ class ApplicationCacheQuarantineTests(unittest.TestCase):
                 [str(chosen.resolve())], confirmation=CACHE_QUARANTINE_CONFIRMATION,
                 env=env, windows=True,
             )
-            self.assertEqual(result["status"], "cache_quarantined")
+            self.assertEqual(result["status"], "cache_quarantined", result.get("failure_detail") or result.get("note"))
             self.assertEqual(result["moved_count"], 1)
             self.assertFalse(chosen.exists())
             self.assertTrue(untouched.exists())
@@ -110,7 +110,7 @@ class ApplicationCacheQuarantineTests(unittest.TestCase):
                 [str(chosen.resolve())], confirmation=CACHE_QUARANTINE_CONFIRMATION,
                 env=env, windows=True,
             )
-            self.assertEqual(result["status"], "cache_quarantined")
+            self.assertEqual(result["status"], "cache_quarantined", result.get("failure_detail") or result.get("note"))
             chosen.write_bytes(b"new browser cache")
             preview = preview_application_cache_restore(result["manifest_path"], env=env, windows=True)
             self.assertEqual(preview["status"], "restore_preview_blocked")
@@ -131,7 +131,7 @@ class ApplicationCacheQuarantineTests(unittest.TestCase):
                 [str(chosen.resolve())], confirmation=CACHE_QUARANTINE_CONFIRMATION,
                 env=env, windows=True,
             )
-            self.assertEqual(result["status"], "cache_quarantined")
+            self.assertEqual(result["status"], "cache_quarantined", result.get("failure_detail") or result.get("note"))
             manifest_path = Path(result["manifest_path"])
             manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
             manifest["items"][0]["original_path"] = str(Path(tmp) / "not-a-cache-file")

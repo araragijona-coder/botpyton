@@ -413,7 +413,12 @@ def quarantine_application_cache_candidates(
             ],
         }
     except (OSError, RuntimeError, ValueError) as exc:
-        return {**base_report, "status": "cache_quarantine_blocked", "moved_count": 0, "note": f"Quarantine stopped before a usable result ({type(exc).__name__}). Review the path/size/preview constraints; no automatic retry was attempted."}
+        detail = str(exc).replace("\\r", " ").replace("\\n", " ")[:240]
+        return {
+            **base_report, "status": "cache_quarantine_blocked", "moved_count": 0,
+            "failure_type": type(exc).__name__, "failure_detail": detail,
+            "note": f"Quarantine stopped before a usable result ({type(exc).__name__}). No automatic retry was attempted.",
+        }
 
 
 def preview_application_cache_restore(
