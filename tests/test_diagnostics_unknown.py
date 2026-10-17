@@ -34,9 +34,9 @@ class UnknownDiagnosticsTests(unittest.TestCase):
             root = Path(temp)
             target = root / "app.py"
             token = "ghp_" + "a" * 40
-            target.write_text(f'TOKEN = "{token}"\\nraise RuntimeError("bad")\\n', encoding="utf-8")
+            target.write_text(f'TOKEN = "{token}"\nraise RuntimeError("bad")\n', encoding="utf-8")
             log = (
-                f'  File "{target}", line 1, in <module>\\n'
+                f'  File "{target}", line 1, in <module>\n'
                 f"RuntimeError: Authorization: Bearer {token}"
             )
             result = diagnose_failure(log, root)
