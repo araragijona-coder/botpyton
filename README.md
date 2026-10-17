@@ -140,6 +140,14 @@ The write job has only contents: write and pull-requests: write, and runs only f
 
 Examples: .cerebro/examples/github-task-batch.json and .cerebro/examples/github-change-plan-batch.json.
 
+## Phase 09 / I-01: privileged PR sender isolation (fail-closed)
+
+The two privileged submission jobs in `.github/workflows/botpyton-worker.yml` and `.github/workflows/botpyton-github-ops.yml` are deliberately disabled with `if: false`. Their former design checked out the selected workflow ref and executed repository Python code while exposing a write-capable token. A condition inside a workflow is not, by itself, an enforceable trust boundary when a caller can select a ref whose workflow definition may be changed.
+
+Live PR submission remains disabled until repository administrators verify an independent trusted-code boundary and effective repository controls (branch protection/rulesets and, where used, required environment reviewers). Those controls were not established by this code change. Do not enable either job by changing its condition alone. No live submission was performed as part of I-01.
+
+The common `validate_change_plan()` validator now rejects `draft: false`, so individual and batch paths share the draft-only policy. The batch validator continues to validate the complete batch before any write operation.
+
 ## Security model
 
 - Python standard library only; no AI/LLM services or inference APIs.
