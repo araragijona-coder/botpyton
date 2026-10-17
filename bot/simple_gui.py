@@ -89,18 +89,33 @@ def parse_report(raw: str) -> Any:
 
 
 def report_status(report: Any, exit_code: int = 0) -> tuple[str, str]:
-    """Return a plain-language status and visual category for one diagnostic."""
+    """Return a plain-language status, including severe findings inside reports."""
     status = report.get("status") if isinstance(report, dict) else None
     if isinstance(status, str):
         if status in _STATUS_TEXT:
-            return _STATUS_TEXT[status]
-        if "partial" in status or "limit" in status:
-            return ("Revisión parcial", "warning")
-        if "error" in status or "failed" in status:
-            return ("Necesita revisión", "error")
-    if exit_code != 0:
+            result = _STATUS_TEXT[status]
+        elif "partial" in status or "limit" in status:
+            result = ("Revisión parcial", "warning")
+        elif "error" in status or "failed" in status:
+            result = ("Necesita revisión", "error")
+        else:
+            result = ("Resultado recibido", "neutral")
+    elif exit_code != 0:
+        result = ("Necesita revisión", "error")
+    else:
+        result = ("Resultado recibido", "neutral")
+
+    # A nominal operation status must never hide an error/critical finding.
+    findings = report.get("findings") if isinstance(report, dict) else None
+    severities = {
+        str(item.get("severity", "")).strip().casefold()
+        for item in findings if isinstance(item, dict)
+    } if isinstance(findings, list) else set()
+    if severities.intersection({"critical", "fatal", "error"}):
         return ("Necesita revisión", "error")
-    return ("Resultado recibido", "neutral")
+    if "warning" in severities and result[1] not in {"error", "warning"}:
+        return ("Hay avisos para revisar", "warning")
+    return result
 
 
 def summarize_report(title: str, report: Any, exit_code: int = 0) -> str:
@@ -336,16 +351,40 @@ class SimpleBotPytonApp:
         thread = threading.Thread(target=self._full_scan_worker, daemon=True)
         thread.start()
 
+    @staticmethod
+    def _exception_report(label: str, exc: Exception) -> tuple[str, int, str, Any]:
+        """Convert an unexpected diagnostic exception into a visible, non-success result."""
+        detail = f"{type(exc).__name__}: {exc}"
+        raw = json.dumps({
+            "status": "error",
+            "message": f"La comprobación «{label}» no pudo terminar.",
+            "exception_type": type(exc).__name__,
+            "detail": detail[:2000],
+        }, ensure_ascii=False)
+        return (label, 1, raw, parse_report(raw))
+
     def _full_scan_worker(self) -> None:
         reports: list[tuple[str, int, str, Any]] = []
         total = len(ANALYSIS_STEPS)
-        for index, (label, argv) in enumerate(ANALYSIS_STEPS, start=1):
-            self._post(lambda label=label, index=index, total=total: self.stage_label.configure(
-                text=f"Revisión {index} de {total}: {label}", fg=BLUE
-            ))
-            code, output = _call_main(list(argv))
-            reports.append((label, code, output, parse_report(output)))
-        self._post(lambda: self._finish_reports("Análisis amplio del PC", reports))
+        try:
+            for index, (label, argv) in enumerate(ANALYSIS_STEPS, start=1):
+                self._post(lambda label=label, index=index, total=total: self.stage_label.configure(
+                    text=f"Revisión {index} de {total}: {label}", fg=BLUE
+                ))
+                try:
+                    code, output = _call_main(list(argv))
+                    reports.append((label, code, output, parse_report(output)))
+                except Exception as exc:
+                    # Record the failure and continue so one broken diagnostic does not hide the rest.
+                    reports.append(self._exception_report(label, exc))
+        except Exception as exc:
+            reports.append(self._exception_report("Análisis amplio del PC", exc))
+        finally:
+            if not reports:
+                reports.append(self._exception_report("Análisis amplio del PC", RuntimeError(
+                    "La revisión no produjo resultados."
+                )))
+            self._post(lambda reports=reports: self._finish_reports("Análisis amplio del PC", reports))
 
     def start_cleanup_preview(self) -> None:
         if not self._start("Revisión de archivos temporales"):
@@ -354,9 +393,17 @@ class SimpleBotPytonApp:
         threading.Thread(target=self._cleanup_worker, daemon=True).start()
 
     def _cleanup_worker(self) -> None:
-        code, output = _call_main(["--pc-cleanup-preview"])
-        reports = [("Archivos temporales", code, output, parse_report(output))]
-        self._post(lambda: self._finish_reports("Revisión de archivos temporales", reports))
+        try:
+            code, output = _call_main(["--pc-cleanup-preview"])
+            reports = [("Archivos temporales", code, output, parse_report(output))]
+        except Exception as exc:
+            reports = [self._exception_report("Archivos temporales", exc)]
+        finally:
+            if "reports" not in locals():
+                reports = [self._exception_report("Archivos temporales", RuntimeError(
+                    "La revisión no produjo resultados."
+                ))]
+            self._post(lambda reports=reports: self._finish_reports("Revisión de archivos temporales", reports))
 
     def _finish_reports(self, title: str, reports: list[tuple[str, int, str, Any]]) -> None:
         if not self.root.winfo_exists():
@@ -369,7 +416,15 @@ class SimpleBotPytonApp:
             1 for _label, _code, _raw, parsed in reports
             if isinstance(parsed, dict) and isinstance(parsed.get("findings"), list)
             for finding in parsed["findings"]
-            if isinstance(finding, dict) and finding.get("severity") == "warning"
+            if isinstance(finding, dict)
+            and str(finding.get("severity", "")).strip().casefold() == "warning"
+        )
+        error_findings = sum(
+            1 for _label, _code, _raw, parsed in reports
+            if isinstance(parsed, dict) and isinstance(parsed.get("findings"), list)
+            for finding in parsed["findings"]
+            if isinstance(finding, dict)
+            and str(finding.get("severity", "")).strip().casefold() in {"critical", "fatal", "error"}
         )
         all_raw = []
         summaries = []
@@ -378,10 +433,14 @@ class SimpleBotPytonApp:
             all_raw.append(f"===== {label} (código {code}) =====\n{raw.strip()[:12000]}")
         self.last_technical = "\n\n".join(all_raw)[:50000]
         self.details_button.configure(state="normal")
-        if bad or warning_findings:
+        if bad or warning_findings or error_findings:
             self.status_label.configure(text="● HAY PUNTOS PARA REVISAR", fg="#FFD080")
-            self.result_badge.configure(text="Hay puntos para revisar", bg=PALE_AMBER, fg=AMBER)
-            heading = f"Revisión terminada: {len(reports)} comprobación(es) recibieron respuesta; aparecieron {warning_findings} aviso(s) importante(s) y {bad} resultado(s) parcial(es) o con acceso limitado."
+            self.result_badge.configure(text="Hay puntos para revisar", bg=PALE_RED if error_findings else PALE_AMBER, fg=RED if error_findings else AMBER)
+            heading = (
+                f"Revisión terminada: {len(reports)} comprobación(es) recibieron respuesta; "
+                f"{warning_findings} aviso(s), {error_findings} hallazgo(s) de error/críticos y "
+                f"{bad} comprobación(es) con advertencias, errores o acceso limitado."
+            )
         else:
             self.status_label.configure(text="● LISTO", fg="#72E0C9")
             self.result_badge.configure(text="Revisión finalizada", bg=PALE_TEAL, fg=TEAL_DARK)
