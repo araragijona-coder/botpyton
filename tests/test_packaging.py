@@ -44,6 +44,41 @@ class PortablePackageTests(unittest.TestCase):
             self.assertIn("docs/guide.md", files)
             self.assertNotIn("docs/mounted/private.md", files)
 
+    @unittest.skipUnless(__import__("os").name == "nt", "Windows junction integration test")
+    def test_package_collector_does_not_follow_real_windows_junction(self):
+        import os
+        import subprocess
+
+        with tempfile.TemporaryDirectory() as temp:
+            temp_root = Path(temp)
+            root = temp_root / "source"
+            root.mkdir()
+            self._minimal_package_source(root)
+            external = temp_root / "external-private"
+            external.mkdir()
+            (external / "secret.md").write_text("must not be included", encoding="utf-8")
+            junction = root / "docs" / "mounted"
+
+            created = subprocess.run(
+                ["cmd.exe", "/d", "/c", "mklink", "/J", str(junction), str(external)],
+                capture_output=True,
+                text=True,
+                timeout=5,
+                check=False,
+            )
+            if created.returncode != 0:
+                self.skipTest("This Windows runner cannot create a test junction: " + created.stderr[-200:])
+
+            try:
+                files = dict(_collect_package_files(root))
+                self.assertNotIn("docs/mounted/secret.md", files)
+                self.assertIn("docs/guide.md", files)
+            finally:
+                try:
+                    os.rmdir(junction)
+                except OSError:
+                    pass
+
     def test_package_collector_rejects_reparse_point_in_fixed_file_ancestry(self):
         from unittest.mock import patch
 
