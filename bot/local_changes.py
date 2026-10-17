@@ -61,7 +61,7 @@ def _resolve_target(root: Path, relative: str) -> Path:
     current = root
     for part in PurePosixPath(relative).parts:
         current = current / part
-        if _is_link_or_reparse(current):
+        if (current.exists() or current.is_symlink()) and _is_link_or_reparse(current):
             raise LocalChangeError(f"Symlink or reparse-point path components are not allowed: {relative}")
     resolved = current.resolve()
     try:
