@@ -29,7 +29,7 @@ class LocalChangePlanTests(unittest.TestCase):
             self.assertEqual(result["mode"], "validated_dry_run")
             self.assertFalse(result["writes_performed"])
             self.assertNotIn("content", result["changes"][0])
-            self.assertEqual(result["changes"][0]["new_sha256"], digest(b"# Example\\n"))
+            self.assertEqual(result["changes"][0]["new_sha256"], digest(b"# Example\n"))
             self.assertFalse((root / "README.md").exists())
 
     def test_existing_file_requires_matching_hash_and_is_backed_up(self):
