@@ -28,5 +28,17 @@ jobs:
         run: python -m unittest discover -s tests -v
       - name: Report available RAM and disk
         run: python -m bot.main --system-profile
+      - name: Build and verify portable package
+        run: |
+          python -m bot.main --package-portable "$env:RUNNER_TEMP\botpyton-dist"
+          python -m bot.main --verify-portable-package "$env:RUNNER_TEMP\botpyton-dist\BOTPYTON-portable.zip"
+      - name: Upload portable package
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: botpyton-portable-windows
+          path: ${{ runner.temp }}/botpyton-dist/*
+          if-no-files-found: ignore
+          retention-days: 7
       - name: Exercise Windows Job Object with a fixed version probe
         run: python -m bot.main --probe-tool python

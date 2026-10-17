@@ -26,6 +26,10 @@ jobs:
         run: python -m bot.main --check
       - name: Run unit tests
         run: python -m unittest discover -s tests -v
+      - name: Build and verify portable package
+        run: |
+          python -m bot.main --package-portable "$RUNNER_TEMP/botpyton-dist"
+          python -m bot.main --verify-portable-package "$RUNNER_TEMP/botpyton-dist/BOTPYTON-portable.zip"
       - name: Exercise bounded autonomous repair cycle
         run: python -m bot.main --autonomous-cycle --cycle-max-attempts 2 --cycle-timeout 60
       - name: Verify autonomous-cycle audit records
@@ -79,6 +83,14 @@ jobs:
         env:
           GITHUB_REPOSITORY: ${{ github.repository }}
         run: python -m bot.main --github-plan .cerebro/examples/github-change-plan.json
+      - name: Upload portable package
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: botpyton-portable-linux
+          path: ${{ runner.temp }}/botpyton-dist/*
+          if-no-files-found: ignore
+          retention-days: 7
       - name: Upload executor report
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
