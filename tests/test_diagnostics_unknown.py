@@ -29,6 +29,21 @@ class UnknownDiagnosticsTests(unittest.TestCase):
             self.assertIn("reversible experiment", result["details"]["recommendation"])
             self.assertIn("identifier spelling", result["details"]["suggested_experiment"])
 
+    def test_credential_like_values_are_redacted_from_diagnostics(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            target = root / "app.py"
+            token = "ghp_" + "a" * 40
+            target.write_text(f'TOKEN = "{token}"\\nraise RuntimeError("bad")\\n', encoding="utf-8")
+            log = (
+                f'  File "{target}", line 1, in <module>\\n'
+                f"RuntimeError: Authorization: Bearer {token}"
+            )
+            result = diagnose_failure(log, root)
+            rendered = str(result["details"])
+            self.assertNotIn(token, rendered)
+            self.assertIn("[REDACTED", rendered)
+
     def test_external_traceback_path_is_not_read(self):
         with tempfile.TemporaryDirectory() as temp, tempfile.TemporaryDirectory() as outside:
             root = Path(temp)
