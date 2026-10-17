@@ -1846,11 +1846,20 @@ def _persist_pc_care_audit_event(
     temporary_path = directory / f".event-{event_id}.tmp"
     if final_path.exists() or temporary_path.exists():
         raise OSError("audit event filename collision")
-    with temporary_path.open("x", encoding="utf-8", newline="\n") as stream:
-        stream.write(payload)
-        stream.flush()
-        os.fsync(stream.fileno())
-    os.replace(temporary_path, final_path)
+    try:
+        with temporary_path.open("x", encoding="utf-8", newline="\n") as stream:
+            stream.write(payload)
+            stream.flush()
+            os.fsync(stream.fileno())
+        # Audit events are immutable: exclusive hard-link creation fails on a
+        # destination collision instead of replacing an event created concurrently.
+        # The temporary file is in the same directory, so this remains same-volume.
+        os.link(temporary_path, final_path)
+    finally:
+        try:
+            temporary_path.unlink(missing_ok=True)
+        except OSError:
+            pass
     return {key: value for key, value in record.items() if key != "sha256"} | {"integrity": "written"}
 
 
