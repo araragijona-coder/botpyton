@@ -5,6 +5,7 @@ import csv
 import io
 import json
 import os
+import re
 import shutil
 import subprocess
 import time
@@ -397,6 +398,161 @@ def read_installed_applications(*, windows: bool | None = None, limit: int = 500
         "items_count": len(items),
         "limit": limit,
         "note": "Inventory metadata only. No uninstall commands, install locations, or command lines were read or executed.",
+    }
+
+
+
+WINGET_DEFAULT_SOURCE_URL = "https://cdn.winget.microsoft.com/cache"
+WINGET_DEFAULT_SOURCE_NAME = "winget"
+WINGET_SOURCE_EXPORT_TIMEOUT_SECONDS = 10
+WINGET_CHECK_TIMEOUT_SECONDS = 30
+WINGET_OUTPUT_MAX_CHARS = 12_000
+WINGET_OUTPUT_MAX_LINES = 100
+
+
+def _bounded_cli_lines(stdout: str, stderr: str) -> tuple[list[str], bool]:
+    """Return a small readable excerpt from a provider's console output."""
+    combined = "\n".join(part for part in (stdout, stderr) if part).replace("\r", "\n")
+    combined = re.sub(r"\x1b\[[0-?]*[ -/]*[@-~]", "", combined)
+    lines = []
+    truncated = len(combined) > WINGET_OUTPUT_MAX_CHARS
+    remaining = WINGET_OUTPUT_MAX_CHARS
+    for raw_line in combined.splitlines():
+        line = "".join(character for character in raw_line if character.isprintable() or character == "\t").strip()
+        if not line:
+            continue
+        if len(line) > 500:
+            line = line[:500]
+            truncated = True
+        if len(line) > remaining:
+            truncated = True
+            break
+        lines.append(line)
+        remaining -= len(line) + 1
+        if len(lines) >= WINGET_OUTPUT_MAX_LINES:
+            truncated = True
+            break
+    return lines, truncated
+
+
+def check_application_updates(*, windows: bool | None = None) -> dict:
+    """Explicitly query the default trusted WinGet source; this function never installs packages."""
+    is_windows = os.name == "nt" if windows is None else windows
+    base_report = {
+        "product": "BOTPYTON PC Care",
+        "schema_version": 1,
+        "source": WINGET_DEFAULT_SOURCE_NAME,
+        "updates_installed": 0,
+        "software_changes_made": False,
+        "drivers_checked": False,
+        "network_access_requested": False,
+        "output_lines": [],
+        "output_truncated": False,
+        "limitations": [
+            "This is an opt-in application-update listing only; it does not install or upgrade anything.",
+            "WinGet's source is restricted to the default Microsoft HTTPS endpoint and must report trusted status.",
+            "The provider's output is localized display text; BOTPYTON does not infer a definitive count from table formatting.",
+            "Drivers, Windows system updates, and Microsoft Store updates are not checked by this phase.",
+        ],
+    }
+    if not is_windows:
+        return {**base_report, "status": "unsupported_platform", "note": "WinGet update checks are available only on Windows."}
+
+    executable = shutil.which("winget")
+    local_app_data = os.environ.get("LOCALAPPDATA")
+    expected_alias = (Path(local_app_data) / "Microsoft" / "WindowsApps" / "winget.exe") if local_app_data else None
+    if not executable or expected_alias is None:
+        return {**base_report, "status": "unavailable", "note": "The expected Windows WinGet app-execution alias was not found."}
+    try:
+        actual_executable = os.path.normcase(os.path.abspath(executable))
+        expected_executable = os.path.normcase(os.path.abspath(str(expected_alias)))
+    except (OSError, ValueError):
+        return {**base_report, "status": "untrusted_executable", "note": "WinGet executable path could not be validated."}
+    if actual_executable != expected_executable:
+        return {**base_report, "status": "untrusted_executable", "note": "The WinGet command resolved outside the expected per-user WindowsApps alias; no source was queried."}
+
+    try:
+        source_result = subprocess.run(
+            [executable, "source", "export", WINGET_DEFAULT_SOURCE_NAME],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=WINGET_SOURCE_EXPORT_TIMEOUT_SECONDS,
+            check=False,
+            shell=False,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+    except subprocess.TimeoutExpired:
+        return {**base_report, "status": "source_check_timeout", "note": "WinGet source verification timed out; no update listing was requested."}
+    except OSError as exc:
+        return {**base_report, "status": "unavailable", "note": f"WinGet source verification failed ({type(exc).__name__}); no update listing was requested."}
+
+    try:
+        source_info = json.loads(source_result.stdout) if source_result.returncode == 0 else None
+    except (TypeError, json.JSONDecodeError):
+        source_info = None
+    trust_values = source_info.get("TrustLevel", []) if isinstance(source_info, dict) else []
+    source_is_trusted = (
+        isinstance(source_info, dict)
+        and source_info.get("Name") == WINGET_DEFAULT_SOURCE_NAME
+        and str(source_info.get("Arg", "")).rstrip("/") == WINGET_DEFAULT_SOURCE_URL
+        and source_info.get("Type") == "Microsoft.PreIndexed.Package"
+        and isinstance(trust_values, list)
+        and any(str(value).casefold() == "trusted" for value in trust_values)
+    )
+    if not source_is_trusted:
+        return {
+            **base_report,
+            "status": "source_untrusted",
+            "note": "The configured WinGet source did not match the expected Microsoft HTTPS source and trusted metadata. No package list was queried.",
+        }
+
+    command = [
+        executable, "list", "--upgrade-available", "--source", WINGET_DEFAULT_SOURCE_NAME,
+        "--disable-interactivity",
+    ]
+    try:
+        result = subprocess.run(
+            command,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=WINGET_CHECK_TIMEOUT_SECONDS,
+            check=False,
+            shell=False,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+    except subprocess.TimeoutExpired as exc:
+        stdout = exc.stdout if isinstance(exc.stdout, str) else ""
+        stderr = exc.stderr if isinstance(exc.stderr, str) else ""
+        lines, truncated = _bounded_cli_lines(stdout, stderr)
+        return {
+            **base_report,
+            "status": "timeout",
+            "network_access_requested": True,
+            "output_lines": lines,
+            "output_truncated": truncated,
+            "note": f"WinGet update listing exceeded {WINGET_CHECK_TIMEOUT_SECONDS} seconds; no installer was run.",
+        }
+    except OSError as exc:
+        return {
+            **base_report,
+            "status": "command_unavailable",
+            "network_access_requested": True,
+            "note": f"WinGet update listing could not start ({type(exc).__name__}); no installer was run.",
+        }
+
+    lines, truncated = _bounded_cli_lines(result.stdout, result.stderr)
+    return {
+        **base_report,
+        "status": "completed" if result.returncode == 0 else "source_or_query_error",
+        "return_code": int(result.returncode),
+        "network_access_requested": True,
+        "output_lines": lines,
+        "output_truncated": truncated,
+        "note": "Listing only: command is fixed to 'winget list --upgrade-available --source winget --disable-interactivity'. It cannot invoke an install or upgrade operation.",
     }
 
 

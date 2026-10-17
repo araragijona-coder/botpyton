@@ -33,8 +33,10 @@ echo  J. Vista previa de limpieza (no borra nada)
 echo  K. Inventario de aplicaciones instaladas (solo lectura)
 echo  L. Limpiar archivos temporales mediante cuarentena reversible
 echo  M. Restaurar una cuarentena usando su manifest.json
+echo  N. Comprobar actualizaciones de aplicaciones (optativo; sin instalar)
 echo.
-choice /c 123456789ABCDEFGHIJKLM /n /m "Selecciona una opcion: "
+choice /c 123456789ABCDEFGHIJKLMN /n /m "Selecciona una opcion: "
+if errorlevel 23 goto updatecheck
 if errorlevel 22 goto restorecleanup
 if errorlevel 21 goto quarantinecleanup
 if errorlevel 20 goto appinventory
@@ -268,6 +270,16 @@ set "MANIFEST_PATH="
 set /p "MANIFEST_PATH=Ruta completa del manifest.json de una cuarentena BOTPYTON: "
 if not defined MANIFEST_PATH goto menu
 python -m bot.main --pc-cleanup-restore "%MANIFEST_PATH%"
+echo.
+pause
+goto menu
+
+
+:updatecheck
+echo.
+echo Comprobacion optativa de actualizaciones con WinGet.
+echo Puede usar red; solo enumera paquetes y NO instala ni actualiza nada.
+python -m bot.main --pc-update-check
 echo.
 pause
 goto menu

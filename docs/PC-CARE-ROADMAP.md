@@ -45,9 +45,16 @@ python -m bot.main --pc-cleanup-restore "C:\\path\\to\\BOTPYTON\\Quarantine\\ses
 - No permanent deletion, registry edits, service installation, process termination, driver installation, or network/API calls are part of Phase 16.
 - Tests use temporary folders only; no cleanup has been run on the user's PC. Windows CI still needs to pass for the candidate commit.
 
-## Phase 17 — Explicit opt-in update checks — planned
+## Phase 17 — Explicit opt-in application update listing — implemented on the development branch
 
-Use only trusted, current sources such as Windows Update, Microsoft Store, winget metadata, or official hardware/software vendor sources. Run no network check without a separate opt-in; never install updates automatically in the initial release. Driver packages must not come from generic third-party driver packs.
+- Run \`python -m bot.main --pc-update-check\` or choose N in the Windows launcher. Nothing runs on startup.
+- Uses the fixed per-user WindowsApps WinGet alias, verifies exported source metadata, and proceeds only when the source is named \`winget\`, marked Trusted, has type \`Microsoft.PreIndexed.Package\`, and points exactly to \`https://cdn.winget.microsoft.com/cache\`.
+- Runs only \`winget list --upgrade-available --source winget --disable-interactivity\` with a 30-second timeout, no shell, and bounded output. The code does not call \`winget upgrade\`, \`winget install\`, \`--all\`, or any installer.
+- This explicit check may use the network; the report says so. It never installs/upgrades applications and does not accept package/source agreements on the user's behalf.
+- If WinGet, source metadata, source trust or the configured endpoint cannot be validated, the check fails closed. A listing is evidence from WinGet, not a guarantee that every installed app is represented.
+- Windows system updates, Microsoft Store updates, and device drivers remain unchecked by this phase. Do not use generic third-party driver packs.
+
+
 
 ## Phase 18 — Broader backup, restore and operation audit — planned
 

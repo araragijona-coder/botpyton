@@ -24,7 +24,7 @@ from .repository_analyzer import inspect_repository
 from .process_runner import ProcessRunnerError, run_tool_probe
 from .tool_registry import discover_tools
 from .system_profile import get_system_profile
-from .pc_care import get_pc_care_report, QUARANTINE_CONFIRMATION, RESTORE_CONFIRMATION, quarantine_cleanup_candidates, restore_quarantined_files
+from .pc_care import get_pc_care_report, QUARANTINE_CONFIRMATION, RESTORE_CONFIRMATION, quarantine_cleanup_candidates, restore_quarantined_files, check_application_updates
 from .project_checks import ProjectCheckError, discover_project_checks, run_project_check
 from .policy import PolicyError, validate_task, validate_relative_path
 from .queue import QueueError, TaskQueue
@@ -84,6 +84,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--pc-cleanup-quarantine", action="store_true", help="move verified temporary-file candidates to reversible quarantine after typed confirmation")
     parser.add_argument("--pc-cleanup-restore", metavar="MANIFEST_JSON", help="restore a BOTPYTON quarantine session without overwriting existing files")
     parser.add_argument("--pc-apps", action="store_true", help="list installed Windows application metadata without running uninstallers")
+    parser.add_argument("--pc-update-check", action="store_true", help="opt in to a bounded WinGet update-availability listing; never installs or upgrades packages")
     parser.add_argument("--tools", action="store_true", help="list installed developer tools without running them")
     parser.add_argument("--probe-tool", metavar="TOOL_ID", help="run the fixed version probe for one registered tool")
     parser.add_argument("--local-plan", metavar="PATH", help="validate a declarative local file-change plan (dry-run by default)")
@@ -153,6 +154,9 @@ def main(argv: list[str] | None = None) -> int:
         if args.pc_apps:
             from .pc_care import read_installed_applications
             _print_json(read_installed_applications())
+            return 0
+        if args.pc_update_check:
+            _print_json(check_application_updates())
             return 0
         if args.pc_cleanup_quarantine and args.pc_cleanup_restore:
             raise ValueError("Choose either --pc-cleanup-quarantine or --pc-cleanup-restore, not both")
