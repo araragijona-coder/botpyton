@@ -20,14 +20,18 @@ echo  6. Aplicar plan local (escritura explicita + backups)
 echo  7. Comprobar el nucleo
 echo  8. Ejecutar las pruebas del propio BOTPYTON
 echo  9. Agregar tarea JSON a la cola
-echo  A. Ejecutar una tarea pendiente
+echo  A. Ejecutar una tarea pendiente en un proyecto elegido
 echo  B. Ver cola de tareas
 echo  C. Detectar pruebas/builds del proyecto (sin ejecutarlos)
 echo  D. Ejecutar una prueba/build detectado (requiere aprobacion)
-echo  E. Salir
+echo  E. Crear workspace Git aislado (requiere repositorio limpio)
+echo  F. Inspeccionar estado/diff de un workspace
+echo  G. Salir
 echo.
-choice /c 123456789ABCDE /n /m "Selecciona una opcion: "
-if errorlevel 14 goto end
+choice /c 123456789ABCDEFG /n /m "Selecciona una opcion: "
+if errorlevel 16 goto end
+if errorlevel 15 goto workspacestatus
+if errorlevel 14 goto createworkspace
 if errorlevel 13 goto runcheck
 if errorlevel 12 goto listchecks
 if errorlevel 11 goto queue
@@ -154,6 +158,35 @@ set "CONFIRM_CODE="
 set /p "CONFIRM_CODE=Escribe EJECUTAR para autorizar: "
 if /i not "%CONFIRM_CODE%"=="EJECUTAR" goto menu
 python -m bot.main --run-project-check "%CHECK_ID%" --project-root "%PROJECT_PATH%" --execute-project-code
+echo.
+pause
+goto menu
+
+:createworkspace
+echo.
+set "PROJECT_PATH="
+set /p "PROJECT_PATH=Ruta completa del repositorio Git limpio: "
+if not defined PROJECT_PATH goto menu
+set "TASK_ID="
+set /p "TASK_ID=ID de la tarea para la rama aislada: "
+if not defined TASK_ID goto menu
+set "WORKSPACE_PARENT="
+set /p "WORKSPACE_PARENT=Carpeta para workspaces (Enter = predeterminada): "
+if defined WORKSPACE_PARENT (
+  python -m bot.main --create-workspace "%TASK_ID%" --project-root "%PROJECT_PATH%" --workspace-parent "%WORKSPACE_PARENT%"
+) else (
+  python -m bot.main --create-workspace "%TASK_ID%" --project-root "%PROJECT_PATH%"
+)
+echo.
+pause
+goto menu
+
+:workspacestatus
+echo.
+set "WORKSPACE_PATH="
+set /p "WORKSPACE_PATH=Ruta completa del workspace Git: "
+if not defined WORKSPACE_PATH goto menu
+python -m bot.main --workspace-status "%WORKSPACE_PATH%"
 echo.
 pause
 goto menu
