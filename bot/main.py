@@ -24,6 +24,7 @@ from .repository_analyzer import inspect_repository
 from .process_runner import ProcessRunnerError, run_tool_probe
 from .tool_registry import discover_tools
 from .system_profile import get_system_profile
+from .pc_care import get_pc_care_report
 from .project_checks import ProjectCheckError, discover_project_checks, run_project_check
 from .policy import PolicyError, validate_task, validate_relative_path
 from .queue import QueueError, TaskQueue
@@ -77,6 +78,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--inspect-repository", metavar="PATH", nargs="?", const=".",
                         help="bounded read-only project inventory; candidate checks are not executed")
     parser.add_argument("--system-profile", action="store_true", help="report available RAM, disk space and a conservative child-process memory budget")
+    parser.add_argument("--pc-check", action="store_true", help="run the read-only, offline local PC-care audit")
     parser.add_argument("--tools", action="store_true", help="list installed developer tools without running them")
     parser.add_argument("--probe-tool", metavar="TOOL_ID", help="run the fixed version probe for one registered tool")
     parser.add_argument("--local-plan", metavar="PATH", help="validate a declarative local file-change plan (dry-run by default)")
@@ -142,6 +144,9 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         if args.workspace_status:
             _print_json(inspect_workspace(args.workspace_status))
+            return 0
+        if args.pc_check:
+            _print_json(get_pc_care_report())
             return 0
         if args.system_profile:
             _print_json(get_system_profile(Path.cwd()))

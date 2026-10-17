@@ -256,3 +256,14 @@ The source repository must be clean and committed. BOTPYTON creates a local bran
 ## Verifiable task completion
 
 Tasks that edit files or run a project check must declare machine-verifiable `verification_checks`. The worker validates file existence/hash, Python syntax, bounded JSON validity, successful test/check results, local-plan application and report existence. A task is not marked successful when one of its configured checks fails. Human-readable `success_conditions` remain descriptive; the structured checks are the enforced acceptance criteria. See `docs/TASK-VERIFICATION.md`.
+
+
+## Phase 12: PC Care — first read-only local audit
+
+Run on demand:
+
+\`\`\`bash
+python -m bot.main --pc-check
+\`\`\`
+
+On Windows, this reports available physical RAM, free disk space, older files found in a bounded set of per-user temp/cache folders, and startup registration names. The audit is offline and uses only Python's standard library. It performs no deletion, registry edits, process termination, updates, installs, telemetry, or AI/API calls. A candidate cleanup size is an estimate, not a guarantee; driver/app update states remain explicitly not checked until an opt-in, trusted update source is implemented. See \`docs/PC-CARE-ROADMAP.md\`.

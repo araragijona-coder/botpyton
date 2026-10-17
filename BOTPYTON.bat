@@ -27,8 +27,10 @@ echo  D. Ejecutar una prueba/build detectado (requiere aprobacion)
 echo  E. Crear workspace Git aislado (requiere repositorio limpio)
 echo  F. Inspeccionar estado/diff de un workspace
 echo  G. Salir
+echo  H. Auditoria del PC (solo lectura, sin borrar ni actualizar nada)
 echo.
-choice /c 123456789ABCDEFG /n /m "Selecciona una opcion: "
+choice /c 123456789ABCDEFGH /n /m "Selecciona una opcion: "
+if errorlevel 17 goto pccheck
 if errorlevel 16 goto end
 if errorlevel 15 goto workspacestatus
 if errorlevel 14 goto createworkspace
@@ -199,6 +201,15 @@ goto menu
 
 :tests
 python -m unittest discover -s tests -v
+echo.
+pause
+goto menu
+
+
+:pccheck
+echo.
+echo AUDITORIA LOCAL: no borra archivos, no desactiva programas ni instala controladores.
+python -m bot.main --pc-check
 echo.
 pause
 goto menu
