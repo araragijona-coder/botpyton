@@ -175,3 +175,25 @@ python -m bot.main --inspect-repository "C:\\path\\to\\project"
 The inventory has bounds for file count, directory depth, and oversized files; skips common generated/dependency folders and symlinks; recognizes common language extensions and project manifests; and reports possible checks as suggestions only. It does not read source-file contents, install dependencies, run candidate commands, use the network, or call AI services. The default limits are 5,000 files, depth 8, and 2 MB per file for oversized-file reporting. An inventory marked `inventory_complete_with_limits` is partial and must not be treated as exhaustive.
 
 The inventory is an initial capability, not a complete local-PC agent: it does not yet edit arbitrary projects or launch arbitrary tools. Any future execution/editing capability must be separately permissioned and bounded. The educational project catalog is in `docs/EDUCATIONAL-PROJECT-LIBRARY.json`; entries marked planned are ideas, not implemented applications.
+
+
+## Tool discovery and local changes (Phase 11)
+
+List developer tools found on the current PATH without executing them:
+
+```bash
+python -m bot.main --tools
+python -m bot.main --probe-tool git
+```
+
+Only the second command runs a fixed, source-registered version probe. It does not accept arbitrary command arguments.
+
+Local file-change plans are dry-run by default:
+
+```bash
+python -m bot.main --local-plan "C:\\path\\plan.json" --project-root "C:\\path\\project"
+```
+
+To apply a plan, add `--execute-local-plan`. Existing files require a matching `expected_sha256`; changes are limited to 20 files, 200 KB per file and 500 KB of total content. Existing files are backed up outside the project root. Protected paths, traversal and symlink path components are rejected. See `docs/LOCAL-CHANGE-PLANS.md` for the schema and protections.
+
+The process runner uses separate arguments, an explicit executable allowlist, `shell=False`, a timeout, disconnected stdin, stripped credential-like environment variables and bounded returned output. It is not a general shell and does not execute commands discovered in repository text. These controls are foundations for the worker, not a claim that free-form programming tasks can already be autonomously solved.
