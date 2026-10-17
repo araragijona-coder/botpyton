@@ -85,6 +85,27 @@ class OrchestrationTests(unittest.TestCase):
         self.assertTrue(result["plans"][0]["draft"])
         self.assertFalse(result["automatic_merge"])
 
+    def test_batch_normalizes_plan_validation_errors_to_orchestration_error(self):
+        # The shared GitHub validator rejects invalid draft settings, but callers of
+        # the batch API must consistently receive OrchestrationError.
+        with self.assertRaisesRegex(OrchestrationError, "draft must be true"):
+            validate_change_plan_batch([plan(draft=False)])
+        with self.assertRaisesRegex(OrchestrationError, "draft must be a JSON boolean"):
+            validate_change_plan_batch([plan(draft="false")])
+
+    def test_invalid_batch_has_zero_mutating_transport_calls(self):
+        calls = []
+
+        def transport(method, endpoint, payload):
+            calls.append((method, endpoint))
+            raise AssertionError("invalid batch must be rejected before GitHub access")
+
+        client = GitHubClient(repository="owner/repo", token="fake-token", transport=transport)
+        invalid = [plan("VALID-FIRST"), plan("INVALID-SECOND", draft=False)]
+        with self.assertRaisesRegex(OrchestrationError, "draft must be true"):
+            submit_change_plan_batch(invalid, client=client, execute=True)
+        self.assertEqual(calls, [])
+
     def test_pr_batch_rejects_duplicates_invalid_paths_and_excess_plans(self):
         with self.assertRaises(OrchestrationError):
             validate_change_plan_batch([plan("DUP"), plan("DUP")])
