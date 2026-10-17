@@ -998,8 +998,6 @@ def find_duplicate_files(
                             "path": path_text,
                             "size_bytes": int(info.st_size),
                             "modified_ns": int(info.st_mtime_ns),
-                            "device": int(getattr(info, "st_dev", 0)),
-                            "inode": int(getattr(info, "st_ino", 0)),
                         })
                     except OSError:
                         report["access_errors"] += 1
@@ -1057,8 +1055,9 @@ def find_duplicate_files(
                     raise OSError("file metadata changed during scan")
                 digest = _sha256_file(candidate_path, byte_limit=min(size_bytes, remaining, max_file_bytes), deadline=deadline)
                 after = candidate_path.stat(follow_symlinks=False)
-                if (after.st_size != before.st_size or after.st_mtime_ns != before.st_mtime_ns
-                        or int(getattr(after, "st_ino", 0)) != item["inode"]):
+                # Windows stat inode values are not consistent across all filesystem providers.
+                # Size + nanosecond mtime are compared here and inside _sha256_file.
+                if after.st_size != before.st_size or after.st_mtime_ns != before.st_mtime_ns:
                     raise OSError("file metadata changed during hashing")
             except TimeoutError:
                 report["timeout_hit"] = True
