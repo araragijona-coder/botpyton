@@ -80,6 +80,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--system-profile", action="store_true", help="report available RAM, disk space and a conservative child-process memory budget")
     parser.add_argument("--pc-check", action="store_true", help="run the read-only, offline local PC-care audit")
     parser.add_argument("--pc-processes", action="store_true", help="show a bounded read-only snapshot of Windows process memory usage")
+    parser.add_argument("--pc-cleanup-preview", action="store_true", help="list exact eligible temporary-file candidates without deleting anything")
     parser.add_argument("--tools", action="store_true", help="list installed developer tools without running them")
     parser.add_argument("--probe-tool", metavar="TOOL_ID", help="run the fixed version probe for one registered tool")
     parser.add_argument("--local-plan", metavar="PATH", help="validate a declarative local file-change plan (dry-run by default)")
@@ -145,6 +146,10 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         if args.workspace_status:
             _print_json(inspect_workspace(args.workspace_status))
+            return 0
+        if args.pc_cleanup_preview:
+            from .pc_care import get_cleanup_preview
+            _print_json(get_cleanup_preview())
             return 0
         if args.pc_processes:
             from .pc_care import read_top_processes

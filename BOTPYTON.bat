@@ -29,8 +29,10 @@ echo  F. Inspeccionar estado/diff de un workspace
 echo  G. Salir
 echo  H. Auditoria del PC (solo lectura, sin borrar ni actualizar nada)
 echo  I. Ver procesos que mas memoria usan (solo lectura)
+echo  J. Vista previa de limpieza (no borra nada)
 echo.
-choice /c 123456789ABCDEFGHI /n /m "Selecciona una opcion: "
+choice /c 123456789ABCDEFGHIJ /n /m "Selecciona una opcion: "
+if errorlevel 19 goto cleanpreview
 if errorlevel 18 goto processcheck
 if errorlevel 17 goto pccheck
 if errorlevel 16 goto end
@@ -207,6 +209,14 @@ echo.
 pause
 goto menu
 
+
+:cleanpreview
+echo.
+echo VISTA PREVIA: solo enumera archivos temporales antiguos; no borra ni mueve archivos.
+python -m bot.main --pc-cleanup-preview
+echo.
+pause
+goto menu
 
 :processcheck
 echo.

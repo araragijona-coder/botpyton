@@ -272,3 +272,8 @@ On Windows, this reports available physical RAM, free disk space, older files fo
 ## Phase 13: process memory snapshot
 
 On Windows, run `python -m bot.main --pc-processes` to list a bounded snapshot of processes sorted by working-set memory. It uses the built-in `tasklist` command with a five-second timeout, no shell, and no command-line capture. It does not stop or change processes. Memory usage is a momentary observation, not proof that an application is unnecessary. See `docs/PC-CARE-ROADMAP.md`.
+
+
+## Phase 14: exact cleanup preview
+
+Run `python -m bot.main --pc-cleanup-preview` to list exact old-file candidates in approved temporary directories. The output is read-only, bounded to 200 candidates, and explicitly excludes browser profiles, cookies, sessions, downloads, personal documents, and system directories. Nothing is deleted or moved. Review every path before any future cleanup feature; see `docs/PC-CARE-ROADMAP.md`.

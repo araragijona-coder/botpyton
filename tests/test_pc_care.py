@@ -5,7 +5,7 @@ from pathlib import Path
 
 from unittest.mock import patch, Mock
 
-from bot.pc_care import get_pc_care_report, read_startup_entries, read_top_processes, scan_stale_files
+from bot.pc_care import get_cleanup_preview, get_pc_care_report, read_startup_entries, read_top_processes, scan_stale_files
 
 
 class PcCareTests(unittest.TestCase):
@@ -45,6 +45,46 @@ class PcCareTests(unittest.TestCase):
         result = read_startup_entries(windows=False)
         self.assertEqual(result["status"], "unsupported_platform")
         self.assertEqual(result["items_count"], 0)
+
+    def test_cleanup_preview_lists_old_temp_files_without_deleting_them(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            old_file = root / "old.tmp"
+            old_file.write_bytes(b"temporary")
+            now = 1_700_000_000.0
+            os.utime(old_file, (now - 12 * 86400, now - 12 * 86400))
+            result = get_cleanup_preview(scan_roots=[("temporary files", root)], now=now)
+            self.assertEqual(result["status"], "preview_complete")
+            self.assertEqual(result["candidate_count"], 1)
+            self.assertEqual(result["candidates"][0]["path"], str(old_file.resolve()))
+            self.assertEqual(result["files_deleted"], 0)
+            self.assertTrue(old_file.exists())
+
+    def test_cleanup_preview_excludes_browser_cache_and_personal_locations(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            old_file = root / "old.tmp"
+            old_file.write_bytes(b"not eligible")
+            now = 1_700_000_000.0
+            os.utime(old_file, (now - 12 * 86400, now - 12 * 86400))
+            result = get_cleanup_preview(
+                scan_roots=[("Chrome default-profile cache", root), ("downloads", root)],
+                now=now,
+            )
+        self.assertEqual(result["candidate_count"], 0)
+        self.assertEqual(len(result["skipped_roots"]), 2)
+
+    def test_cleanup_preview_enforces_candidate_limit(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            now = 1_700_000_000.0
+            for index in range(4):
+                item = root / f"{index}.tmp"
+                item.write_bytes(b"x")
+                os.utime(item, (now - 12 * 86400, now - 12 * 86400))
+            result = get_cleanup_preview(scan_roots=[("temporary files", root)], now=now, max_candidates=2)
+        self.assertEqual(result["candidate_count"], 2)
+        self.assertEqual(result["status"], "preview_partial")
 
     def test_non_windows_process_inventory_is_explicitly_unsupported(self):
         result = read_top_processes(windows=False)

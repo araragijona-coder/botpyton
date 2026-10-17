@@ -283,6 +283,129 @@ def read_top_processes(*, windows: bool | None = None, limit: int = 20) -> dict:
     }
 
 
+def get_cleanup_preview(
+    *,
+    scan_roots: list[tuple[str, Path]] | None = None,
+    now: float | None = None,
+    minimum_age_days: int = STALE_DAYS,
+    max_entries_per_root: int = MAX_SCAN_ENTRIES,
+    max_candidates: int = 200,
+) -> dict:
+    """List exact old temporary-file candidates without reading or deleting file contents."""
+    if not isinstance(max_candidates, int) or isinstance(max_candidates, bool) or not 1 <= max_candidates <= 500:
+        raise ValueError("max_candidates must be between 1 and 500")
+    if not isinstance(minimum_age_days, int) or isinstance(minimum_age_days, bool) or not 1 <= minimum_age_days <= 365:
+        raise ValueError("minimum_age_days must be between 1 and 365")
+    roots = default_scan_roots() if scan_roots is None else scan_roots
+    candidates: list[dict] = []
+    skipped_roots: list[dict] = []
+    entries_examined = 0
+    partial = False
+    now_value = time.time() if now is None else float(now)
+    cutoff = now_value - minimum_age_days * 24 * 60 * 60
+
+    for label, root_value in roots[:32]:
+        # Only conventional temporary directories are eligible in this phase.
+        normalized_label = label.casefold()
+        if "temp" not in normalized_label and "temporary" not in normalized_label:
+            skipped_roots.append({"label": label, "reason": "not_an_approved_temporary_directory"})
+            continue
+        root = Path(root_value).expanduser()
+        try:
+            if not root.is_dir() or _is_link_or_reparse(root):
+                skipped_roots.append({"label": label, "reason": "missing_or_linked_root"})
+                continue
+            resolved_root = root.resolve(strict=True)
+        except OSError:
+            skipped_roots.append({"label": label, "reason": "root_unavailable"})
+            continue
+
+        scan = scan_stale_files(
+            resolved_root,
+            now=now_value,
+            minimum_age_days=minimum_age_days,
+            max_entries=max_entries_per_root,
+        )
+        entries_examined += scan["entries_examined"]
+        partial = partial or scan["status"] == "scan_partial"
+        stack: list[tuple[Path, int]] = [(resolved_root, 0)]
+        root_limit_hit = False
+
+        while stack and len(candidates) < max_candidates:
+            current, depth = stack.pop()
+            try:
+                with os.scandir(current) as entries:
+                    for entry in entries:
+                        if entries_examined >= len(roots[:32]) * max_entries_per_root:
+                            partial = True
+                            root_limit_hit = True
+                            break
+                        entries_examined += 1
+                        try:
+                            entry_path = Path(entry.path)
+                            if entry.is_symlink() or _is_link_or_reparse(entry_path):
+                                continue
+                            if entry.is_dir(follow_symlinks=False):
+                                if depth < MAX_SCAN_DEPTH:
+                                    stack.append((entry_path, depth + 1))
+                                else:
+                                    partial = True
+                                continue
+                            if not entry.is_file(follow_symlinks=False):
+                                continue
+                            info = entry.stat(follow_symlinks=False)
+                            if info.st_mtime > cutoff:
+                                continue
+                            resolved_file = entry_path.resolve(strict=True)
+                            if not resolved_file.is_relative_to(resolved_root):
+                                continue
+                            candidates.append({
+                                "path": str(resolved_file),
+                                "root_label": label,
+                                "size_bytes": max(0, int(info.st_size)),
+                                "modified_epoch": int(info.st_mtime),
+                                "age_days": max(0, int((now_value - info.st_mtime) // 86400)),
+                                "status": "candidate_not_deleted",
+                                "reason": f"temporary file older than {minimum_age_days} days",
+                            })
+                            if len(candidates) >= max_candidates:
+                                partial = True
+                                break
+                        except OSError:
+                            partial = True
+                    if root_limit_hit or len(candidates) >= max_candidates:
+                        break
+            except OSError:
+                partial = True
+            if root_limit_hit or len(candidates) >= max_candidates:
+                break
+
+    total_bytes = sum(item["size_bytes"] for item in candidates)
+    return {
+        "product": "BOTPYTON PC Care",
+        "schema_version": 1,
+        "status": "preview_partial" if partial else "preview_complete",
+        "read_only": True,
+        "network_used": False,
+        "files_deleted": 0,
+        "settings_changed": False,
+        "minimum_age_days": minimum_age_days,
+        "candidate_count": len(candidates),
+        "candidate_bytes": total_bytes,
+        "candidate_mib": round(total_bytes / (1024 ** 2), 2),
+        "candidate_limit": max_candidates,
+        "entries_examined": entries_examined,
+        "candidates": candidates,
+        "skipped_roots": skipped_roots,
+        "limitations": [
+            "This is a preview only. No files are deleted, moved, or opened for content.",
+            "Only conventional temporary directories are eligible; browser caches, cookies, sessions, downloads, documents, and system directories are excluded.",
+            "A file may be in use even if its timestamp is old. No cleanup action is authorized by this report.",
+            "Partial results are not exhaustive; rerun after reviewing the listed paths.",
+        ],
+    }
+
+
 def get_pc_care_report(
     *,
     scan_roots: list[tuple[str, Path]] | None = None,
