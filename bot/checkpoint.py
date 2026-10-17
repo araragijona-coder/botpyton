@@ -5,11 +5,13 @@ import hashlib
 import json
 import os
 import re
+import stat
 import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from .application_cache import _is_link_or_reparse
 from .memory import JsonMemory, MemoryError, MEMORY_SCHEMA_VERSION
 from .planner import order_tasks
 from .policy import PolicyError, validate_task
@@ -17,11 +19,51 @@ from .policy import PolicyError, validate_task
 CHECKPOINT_SCHEMA_VERSION = 1
 STATE_FILENAME = "state.json"
 MANIFEST_FILENAME = "manifest.json"
+MAX_CHECKPOINT_STATE_BYTES = 4 * 1024 * 1024
+MAX_CHECKPOINT_MANIFEST_BYTES = 32 * 1024
 TASK_STATES = frozenset({"pending", "running", "succeeded", "failed", "blocked"})
 
 
 class CheckpointError(ValueError):
     """Raised when a checkpoint is corrupt, inconsistent, or unsupported."""
+
+
+def _read_bounded_checkpoint_file(path: Path, *, byte_limit: int, label: str) -> str:
+    """Read a regular checkpoint file without ever buffering more than its cap."""
+    try:
+        before = path.stat(follow_symlinks=False)
+        if not stat.S_ISREG(before.st_mode) or _is_link_or_reparse(path):
+            raise CheckpointError(f"Checkpoint {label} must be a regular file, not a link/reparse point")
+        if before.st_size < 0 or before.st_size > byte_limit:
+            raise CheckpointError(
+                f"Checkpoint {label} exceeds the configured size limit ({byte_limit} bytes)"
+            )
+        with path.open("rb") as stream:
+            opened = os.fstat(stream.fileno())
+            if (
+                not stat.S_ISREG(opened.st_mode)
+                or (opened.st_dev, opened.st_ino) != (before.st_dev, before.st_ino)
+            ):
+                raise CheckpointError(f"Checkpoint {label} changed while it was being opened")
+            raw = stream.read(byte_limit + 1)
+            after_open = os.fstat(stream.fileno())
+        if len(raw) > byte_limit or after_open.st_size > byte_limit:
+            raise CheckpointError(
+                f"Checkpoint {label} exceeds the configured size limit ({byte_limit} bytes)"
+            )
+        after_path = path.stat(follow_symlinks=False)
+        if (
+            not stat.S_ISREG(after_path.st_mode)
+            or _is_link_or_reparse(path)
+            or (after_path.st_dev, after_path.st_ino) != (opened.st_dev, opened.st_ino)
+            or after_path.st_size != after_open.st_size
+        ):
+            raise CheckpointError(f"Checkpoint {label} changed during bounded reading")
+        return raw.decode("utf-8")
+    except CheckpointError:
+        raise
+    except (OSError, UnicodeError) as exc:
+        raise CheckpointError(f"Cannot read checkpoint {label}: {exc}") from exc
 
 
 def _canonical_json(value: Any) -> bytes:
@@ -101,7 +143,12 @@ def export_checkpoint(memory_path: str | Path, output_dir: str | Path) -> dict[s
     output = Path(output_dir).resolve()
     output.mkdir(parents=True, exist_ok=True)
     state_text = json.dumps(state, ensure_ascii=False, indent=2, sort_keys=True, allow_nan=False) + "\n"
-    digest = hashlib.sha256(state_text.encode("utf-8")).hexdigest()
+    state_bytes = state_text.encode("utf-8")
+    if len(state_bytes) > MAX_CHECKPOINT_STATE_BYTES:
+        raise CheckpointError(
+            f"Queue state exceeds the checkpoint size limit ({MAX_CHECKPOINT_STATE_BYTES} bytes)"
+        )
+    digest = hashlib.sha256(state_bytes).hexdigest()
     manifest = {
         "schema_version": CHECKPOINT_SCHEMA_VERSION,
         "state_schema_version": MEMORY_SCHEMA_VERSION,
@@ -122,14 +169,22 @@ def export_checkpoint(memory_path: str | Path, output_dir: str | Path) -> dict[s
 
 def restore_checkpoint(checkpoint_dir: str | Path, memory_path: str | Path) -> dict[str, Any]:
     """Verify artifact metadata and task invariants before atomically replacing memory."""
-    source = Path(checkpoint_dir).resolve()
+    source_input = Path(checkpoint_dir).expanduser()
+    if (source_input.exists() or source_input.is_symlink()) and _is_link_or_reparse(source_input):
+        raise CheckpointError("Checkpoint directory must not be a symlink or Windows reparse point")
+    source = source_input.resolve()
     manifest_path = source / MANIFEST_FILENAME
     state_path = source / STATE_FILENAME
+    manifest_text = _read_bounded_checkpoint_file(
+        manifest_path, byte_limit=MAX_CHECKPOINT_MANIFEST_BYTES, label=MANIFEST_FILENAME
+    )
+    state_text = _read_bounded_checkpoint_file(
+        state_path, byte_limit=MAX_CHECKPOINT_STATE_BYTES, label=STATE_FILENAME
+    )
     try:
-        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-        state_text = state_path.read_text(encoding="utf-8")
-    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
-        raise CheckpointError(f"Cannot read complete checkpoint: {exc}") from exc
+        manifest = json.loads(manifest_text)
+    except (json.JSONDecodeError, RecursionError) as exc:
+        raise CheckpointError(f"Checkpoint manifest is invalid JSON: {exc}") from exc
 
     if not isinstance(manifest, dict) or manifest.get("schema_version") != CHECKPOINT_SCHEMA_VERSION:
         raise CheckpointError("Unsupported checkpoint manifest")
@@ -144,16 +199,19 @@ def restore_checkpoint(checkpoint_dir: str | Path, memory_path: str | Path) -> d
 
     try:
         state = json.loads(state_text)
-    except json.JSONDecodeError as exc:
-        raise CheckpointError(f"Checkpoint state is invalid JSON: {exc}") from exc
-    validate_checkpoint_state(state)
+    except (json.JSONDecodeError, RecursionError) as exc:
+        raise CheckpointError(f"Checkpoint state is invalid or too deeply nested JSON: {exc}") from exc
+    try:
+        validate_checkpoint_state(state)
+    except RecursionError as exc:
+        raise CheckpointError(f"Checkpoint state exceeds safe validation nesting: {exc}") from exc
     if manifest.get("task_count") != len(state["tasks"]):
         raise CheckpointError("Checkpoint manifest task count does not match the state")
 
     try:
         JsonMemory(memory_path).save(state)
-    except MemoryError as exc:
-        raise CheckpointError(f"Cannot restore checkpoint memory: {exc}") from exc
+    except (MemoryError, RecursionError) as exc:
+        raise CheckpointError(f"Cannot restore checkpoint memory safely: {exc}") from exc
     return {
         "restored": True,
         "task_count": len(state["tasks"]),
