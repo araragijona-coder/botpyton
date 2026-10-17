@@ -137,5 +137,46 @@ class SimulationEmitterTests(unittest.TestCase):
         self.assertFalse(hasattr(self.recorder, "submit_pull_request"))
 
 
+
+    def test_invalid_actor_types_fail_closed_without_type_error(self):
+        for actor in (None, 7, [], {}, "   "):
+            with self.subTest(actor=actor):
+                self.assert_rejected_without_operations(request(), actor=actor)
+
+    def test_request_ids_reject_empty_whitespace_and_malformed_values(self):
+        for request_id in ("", "   ", "../bad", "bad/id", "x" * 81):
+            with self.subTest(request_id=request_id):
+                self.assert_rejected_without_operations(request(request_id=request_id))
+
+    def test_policy_rejects_non_integer_text_limits(self):
+        for kwargs in (
+            {"max_title_chars": True},
+            {"max_body_chars": False},
+            {"max_title_chars": 201},
+            {"max_body_chars": 20_001},
+            {"max_title_chars": 0},
+            {"max_body_chars": -1},
+        ):
+            with self.subTest(kwargs=kwargs):
+                with self.assertRaises(ValueError):
+                    EmitterPolicy(
+                        repository="araragijona-coder/botpyton",
+                        authorized_actors=frozenset({"trusted-worker"}),
+                        allowed_base_refs=frozenset({"main"}),
+                        allowed_head_prefixes=("bot-bootstrap/",),
+                        **kwargs,
+                    )
+
+    def test_ref_validation_rejects_control_characters_and_excessive_length(self):
+        for ref in ("bot-bootstrap/bad\\nname", "bot-bootstrap/" + "x" * 201, "bot-bootstrap/name.", "bot-bootstrap/.hidden"):
+            with self.subTest(ref=ref):
+                self.assert_rejected_without_operations(request(head_ref=ref))
+
+    def test_duplicate_request_id_with_different_payload_is_rejected(self):
+        self.emitter.process(request(), authenticated_actor="trusted-worker", resolved_head_sha=VALID_SHA)
+        changed = request(title="Different payload using the same ID")
+        self.assert_rejected_without_operations(changed)
+        self.assertEqual(len(self.recorder.operations), 1)
+
 if __name__ == "__main__":
     unittest.main()
