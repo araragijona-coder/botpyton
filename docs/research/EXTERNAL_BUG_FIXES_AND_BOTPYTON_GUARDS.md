@@ -263,3 +263,29 @@ Las notas oficiales de BleachBit 6.0.4 describen el uso de rutas absolutas para 
 - Python, `shutil.which()` — especifica cómo se consideran PATH y directorio actual en Windows: https://docs.python.org/3/library/shutil.html
 
 La corrección afecta solo al entorno de los procesos secundarios; no cambia las acciones de limpieza del PC, no instala dependencias y no añade servicios residentes. Requiere suite completa y smoke de Windows antes de integrarse.
+
+## Phase 19 — Limitar el consumo de memoria al restaurar checkpoints JSON (2026-10-17)
+
+### Hallazgo confirmado
+
+`restore_checkpoint()` verificaba la huella SHA-256 y validaba el esquema de la cola, pero primero cargaba con `read_text()` los dos archivos completos y los pasaba al decodificador JSON de Python sin un límite de bytes. Un artefacto de checkpoint demasiado grande o un JSON profundamente anidado podía consumir recursos excesivos o terminar con una excepción de recursión sin convertirse en un error de checkpoint controlado. La comprobación de hash no es un límite de tamaño: solo verifica si los bytes leídos coinciden con el digest que figura en el manifiesto.
+
+No hay evidencia de que se haya producido una condición de agotamiento de memoria en este proyecto; es una vía de entrada reproducible que carecía de límites explícitos y contradecía los objetivos de consumo reducido del programa.
+
+### Corrección aplicada
+
+- Se define un máximo de 4 MiB para `state.json` y 32 KiB para `manifest.json`.
+- Antes de parsear se comprueba que cada archivo sea regular, no un enlace/reparse point, y que su tamaño esté dentro del límite.
+- La lectura usa un límite duro de `cap + 1` bytes y compara la identidad del archivo abierto con la ruta antes y después, para detectar sustituciones durante la lectura.
+- Después de la lectura acotada, se normalizan `CRLF`/`CR` a `LF` antes de verificar el hash, conservando la compatibilidad entre checkpoints creados en Windows y Linux; se incluye una regresión específica para saltos de línea `CRLF`.
+- Los archivos que exceden el límite se rechazan antes del parseo; se rechaza cualquier JSON cuya profundidad estructural supere 64 niveles; las excepciones de recursión del decodificador/serializador también se convierten en `CheckpointError` controlado.
+- La exportación también rechaza un estado que exceda el límite admitido, evitando producir un checkpoint que la restauración no pueda aceptar.
+- Se añadieron pruebas para estado excesivo, manifiesto excesivo, JSON profundamente anidado y archivo de estado simbólico. Las pruebas verifican que una restauración fallida no sobrescriba la memoria existente.
+
+### Fuentes oficiales
+
+- Documentación de Python, módulo `json`: advierte que JSON malicioso puede consumir mucha CPU/memoria y recomienda limitar el tamaño antes de parsear: https://docs.python.org/3.12/library/json.html
+- OWASP Input Validation Cheat Sheet: aplicar límites de tamaño antes de almacenar o parsear y configurar límites del parser para evitar agotamiento de recursos: https://cheatsheetseries.owasp.org/cheatsheets/Input_Validation_Cheat_Sheet.html
+- MITRE CWE-789: asignaciones de memoria excesivas por entradas sin límites, mitigadas validando cantidades y limitando recursos: https://cwe.mitre.org/data/definitions/789.html
+
+El cambio no agrega dependencias ni servicios. Mantiene intactos el esquema del checkpoint y el flujo de tareas válidas; añade límites explícitos para restauración y exportación que se pueden verificar con CI.

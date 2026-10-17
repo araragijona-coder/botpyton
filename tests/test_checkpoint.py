@@ -1,9 +1,16 @@
+import hashlib
 import json
 import tempfile
 import unittest
 from pathlib import Path
 
-from bot.checkpoint import CheckpointError, export_checkpoint, restore_checkpoint
+from bot.checkpoint import (
+    MAX_CHECKPOINT_MANIFEST_BYTES,
+    MAX_CHECKPOINT_STATE_BYTES,
+    CheckpointError,
+    export_checkpoint,
+    restore_checkpoint,
+)
 from bot.memory import JsonMemory
 from bot.queue import TaskQueue
 
@@ -49,6 +56,23 @@ class CheckpointTests(unittest.TestCase):
         self.assertEqual(after["tasks"]["A"]["status"], "succeeded")
         self.assertEqual(after["tasks"]["B"]["status"], "running")
 
+    def test_restore_accepts_crlf_state_without_breaking_manifest_digest(self):
+        JsonMemory(self.source_memory).save({
+            "schema_version": 1, "tasks": {}, "incidents": [], "solutions": []
+        })
+        export_checkpoint(self.source_memory, self.checkpoint_dir)
+        state_path = self.checkpoint_dir / "state.json"
+        normalized_text = state_path.read_text(encoding="utf-8")
+        state_path.write_bytes(normalized_text.replace("\n", "\r\n").encode("utf-8"))
+
+        restored = restore_checkpoint(self.checkpoint_dir, self.restore_memory)
+
+        self.assertTrue(restored["restored"])
+        self.assertEqual(restored["task_count"], 0)
+        self.assertEqual(JsonMemory(self.restore_memory).load(), {
+            "schema_version": 1, "tasks": {}, "incidents": [], "solutions": []
+        })
+
     def test_tampered_state_is_rejected_without_overwriting_existing_memory(self):
         JsonMemory(self.source_memory).save({
             "schema_version": 1, "tasks": {}, "incidents": [], "solutions": []
@@ -84,6 +108,89 @@ class CheckpointTests(unittest.TestCase):
         JsonMemory(self.source_memory).save(state)
         with self.assertRaisesRegex(CheckpointError, "Idempotency key mismatch"):
             export_checkpoint(self.source_memory, self.checkpoint_dir)
+
+    def test_oversized_state_is_rejected_before_parsing_without_overwriting_memory(self):
+        JsonMemory(self.source_memory).save({
+            "schema_version": 1, "tasks": {}, "incidents": [], "solutions": []
+        })
+        export_checkpoint(self.source_memory, self.checkpoint_dir)
+        existing = {
+            "schema_version": 1, "tasks": {},
+            "incidents": [{"keep": "existing state"}], "solutions": []
+        }
+        JsonMemory(self.restore_memory).save(existing)
+        (self.checkpoint_dir / "state.json").write_bytes(b" " * (MAX_CHECKPOINT_STATE_BYTES + 1))
+
+        with self.assertRaisesRegex(CheckpointError, "state.json exceeds the configured size limit"):
+            restore_checkpoint(self.checkpoint_dir, self.restore_memory)
+        self.assertEqual(JsonMemory(self.restore_memory).load(), existing)
+
+    def test_oversized_manifest_is_rejected_before_parsing_without_overwriting_memory(self):
+        JsonMemory(self.source_memory).save({
+            "schema_version": 1, "tasks": {}, "incidents": [], "solutions": []
+        })
+        export_checkpoint(self.source_memory, self.checkpoint_dir)
+        existing = {
+            "schema_version": 1, "tasks": {},
+            "incidents": [{"keep": "existing state"}], "solutions": []
+        }
+        JsonMemory(self.restore_memory).save(existing)
+        (self.checkpoint_dir / "manifest.json").write_bytes(
+            b" " * (MAX_CHECKPOINT_MANIFEST_BYTES + 1)
+        )
+
+        with self.assertRaisesRegex(CheckpointError, "manifest.json exceeds the configured size limit"):
+            restore_checkpoint(self.checkpoint_dir, self.restore_memory)
+        self.assertEqual(JsonMemory(self.restore_memory).load(), existing)
+
+    def test_deeply_nested_state_json_is_rejected_without_overwriting_memory(self):
+        JsonMemory(self.source_memory).save({
+            "schema_version": 1, "tasks": {}, "incidents": [], "solutions": []
+        })
+        manifest = export_checkpoint(self.source_memory, self.checkpoint_dir)
+        existing = {
+            "schema_version": 1, "tasks": {},
+            "incidents": [{"keep": "existing state"}], "solutions": []
+        }
+        JsonMemory(self.restore_memory).save(existing)
+
+        nested = "[" * 1500 + "0" + "]" * 1500
+        state_text = (
+            '{"schema_version":1,"tasks":{},"incidents":['
+            + nested
+            + '],"solutions":[]}\n'
+        )
+        (self.checkpoint_dir / "state.json").write_text(state_text, encoding="utf-8")
+        manifest["sha256"] = hashlib.sha256(state_text.encode("utf-8")).hexdigest()
+        (self.checkpoint_dir / "manifest.json").write_text(
+            json.dumps(manifest, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+
+        with self.assertRaisesRegex(CheckpointError, "nesting depth limit"):
+            restore_checkpoint(self.checkpoint_dir, self.restore_memory)
+        self.assertEqual(JsonMemory(self.restore_memory).load(), existing)
+
+    def test_symlink_checkpoint_state_is_rejected(self):
+        JsonMemory(self.source_memory).save({
+            "schema_version": 1, "tasks": {}, "incidents": [], "solutions": []
+        })
+        export_checkpoint(self.source_memory, self.checkpoint_dir)
+        external = self.root / "external-state.json"
+        external.write_text(
+            json.dumps({"schema_version": 1, "tasks": {}, "incidents": [], "solutions": []}),
+            encoding="utf-8",
+        )
+        state_path = self.checkpoint_dir / "state.json"
+        state_path.unlink()
+        try:
+            state_path.symlink_to(external)
+        except (OSError, NotImplementedError) as exc:
+            self.skipTest(f"File symlinks unavailable on this runner: {exc}")
+
+        with self.assertRaisesRegex(CheckpointError, "state.json must be a regular file"):
+            restore_checkpoint(self.checkpoint_dir, self.restore_memory)
+        self.assertFalse(self.restore_memory.exists())
 
     def test_missing_manifest_fails_closed(self):
         self.checkpoint_dir.mkdir(parents=True, exist_ok=True)
