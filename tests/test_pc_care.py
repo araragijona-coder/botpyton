@@ -478,6 +478,33 @@ class PcCareTests(unittest.TestCase):
             self.assertEqual(old_file.read_bytes(), before)
             self.assertTrue(stored.exists())
 
+    def test_audit_event_never_overwrites_destination_created_during_write(self):
+        from bot.pc_care import _persist_pc_care_audit_event
+
+        with tempfile.TemporaryDirectory() as tmp:
+            audit_dir = Path(tmp) / "audit"
+            audit_dir.mkdir()
+            final_path = audit_dir / f"event-{__import__('time').time_ns()}-quarantine-started.json"
+            # The event id is generated inside the function, so inject the collision
+            # at the exclusive-link step after the initial existence check.
+            sentinel = b"keep existing audit data"
+            real_link = os.link
+
+            def create_collision_then_link(source, destination, *args, **kwargs):
+                Path(destination).write_bytes(sentinel)
+                return real_link(source, destination, *args, **kwargs)
+
+            with patch("bot.pc_care.os.link", side_effect=create_collision_then_link):
+                with self.assertRaises(FileExistsError):
+                    _persist_pc_care_audit_event(
+                        "quarantine", "started", "test-only", audit_dir=audit_dir
+                    )
+
+            event_files = list(audit_dir.glob("event-*.json"))
+            self.assertEqual(len(event_files), 1)
+            self.assertEqual(event_files[0].read_bytes(), sentinel)
+            self.assertEqual(list(audit_dir.glob(".event-*.tmp")), [])
+
     def test_audit_detects_modified_event_checksum(self):
         import json
         from bot.pc_care import _persist_pc_care_audit_event, read_pc_care_audit
