@@ -140,6 +140,46 @@ class ApplicationCacheQuarantineTests(unittest.TestCase):
             self.assertEqual(preview["status"], "cache_manifest_invalid")
             self.assertTrue(Path(manifest["items"][0]["quarantine_path"]).exists())
 
+    def test_removed_profile_does_not_block_restoring_other_session_items(self):
+        now = 1_700_000_000.0
+        with tempfile.TemporaryDirectory() as tmp:
+            local = Path(tmp) / "LocalAppData"
+            chrome_profile = local / "Google" / "Chrome" / "User Data" / "Default"
+            edge_profile = local / "Microsoft" / "Edge" / "User Data" / "Default"
+            chrome_file = self._old_file(chrome_profile / "Cache" / "Cache_Data" / "chrome.bin", now, b"chrome-cache")
+            edge_file = self._old_file(edge_profile / "Cache" / "Cache_Data" / "edge.bin", now, b"edge-cache")
+            env = {"LOCALAPPDATA": str(local)}
+            preview = preview_application_cache(env=env, windows=True, now=now)
+            self.assertEqual(preview["status"], "preview_complete")
+            selected = [str(chrome_file.resolve()), str(edge_file.resolve())]
+            result = quarantine_application_cache_candidates(
+                selected, confirmation=CACHE_QUARANTINE_CONFIRMATION, env=env, windows=True,
+            )
+            self.assertEqual(result["status"], "cache_quarantined", result.get("failure_detail") or result.get("note"))
+            self.assertEqual(result["moved_count"], 2)
+
+            # Simulate Edge's profile being removed after quarantine. Its cache file
+            # remains safely stored, but its original destination is no longer allowlisted.
+            import shutil
+            shutil.rmtree(edge_profile.parent)
+            restore_preview = preview_application_cache_restore(result["manifest_path"], env=env, windows=True)
+            self.assertEqual(restore_preview["status"], "restore_preview_partial")
+            self.assertEqual(restore_preview["ready_count"], 1)
+            statuses = {item["path"]: item["status"] for item in restore_preview["items"]}
+            self.assertEqual(statuses[str(chrome_file.resolve())], "ready_to_restore")
+            self.assertEqual(statuses[str(edge_file.resolve())], "destination_not_allowlisted")
+
+            restored = restore_application_cache_quarantine(
+                result["manifest_path"], confirmation=CACHE_RESTORE_CONFIRMATION, env=env, windows=True,
+            )
+            self.assertEqual(restored["status"], "cache_restore_partial")
+            self.assertEqual(restored["files_restored"], 1)
+            self.assertEqual(chrome_file.read_bytes(), b"chrome-cache")
+            manifest = json.loads(Path(result["manifest_path"]).read_text(encoding="utf-8"))
+            edge_quarantined = Path(manifest["items"][1]["quarantine_path"])
+            self.assertTrue(edge_quarantined.is_file())
+            self.assertEqual(edge_quarantined.read_bytes(), b"edge-cache")
+
     def test_non_windows_restore_is_explicitly_unsupported(self):
         result = preview_application_cache_restore("/not-used/manifest.json", env={}, windows=False)
         self.assertEqual(result["status"], "unsupported_platform")
