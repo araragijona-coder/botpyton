@@ -228,8 +228,9 @@ def _manifest_location(path_value: str | Path, env: dict[str, str] | None = None
             or item.get("state") not in {"pending", "moved", "failed", "restored", "skipped_changed"}
         ):
             raise ValueError("Manifest contains a path, size, digest, or state outside the approved contract.")
-        if not _known_cache_root_for_path(Path(original), env):
-            raise ValueError("A manifest destination is not beneath a currently recognized browser cache root.")
+        # A manifest may contain entries for a browser profile that was later removed.
+        # Keep the session readable; restore preview validates each destination separately
+        # and marks stale/unrecognized paths as skipped without blocking other safe items.
     return path, session, manifest
 
 
