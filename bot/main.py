@@ -24,6 +24,7 @@ from .repository_analyzer import inspect_repository
 from .process_runner import ProcessRunnerError, run_tool_probe
 from .tool_registry import discover_tools
 from .system_profile import get_system_profile
+from .project_checks import ProjectCheckError, discover_project_checks, run_project_check
 from .policy import PolicyError, validate_task, validate_relative_path
 from .queue import QueueError, TaskQueue
 from .verifier import verify_python_files
@@ -79,7 +80,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--probe-tool", metavar="TOOL_ID", help="run the fixed version probe for one registered tool")
     parser.add_argument("--local-plan", metavar="PATH", help="validate a declarative local file-change plan (dry-run by default)")
     parser.add_argument("--execute-local-plan", action="store_true", help="apply --local-plan after hash checks and create backups")
-    parser.add_argument("--project-root", default=".", help="authorized project directory for --local-plan (default: current directory)")
+    parser.add_argument("--project-root", default=".", help="project directory for local plans and project checks (default: current directory)")
+    parser.add_argument("--list-project-checks", action="store_true", help="detect fixed test/build profiles without executing project code")
+    parser.add_argument("--run-project-check", metavar="CHECK_ID", help="run one detected check; requires --execute-project-code")
+    parser.add_argument("--execute-project-code", action="store_true", help="explicitly authorize execution of project tests/build scripts")
+    parser.add_argument("--check-timeout", type=int, default=120, help="seconds allowed for --run-project-check (maximum 300)")
     parser.add_argument("--validate-task", metavar="PATH", help="validate a JSON task record")
     parser.add_argument("--validate-task-batch", metavar="PATH",
                         help="validate a bounded JSON task object/array without queue mutation")
@@ -127,6 +132,18 @@ def main(argv: list[str] | None = None) -> int:
         if args.tools:
             _print_json(discover_tools())
             return 0
+        if args.list_project_checks:
+            _print_json(discover_project_checks(args.project_root))
+            return 0
+        if args.execute_project_code and not args.run_project_check:
+            raise ProjectCheckError("--execute-project-code requires --run-project-check")
+        if args.run_project_check:
+            _print_json(run_project_check(
+                args.run_project_check, args.project_root,
+                execute_project_code=args.execute_project_code,
+                timeout_seconds=args.check_timeout,
+            ))
+            return 0 if not args.execute_project_code or True else 1
         if args.probe_tool:
             _print_json(run_tool_probe(args.probe_tool, root=Path.cwd()))
             return 0
@@ -266,7 +283,7 @@ def main(argv: list[str] | None = None) -> int:
         parser.print_help()
         return 0
     except (OSError, UnicodeError, json.JSONDecodeError, PolicyError, MemoryError,
-            QueueError, CheckpointError, GitHubOpsError, AutonomousCycleError, ProcessRunnerError, LocalChangeError, ValueError) as exc:
+            QueueError, CheckpointError, GitHubOpsError, AutonomousCycleError, ProcessRunnerError, LocalChangeError, ProjectCheckError, ValueError) as exc:
         print(f"CHECK FAIL: {exc}", file=sys.stderr)
         return 2
 
