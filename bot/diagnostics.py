@@ -134,10 +134,28 @@ def _traceback_evidence(log_text: str, root: Path) -> dict[str, Any]:
         r"\b([A-Za-z_][A-Za-z0-9_]*(?:Error|Exception|Failure|Interrupt))\b(?::|$)",
         last_line,
     )
+    error_type = error_match.group(1) if error_match else None
+    experiment_hints = {
+        "NameError": "Check the exact identifier spelling, import, and lexical scope at the reported frame; search for its definition before editing.",
+        "AttributeError": "Inspect the object's initialization and runtime type; compare the method/property with the installed library version.",
+        "TypeError": "Compare the callable signature with the supplied argument count and types; create a minimal reproduction before changing code.",
+        "KeyError": "Record the actual mapping keys and input shape at the failing frame; do not assume the data schema.",
+        "IndexError": "Check sequence length and index calculation using the failing input; add a boundary test before changing the algorithm.",
+        "FileNotFoundError": "Resolve the path against the process working directory and inspect whether the file is generated or expected to exist.",
+        "PermissionError": "Check path, file ownership, permissions and file locks; do not elevate privileges automatically.",
+        "ModuleNotFoundError": "Compare the import name with declared dependencies and the active interpreter; do not install packages automatically.",
+        "AssertionError": "Capture expected and actual values and confirm whether the implementation or the test contract is wrong.",
+        "TimeoutExpired": "Identify the slowest isolated step and reproduce with a bounded input; do not merely increase the timeout.",
+        "SyntaxError": "Inspect the exact reported line and nearby delimiters/indentation; use the language parser to verify the minimal correction.",
+    }
     return {
         "traceback_frames": frames,
         "last_error_line": last_line[:1000],
-        "error_type_guess": error_match.group(1) if error_match else None,
+        "error_type_guess": error_type,
+        "suggested_experiment": experiment_hints.get(
+            error_type,
+            "Form one hypothesis from the closest project traceback frame and test it with a minimal, reversible experiment.",
+        ),
         "evidence_only": True,
         "source_modified": False,
         "code_executed": False,
