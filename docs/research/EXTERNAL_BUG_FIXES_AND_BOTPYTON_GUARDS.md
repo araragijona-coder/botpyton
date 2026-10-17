@@ -131,3 +131,25 @@ En `bot/packaging.py`, el recolector del paquete revisaba `Path.is_symlink()` en
 - Añade pruebas para simular un punto de reanálisis en un subdirectorio y un componente padre; añade además una prueba de integración que crea una junction real en Windows cuando el runner lo permite y se salta de forma explícita si no puede crearla.
 
 La solución no agrega dependencias ni modifica el mantenimiento del PC. Se limita al generador del ZIP y a evitar que archivos externos al árbol aprobado entren accidentalmente en el paquete. El PR debe pasar tanto las pruebas base como el humo de Windows antes de fusionarse; la prueba con junction real es especialmente importante porque CI Linux no puede reproducir el comportamiento de reparse points de Windows.
+
+
+## Auditoría adicional — 2026-10-17: movimiento atómico de la cuarentena de caché
+
+### Referencias oficiales y motivo
+
+- BleachBit 6.0.3 beta documenta varias correcciones relacionadas con operaciones de archivos que seguían symlinks o puntos de reanálisis al borrar, truncar o sobrescribir archivos. La lección pertinente para BOTPYTON es que las validaciones de ruta deben mantenerse seguras hasta la operación que modifica el sistema de archivos: https://www.bleachbit.org/news/bleachbit-603-beta
+- CCleaner 7.12.1526 documenta una corrección interna de seguridad en escrituras de archivos y un problema de sincronización durante el cierre. No es el mismo defecto de BOTPYTON, pero refuerza la necesidad de reducir las ventanas entre validación y mutación: https://www.ccleaner.com/ccleaner/version-history/
+- La documentación oficial de Python especifica que, en Windows, `os.rename()` falla con `FileExistsError` si el destino ya existe, mientras que en Unix puede reemplazar un archivo de destino. La solución debe aprovechar este comportamiento solo en Windows y no presentarlo como una garantía multiplataforma: https://docs.python.org/3/library/os.html#os.rename y https://docs.python.org/3/library/pathlib.html#pathlib.Path.rename
+
+### Riesgo localizado
+
+La cuarentena y la restauración utilizaban dos operaciones consecutivas: crear un hard link en el destino y después eliminar el nombre de origen. Si un proceso reemplazaba la entrada del origen entre esas llamadas, el hard link podía conservar el archivo que BOTPYTON había validado, pero `unlink()` podía quitar del nombre original una entrada distinta creada concurrentemente. No hay evidencia de que esto hubiera ocurrido en el equipo del usuario; es una ventana de carrera en el diseño.
+
+### Corrección candidata
+
+- En Windows, usar `Path.rename()` como operación única para mover el nombre de archivo. En Windows falla cuando el destino ya existe; no se usa `os.replace()` ni una operación de movimiento que pueda sobrescribir el destino.
+- Aplicar la misma operación a cuarentena y restauración. Si el navegador recrea la ruta destino antes de la restauración, la operación debe fallar y dejar intactos tanto el archivo nuevo como la copia verificada en cuarentena.
+- Mantener el camino hard-link/unlink exclusivo únicamente para los tests que simulan APIs de Windows sobre un host no Windows. El runtime de cuarentena sigue siendo Windows-only.
+- Ampliar las pruebas de colisión para insertar un destino entre la comprobación previa y la llamada de movimiento. La prueba de carrera nativa requiere Windows; no se considerará demostrada por el test sintético de Linux.
+
+La operación atómica puede fallar si origen y destino están en sistemas de archivos diferentes; el fallo se reporta y no se hace un fallback con copia y borrado, para no debilitar la garantía de no sobrescritura. Sin nuevas dependencias, servicios residentes, llamadas de IA ni cambios de limpieza automática.

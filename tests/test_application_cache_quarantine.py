@@ -79,14 +79,28 @@ class ApplicationCacheQuarantineTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp:
             _local, chosen, _untouched, env = self._fixture(tmp, 1_700_000_000.0)
-            real_link = os.link
             sentinel = b"pre-existing quarantine data"
 
-            def create_collision_then_link(source, destination, *args, **kwargs):
-                Path(destination).write_bytes(sentinel)
-                return real_link(source, destination, *args, **kwargs)
+            if os.name == "nt":
+                real_move = os.rename
 
-            with mock.patch("bot.application_cache_quarantine.os.link", side_effect=create_collision_then_link):
+                def create_collision_then_move(source, destination, *args, **kwargs):
+                    Path(destination).write_bytes(sentinel)
+                    return real_move(source, destination, *args, **kwargs)
+
+                patch_target = "bot.application_cache_quarantine.os.rename"
+                collision_action = create_collision_then_move
+            else:
+                real_link = os.link
+
+                def create_collision_then_link(source, destination, *args, **kwargs):
+                    Path(destination).write_bytes(sentinel)
+                    return real_link(source, destination, *args, **kwargs)
+
+                patch_target = "bot.application_cache_quarantine.os.link"
+                collision_action = create_collision_then_link
+
+            with mock.patch(patch_target, side_effect=collision_action):
                 result = quarantine_application_cache_candidates(
                     [str(chosen.resolve())], confirmation=CACHE_QUARANTINE_CONFIRMATION,
                     env=env, windows=True,
@@ -128,6 +142,40 @@ class ApplicationCacheQuarantineTests(unittest.TestCase):
             )
             self.assertEqual(result["status"], "cache_quarantine_blocked")
             self.assertTrue(chosen.exists())
+
+    def test_windows_restore_move_preserves_destination_created_during_rename(self):
+        from unittest import mock
+
+        if os.name != "nt":
+            self.skipTest("Requires native Windows os.rename no-overwrite semantics")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            _local, chosen, _untouched, env = self._fixture(tmp, 1_700_000_000.0)
+            result = quarantine_application_cache_candidates(
+                [str(chosen.resolve())], confirmation=CACHE_QUARANTINE_CONFIRMATION,
+                env=env, windows=True,
+            )
+            self.assertEqual(result["status"], "cache_quarantined", result.get("failure_detail") or result.get("note"))
+            manifest = json.loads(Path(result["manifest_path"]).read_text(encoding="utf-8"))
+            quarantined = Path(manifest["items"][0]["quarantine_path"])
+            self.assertTrue(quarantined.is_file())
+
+            sentinel = b"browser recreated this path"
+            real_rename = os.rename
+
+            def create_collision_then_rename(source, destination, *args, **kwargs):
+                Path(destination).write_bytes(sentinel)
+                return real_rename(source, destination, *args, **kwargs)
+
+            with mock.patch("bot.application_cache_quarantine.os.rename", side_effect=create_collision_then_rename):
+                restored = restore_application_cache_quarantine(
+                    result["manifest_path"], confirmation=CACHE_RESTORE_CONFIRMATION,
+                    env=env, windows=True,
+                )
+
+            self.assertNotEqual(restored["status"], "cache_restored")
+            self.assertEqual(chosen.read_bytes(), sentinel, "restore must not overwrite a concurrently recreated cache file")
+            self.assertTrue(quarantined.is_file(), "the verified quarantine copy must remain available")
 
     def test_restore_preview_never_overwrites_a_recreated_cache_path(self):
         with tempfile.TemporaryDirectory() as tmp:
