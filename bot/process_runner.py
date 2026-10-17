@@ -4,7 +4,7 @@ from __future__ import annotations
 import os
 import shutil
 import subprocess
-import tempfile
+import threading
 from pathlib import Path
 from typing import Mapping, Sequence
 
@@ -60,6 +60,28 @@ def _resolve_approved_executable(executable: str, approved_executables: Sequence
     return resolved_path
 
 
+def _bounded_reader(stream, limit: int, storage: dict, key: str) -> None:
+    chunks = []
+    stored = 0
+    truncated = False
+    try:
+        while True:
+            chunk = stream.read(8192)
+            if not chunk:
+                break
+            remaining = limit - stored
+            if remaining > 0:
+                kept = chunk[:remaining]
+                chunks.append(kept)
+                stored += len(kept)
+            if len(chunk) > max(remaining, 0):
+                truncated = True
+    finally:
+        storage[key] = b"".join(chunks)
+        storage[key + "_truncated"] = truncated
+        stream.close()
+
+
 def run_process(
     argv: Sequence[str],
     *,
@@ -70,11 +92,7 @@ def run_process(
     output_limit_bytes: int = MAX_OUTPUT_BYTES,
     env_overrides: Mapping[str, str] | None = None,
 ) -> dict:
-    """Run an explicitly approved executable with bounded time and returned output.
-
-    Callers must supply an allowlist; arguments are passed as an array and shell=False.
-    Output is spooled to temporary files so large logs do not have to reside in RAM.
-    """
+    """Run an approved executable; discard excess output while draining pipes."""
     if isinstance(argv, (str, bytes)) or not argv:
         raise ProcessRunnerError("argv must be a non-empty sequence of separate arguments")
     if not isinstance(timeout_seconds, int) or isinstance(timeout_seconds, bool) or not 1 <= timeout_seconds <= MAX_TIMEOUT_SECONDS:
@@ -97,49 +115,63 @@ def run_process(
         workdir.relative_to(root)
     except ValueError as exc:
         raise ProcessRunnerError("cwd must be inside allowed_root") from exc
-    executable = _resolve_approved_executable(normalized_argv[0], approved_executables)
-    normalized_argv[0] = executable
+    normalized_argv[0] = _resolve_approved_executable(normalized_argv[0], approved_executables)
     child_env = _safe_environment(env_overrides)
-
-    with tempfile.TemporaryFile(mode="w+b") as stdout_file, tempfile.TemporaryFile(mode="w+b") as stderr_file:
+    captured: dict = {}
+    process = None
+    timed_out = False
+    try:
+        process = subprocess.Popen(
+            normalized_argv,
+            cwd=workdir,
+            env=child_env,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            shell=False,
+            close_fds=True,
+        )
+        stdout_thread = threading.Thread(
+            target=_bounded_reader, args=(process.stdout, output_limit_bytes, captured, "stdout"),
+            daemon=True,
+        )
+        stderr_thread = threading.Thread(
+            target=_bounded_reader, args=(process.stderr, output_limit_bytes, captured, "stderr"),
+            daemon=True,
+        )
+        stdout_thread.start()
+        stderr_thread.start()
         try:
-            completed = subprocess.run(
-                normalized_argv,
-                cwd=workdir,
-                env=child_env,
-                stdin=subprocess.DEVNULL,
-                stdout=stdout_file,
-                stderr=stderr_file,
-                shell=False,
-                timeout=timeout_seconds,
-                check=False,
-            )
-            timed_out = False
-            exit_code = completed.returncode
+            process.wait(timeout=timeout_seconds)
         except subprocess.TimeoutExpired:
             timed_out = True
-            exit_code = None
-        stdout_file.flush()
-        stderr_file.flush()
-        stdout_file.seek(0)
-        stderr_file.seek(0)
-        stdout_raw = stdout_file.read(output_limit_bytes + 1)
-        stderr_raw = stderr_file.read(output_limit_bytes + 1)
-    stdout_truncated = len(stdout_raw) > output_limit_bytes
-    stderr_truncated = len(stderr_raw) > output_limit_bytes
+            process.kill()
+            process.wait()
+        stdout_thread.join(timeout=2)
+        stderr_thread.join(timeout=2)
+        if stdout_thread.is_alive() or stderr_thread.is_alive():
+            raise ProcessRunnerError("Output collector did not stop after process termination")
+        exit_code = process.returncode
+    except OSError as exc:
+        if process is not None and process.poll() is None:
+            process.kill()
+            process.wait()
+        raise ProcessRunnerError(f"Process launch failed: {type(exc).__name__}") from exc
+
     return {
         "argv": normalized_argv,
         "cwd": str(workdir),
         "exit_code": exit_code,
         "timed_out": timed_out,
         "timeout_seconds": timeout_seconds,
-        "stdout": stdout_raw[:output_limit_bytes].decode("utf-8", errors="replace"),
-        "stderr": stderr_raw[:output_limit_bytes].decode("utf-8", errors="replace"),
-        "stdout_truncated": stdout_truncated,
-        "stderr_truncated": stderr_truncated,
+        "stdout": captured.get("stdout", b"").decode("utf-8", errors="replace"),
+        "stderr": captured.get("stderr", b"").decode("utf-8", errors="replace"),
+        "stdout_truncated": captured.get("stdout_truncated", False),
+        "stderr_truncated": captured.get("stderr_truncated", False),
         "shell_used": False,
         "stdin_inherited": False,
         "secret_environment_variables_forwarded": False,
+        "output_capture_memory_limit_per_stream": output_limit_bytes,
     }
 
 
