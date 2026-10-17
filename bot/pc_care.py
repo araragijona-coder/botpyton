@@ -320,26 +320,20 @@ def get_cleanup_preview(
             skipped_roots.append({"label": label, "reason": "root_unavailable"})
             continue
 
-        scan = scan_stale_files(
-            resolved_root,
-            now=now_value,
-            minimum_age_days=minimum_age_days,
-            max_entries=max_entries_per_root,
-        )
-        entries_examined += scan["entries_examined"]
-        partial = partial or scan["status"] == "scan_partial"
         stack: list[tuple[Path, int]] = [(resolved_root, 0)]
         root_limit_hit = False
+        root_entries_examined = 0
 
         while stack and len(candidates) < max_candidates:
             current, depth = stack.pop()
             try:
                 with os.scandir(current) as entries:
                     for entry in entries:
-                        if entries_examined >= len(roots[:32]) * max_entries_per_root:
+                        if root_entries_examined >= max_entries_per_root:
                             partial = True
                             root_limit_hit = True
                             break
+                        root_entries_examined += 1
                         entries_examined += 1
                         try:
                             entry_path = Path(entry.path)
