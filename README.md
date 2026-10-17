@@ -355,3 +355,11 @@ This is **not** a complete S.M.A.R.T. attribute reader, and an OK, Healthy, blan
 Run `python -m bot.main --doctor` or choose **V** in `BOTPYTON.bat`. It checks the Python minimum version, required BOTPYTON core files, available RAM, free disk space, Git availability and (on Windows) the standard PowerShell path. Each warning/block includes a concrete next step; it explicitly tells the operator to stop rather than guess when core files are missing.
 
 The doctor is local, deterministic, and read-only. It does not install packages, launch tests/builds, access the network, edit files, change settings, or attempt automatic repair. A low-memory result advises running one bounded operation at a time rather than starting heavier tasks. Exit code 0 means ready or caution; exit code 2 means a blocking prerequisite was detected. This is a preflight, not a guarantee that every later operation will succeed.
+
+
+## Phase 25 — Fail-closed PC-care result contract
+
+- PC-care inventory commands attach `operation_assessment` to their JSON output and return a non-zero exit code for partial, failed, or unknown results instead of silently returning success.
+- The guard checks known status values, provider return codes, returned-record counts, integrity status, scan-limit flags, truncated output, access errors and skipped restore/quarantine actions. It never retries automatically.
+- Exit codes: `0` = recognized structurally valid result; `1` = failure/postcondition mismatch; `2` = partial/incomplete result; `3` = unknown report/status. A result marked `reported_success` is not a claim that hardware is healthy or that every OS provider exposes all devices.
+- Tests cover success, partial scans, provider failure, count mismatch, integrity failure, unknown status and malformed output. CI must pass on the exact commit before this phase is verified.

@@ -25,6 +25,7 @@ from .process_runner import ProcessRunnerError, run_tool_probe
 from .tool_registry import discover_tools
 from .system_profile import get_system_profile
 from .doctor import run_preflight
+from .operation_guard import print_pc_result
 from .pc_care import get_pc_care_report, QUARANTINE_CONFIRMATION, RESTORE_CONFIRMATION, quarantine_cleanup_candidates, restore_quarantined_files, check_application_updates, preview_quarantined_restore, read_pc_care_audit
 from .packaging import build_portable_package, verify_portable_archive
 from .pc_care import get_pc_care_benchmark, analyze_storage_path, find_duplicate_files, read_device_driver_inventory, read_disk_health_inventory
@@ -170,11 +171,9 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         if args.pc_apps:
             from .pc_care import read_installed_applications
-            _print_json(read_installed_applications())
-            return 0
+            return print_pc_result(read_installed_applications())
         if args.pc_update_check:
-            _print_json(check_application_updates())
-            return 0
+            return print_pc_result(check_application_updates())
         if args.package_portable:
             _print_json(build_portable_package(args.project_root, args.package_portable))
             return 0
@@ -182,20 +181,15 @@ def main(argv: list[str] | None = None) -> int:
             _print_json(verify_portable_archive(args.verify_portable_package))
             return 0
         if args.pc_benchmark:
-            _print_json(get_pc_care_benchmark())
-            return 0
+            return print_pc_result(get_pc_care_benchmark())
         if args.pc_storage:
-            _print_json(analyze_storage_path(args.pc_storage))
-            return 0
+            return print_pc_result(analyze_storage_path(args.pc_storage))
         if args.pc_duplicates:
-            _print_json(find_duplicate_files(args.pc_duplicates))
-            return 0
+            return print_pc_result(find_duplicate_files(args.pc_duplicates))
         if args.pc_drivers:
-            _print_json(read_device_driver_inventory())
-            return 0
+            return print_pc_result(read_device_driver_inventory())
         if args.pc_disk_health:
-            _print_json(read_disk_health_inventory())
-            return 0
+            return print_pc_result(read_disk_health_inventory())
         if args.pc_cleanup_quarantine and args.pc_cleanup_restore:
             raise ValueError("Choose either --pc-cleanup-quarantine or --pc-cleanup-restore, not both")
         if args.pc_cleanup_quarantine:
@@ -217,14 +211,11 @@ def main(argv: list[str] | None = None) -> int:
                 print("CANCELLED: confirmation did not match; no files were moved.")
                 return 2
             result = quarantine_cleanup_candidates(preview, confirmation=typed)
-            _print_json(result)
-            return 0 if result["status"] in {"completed", "no_candidates", "partial"} else 1
+            return print_pc_result(result)
         if args.pc_cleanup_restore_preview:
-            _print_json(preview_quarantined_restore(args.pc_cleanup_restore_preview))
-            return 0
+            return print_pc_result(preview_quarantined_restore(args.pc_cleanup_restore_preview))
         if args.pc_audit:
-            _print_json(read_pc_care_audit())
-            return 0
+            return print_pc_result(read_pc_care_audit())
         if args.pc_cleanup_restore:
             manifest_path = Path(args.pc_cleanup_restore).expanduser()
             preview = preview_quarantined_restore(manifest_path)
@@ -234,26 +225,21 @@ def main(argv: list[str] | None = None) -> int:
                     print(f"  [{entry.get('status', 'unknown')}] {entry.get('path', '(path missing)')}")
             print(f"Ready to restore: {preview['ready_count']}; skipped: {preview['files_skipped']}")
             if preview["ready_count"] == 0:
-                _print_json(preview)
-                return 0
+                return print_pc_result(preview)
             typed = input(f'Type exactly "{RESTORE_CONFIRMATION}" to restore ready entries: ')
             if typed != RESTORE_CONFIRMATION:
                 print("CANCELLED: confirmation did not match; no files were restored.")
                 return 2
             result = restore_quarantined_files(manifest_path, confirmation=typed)
-            _print_json(result)
-            return 0 if result["status"] in {"restored", "no_files_restored"} else 1
+            return print_pc_result(result)
         if args.pc_cleanup_preview:
             from .pc_care import get_cleanup_preview
-            _print_json(get_cleanup_preview())
-            return 0
+            return print_pc_result(get_cleanup_preview())
         if args.pc_processes:
             from .pc_care import read_top_processes
-            _print_json(read_top_processes())
-            return 0
+            return print_pc_result(read_top_processes())
         if args.pc_check:
-            _print_json(get_pc_care_report())
-            return 0
+            return print_pc_result(get_pc_care_report())
         if args.system_profile:
             _print_json(get_system_profile(Path.cwd()))
             return 0

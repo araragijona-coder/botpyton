@@ -143,3 +143,12 @@ python -m bot.main --pc-cleanup-restore "C:\\path\\to\\BOTPYTON\\Quarantine\\ses
 - Low RAM advises stopping heavy work and avoiding parallel workers; low disk space warns against arbitrary deletion. No tools are launched, no packages are installed, no network/API calls occur, no files/settings change.
 - Automated tests inject platform/resources for deterministic coverage of ready, old-Python, low-RAM, missing-file, low-disk and missing-root outcomes. Windows CI invokes the real preflight command.
 - Exit code 0 means ready or caution; exit code 2 means a blocking prerequisite was detected. A successful preflight is not a promise that later commands cannot fail.
+
+
+## Phase 25 — Fail-closed operation results and postcondition checks — candidate; CI pending
+
+- PC-care reports for local audit, cleanup preview, process/application/update inventory, storage/duplicate scans, driver/disk inventory, benchmark, restore preview and quarantine/restore pass through a shared result guard.
+- The guard checks report structure, known status, provider return code, declared returned counts versus actual records, audit integrity, scan limits, truncated output, access errors and skipped actions.
+- Recognized partial reports exit with code 2; failed reports or failed postconditions exit with code 1; unknown report/status exits with code 3. Only reviewed success statuses exit 0.
+- No automatic retry occurs. Unknown or partial outcomes tell the operator what evidence to inspect. The guard assesses report consistency, not hardware health or completeness of Windows provider coverage.
+- Unit tests cover success, partial scan, provider failure, count mismatch, integrity error, unknown status and malformed report.
