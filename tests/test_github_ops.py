@@ -206,7 +206,7 @@ class GitHubCliCredentialTests(unittest.TestCase):
     def test_reads_authenticated_cli_token_with_fixed_command(self, mock_which, mock_run):
         token = "ghp_" + "a" * 40
         mock_run.return_value = __import__("subprocess").CompletedProcess(
-            args=["gh", "auth", "token"], returncode=0, stdout=token + "\\n", stderr=""
+            args=["gh", "auth", "token"], returncode=0, stdout=token + "\n", stderr=""
         )
         self.assertEqual(_github_cli_token(), token)
         args, kwargs = mock_run.call_args
