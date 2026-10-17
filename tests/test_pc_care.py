@@ -294,8 +294,9 @@ class PcCareTests(unittest.TestCase):
 
     def test_update_check_is_unsupported_off_windows_and_does_not_start_process(self):
         from bot.pc_care import check_application_updates
-        with patch("bot.pc_care.subprocess.run") as run, patch("bot.pc_care.shutil.which") as which:
-            result = check_application_updates(windows=False)
+        with patch("bot.pc_care.subprocess.run") as run:
+            with patch("bot.pc_care.shutil.which") as which:
+                result = check_application_updates(windows=False)
         self.assertEqual(result["status"], "unsupported_platform")
         self.assertEqual(result["updates_installed"], 0)
         run.assert_not_called()
@@ -306,21 +307,20 @@ class PcCareTests(unittest.TestCase):
         from bot.pc_care import check_application_updates
         with tempfile.TemporaryDirectory() as tmp:
             alias = Path(tmp) / "Microsoft" / "WindowsApps" / "winget.exe"
-            env = {"LOCALAPPDATA": tmp}
             source_json = json.dumps({
                 "Name": "winget",
                 "Arg": "https://cdn.winget.microsoft.com/cache",
                 "Type": "Microsoft.PreIndexed.Package",
                 "TrustLevel": ["Trusted", "StoreOrigin"],
             })
-            with patch.dict(os.environ, env, clear=False), \\
-                 patch("bot.pc_care.shutil.which", return_value=str(alias)), \\
-                 patch("bot.pc_care.subprocess.run") as run:
-                run.side_effect = [
-                    Mock(returncode=0, stdout=source_json, stderr=""),
-                    Mock(returncode=0, stdout="Name  Id  Version  Available  Source\\nExample App  Example.App  1.0  1.1  winget", stderr=""),
-                ]
-                result = check_application_updates(windows=True)
+            with patch.dict(os.environ, {"LOCALAPPDATA": tmp}, clear=False):
+                with patch("bot.pc_care.shutil.which", return_value=str(alias)):
+                    with patch("bot.pc_care.subprocess.run") as run:
+                        run.side_effect = [
+                            Mock(returncode=0, stdout=source_json, stderr=""),
+                            Mock(returncode=0, stdout="Name  Id  Version  Available  Source\nExample App  Example.App  1.0  1.1  winget", stderr=""),
+                        ]
+                        result = check_application_updates(windows=True)
         self.assertEqual(result["status"], "completed")
         self.assertTrue(result["network_access_requested"])
         self.assertFalse(result["software_changes_made"])
@@ -342,18 +342,17 @@ class PcCareTests(unittest.TestCase):
         from bot.pc_care import check_application_updates
         with tempfile.TemporaryDirectory() as tmp:
             alias = Path(tmp) / "Microsoft" / "WindowsApps" / "winget.exe"
-            env = {"LOCALAPPDATA": tmp}
             source_json = json.dumps({
                 "Name": "winget",
                 "Arg": "https://example.invalid/cache",
                 "Type": "Microsoft.PreIndexed.Package",
                 "TrustLevel": ["Trusted"],
             })
-            with patch.dict(os.environ, env, clear=False), \\
-                 patch("bot.pc_care.shutil.which", return_value=str(alias)), \\
-                 patch("bot.pc_care.subprocess.run") as run:
-                run.return_value = Mock(returncode=0, stdout=source_json, stderr="")
-                result = check_application_updates(windows=True)
+            with patch.dict(os.environ, {"LOCALAPPDATA": tmp}, clear=False):
+                with patch("bot.pc_care.shutil.which", return_value=str(alias)):
+                    with patch("bot.pc_care.subprocess.run") as run:
+                        run.return_value = Mock(returncode=0, stdout=source_json, stderr="")
+                        result = check_application_updates(windows=True)
         self.assertEqual(result["status"], "source_untrusted")
         self.assertEqual(run.call_count, 1)
         self.assertFalse(result["network_access_requested"])
@@ -364,25 +363,23 @@ class PcCareTests(unittest.TestCase):
         from bot.pc_care import check_application_updates
         with tempfile.TemporaryDirectory() as tmp:
             alias = Path(tmp) / "Microsoft" / "WindowsApps" / "winget.exe"
-            env = {"LOCALAPPDATA": tmp}
             source_json = json.dumps({
                 "Name": "winget",
                 "Arg": "https://cdn.winget.microsoft.com/cache",
                 "Type": "Microsoft.PreIndexed.Package",
                 "TrustLevel": ["Trusted"],
             })
-            with patch.dict(os.environ, env, clear=False), \\
-                 patch("bot.pc_care.shutil.which", return_value=str(alias)), \\
-                 patch("bot.pc_care.subprocess.run") as run:
-                run.side_effect = [
-                    Mock(returncode=0, stdout=source_json, stderr=""),
-                    subprocess.TimeoutExpired(cmd="winget", timeout=30),
-                ]
-                result = check_application_updates(windows=True)
+            with patch.dict(os.environ, {"LOCALAPPDATA": tmp}, clear=False):
+                with patch("bot.pc_care.shutil.which", return_value=str(alias)):
+                    with patch("bot.pc_care.subprocess.run") as run:
+                        run.side_effect = [
+                            Mock(returncode=0, stdout=source_json, stderr=""),
+                            subprocess.TimeoutExpired(cmd="winget", timeout=30),
+                        ]
+                        result = check_application_updates(windows=True)
         self.assertEqual(result["status"], "timeout")
         self.assertTrue(result["network_access_requested"])
         self.assertEqual(result["updates_installed"], 0)
-
 
 if __name__ == "__main__":
     unittest.main()
