@@ -13,6 +13,7 @@ from .fixes import apply_known_fix
 from .local_changes import apply_local_change_plan
 from .policy import PolicyError, validate_task
 from .process_runner import ProcessRunnerError, run_process
+from .project_checks import run_project_check
 from .verifier import verify_python_files
 
 _SKIP_DIRS = {".git", ".venv", "__pycache__", "node_modules", "dist", "build"}
@@ -104,6 +105,14 @@ class TaskExecutor:
             return {"task_id": task["id"], "valid": True}
         if action == "run_tests":
             return self._run_tests()
+        if action == "run_project_check":
+            check_id = task.get("project_check_id")
+            if task.get("allow_project_code_execution") is not True:
+                raise PolicyError("Project-code execution was not explicitly approved")
+            return run_project_check(
+                check_id, self.root, execute_project_code=True,
+                timeout_seconds=task.get("check_timeout_seconds", self.test_timeout_seconds),
+            )
         if action == "apply_local_plan":
             plan = task.get("local_change_plan")
             if not isinstance(plan, dict):
