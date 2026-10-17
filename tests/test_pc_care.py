@@ -564,7 +564,7 @@ class PcCareTests(unittest.TestCase):
             (sub / "large.bin").write_bytes(b"b" * 120)
             (sub / "medium.txt").write_bytes(b"t" * 40)
             result = analyze_storage_path(root, max_entries=100, max_depth=4, top_n=2, timeout_seconds=5)
-            self.assertEqual(result["status"], "scan_complete")
+            self.assertEqual(result["status"], "scan_complete", result)
             self.assertTrue(result["read_only"])
             self.assertFalse(result["file_contents_read"])
             self.assertFalse(result["network_used"])
@@ -717,8 +717,8 @@ class PcCareTests(unittest.TestCase):
             budget = find_duplicate_files(
                 root, max_entries=100, max_hash_bytes=1, max_file_bytes=100, timeout_seconds=5
             )
-            self.assertEqual(budget["files_hashed"], 1)
-            self.assertEqual(budget["hash_budget_skipped_files"], 3)
+            self.assertEqual(budget["files_hashed"], 1, budget)
+            self.assertEqual(budget["hash_budget_skipped_files"], 3, budget)
             with patch("bot.pc_care._sha256_file", side_effect=TimeoutError("deadline")):
                 timed = find_duplicate_files(root, max_entries=100, timeout_seconds=5)
             self.assertEqual(timed["status"], "scan_partial")

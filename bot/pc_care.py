@@ -903,6 +903,7 @@ def find_duplicate_files(
         "oversize_candidate_files_skipped": 0,
         "hash_budget_skipped_files": 0,
         "changed_or_inaccessible_files": 0,
+        "scan_diagnostics": [],
         "duplicate_group_count": 0,
         "potential_duplicate_bytes": 0,
         "duplicate_groups": [],
@@ -1064,8 +1065,14 @@ def find_duplicate_files(
                 limited = True
                 hash_limit_hit = True
                 break
-            except (OSError, RuntimeError, ValueError):
+            except (OSError, RuntimeError, ValueError) as exc:
                 report["changed_or_inaccessible_files"] += 1
+                if len(report["scan_diagnostics"]) < 10:
+                    report["scan_diagnostics"].append({
+                        "file": item["path"],
+                        "failure_type": type(exc).__name__,
+                        "reason": str(exc)[:160],
+                    })
                 limited = True
                 continue
             report["files_hashed"] += 1
