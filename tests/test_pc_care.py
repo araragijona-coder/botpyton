@@ -652,7 +652,7 @@ class PcCareTests(unittest.TestCase):
             self.assertEqual(result["duplicate_group_count"], 1)
             group = result["duplicate_groups"][0]
             self.assertEqual(group["file_count"], 2)
-            self.assertEqual(set(group["paths"]), {str(first), str(second)})
+            self.assertEqual({Path(path).resolve() for path in group["paths"]}, {first.resolve(), second.resolve()})
             self.assertEqual(group["potential_duplicate_bytes"], len(b"identical payload"))
             self.assertTrue(first.exists() and second.exists() and different.exists())
 
