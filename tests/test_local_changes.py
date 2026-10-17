@@ -148,6 +148,50 @@ class LocalChangePlanTests(unittest.TestCase):
             self.assertEqual(target.read_bytes(), sentinel)
             self.assertEqual(list(root.glob(".*.botpyton-tmp")), [])
 
+    def test_existing_file_changed_during_backup_is_not_overwritten(self):
+        import os
+
+        with tempfile.TemporaryDirectory() as temp:
+            base = Path(temp)
+            root = base / "project"
+            root.mkdir()
+            target = root / "app.py"
+            original = b"print('old')\\n"
+            proposed = b"print('new')\\n"
+            target.write_bytes(original)
+            plan = {
+                "schema_version": 1,
+                "task_id": "existing-file-race",
+                "changes": [{
+                    "path": "app.py",
+                    "content": proposed.decode("utf-8"),
+                    "expected_sha256": digest(original),
+                }],
+            }
+            sentinel = b"external change must survive"
+            real_fsync = os.fsync
+            changed = False
+
+            def inject_external_change(fd):
+                nonlocal changed
+                result = real_fsync(fd)
+                if not changed:
+                    changed = True
+                    target.write_bytes(sentinel)
+                return result
+
+            with patch("bot.local_changes.os.fsync", side_effect=inject_external_change):
+                with self.assertRaises(LocalChangeError):
+                    apply_local_change_plan(plan, root, backup_root=base / "backups")
+
+            self.assertTrue(changed)
+            self.assertEqual(target.read_bytes(), sentinel)
+            self.assertEqual(
+                next((base / "backups").rglob("app.py")).read_bytes(),
+                original,
+                "the backup must retain the original bytes even when a concurrent change is detected",
+            )
+
     def test_existing_backup_with_different_content_is_never_overwritten(self):
         import json
 
