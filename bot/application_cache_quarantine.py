@@ -149,6 +149,23 @@ def _atomic_write_manifest(path: Path, manifest: dict[str, Any]) -> None:
             pass
 
 
+def _move_without_overwriting(source: Path, destination: Path) -> None:
+    """Move a file without a destination-overwrite window on Windows.
+
+    The runtime operation is Windows-only. Path.rename() maps to os.rename(),
+    which atomically moves the source directory entry and raises FileExistsError
+    on Windows when the destination already exists. The hard-link fallback is
+    retained for non-Windows test runs that explicitly simulate the Windows API.
+    """
+    if os.name == "nt":
+        source.rename(destination)
+        return
+    # Test-only fallback: retain exclusive publication on hosts without Windows
+    # rename semantics. os.replace() is deliberately not used here.
+    os.link(source, destination)
+    source.unlink()
+
+
 def _known_cache_root_for_path(path: Path, env: dict[str, str] | None = None) -> Path | None:
     """Resolve an original path only against cache roots in the current allowlist."""
     try:
@@ -366,12 +383,11 @@ def quarantine_application_cache_candidates(
                     failed_count += 1
                     _atomic_write_manifest(manifest_path, manifest)
                     continue
-                # Create the quarantine name exclusively: os.replace() could overwrite
-                # a file created at the destination between the check above and the move.
-                # A hard link fails atomically if the destination already exists; unlink
-                # the source only after the quarantine name has been created successfully.
-                os.link(source, destination)
-                source.unlink()
+                # On Windows, rename is a single atomic directory-entry operation
+                # and fails if another process creates the destination first. Avoid a
+                # hard-link-plus-unlink sequence here: the source path could be replaced
+                # between those operations, causing unlink() to remove a different file.
+                _move_without_overwriting(source, destination)
                 item["state"] = "moved"
                 moved_count += 1
                 try:
@@ -564,10 +580,10 @@ def restore_application_cache_quarantine(
                 if original.exists() or original.is_symlink():
                     skipped += 1
                     continue
-                # Hard-link creation is atomic and fails if the destination already exists.
-                # Then remove the quarantine name; never use an overwrite-capable restore rename.
-                os.link(quarantined, original)
-                quarantined.unlink()
+                # Use the same single-operation Windows rename as quarantine: if
+                # another process recreates the original path, rename fails without
+                # overwriting it and the verified quarantine copy remains untouched.
+                _move_without_overwriting(quarantined, original)
                 item["state"] = "restored"
                 restored += 1
                 _atomic_write_manifest(path, manifest)
