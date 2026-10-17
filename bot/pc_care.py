@@ -812,6 +812,29 @@ def _path_is_inside_any_root(path: Path, roots: dict[str, Path]) -> bool:
 
 
 
+
+def _move_no_replace(source: str | Path, destination: str | Path) -> None:
+    """Move atomically without overwriting an existing destination on any platform."""
+    source_path = Path(source)
+    destination_path = Path(destination)
+    if os.path.lexists(destination_path):
+        raise FileExistsError("destination already exists")
+    if os.name == "nt":
+        # Windows os.rename fails when the destination already exists.
+        os.rename(source_path, destination_path)
+        return
+    # POSIX rename/replace can overwrite; hard-link creation is atomic and fails on collisions.
+    os.link(source_path, destination_path, follow_symlinks=False)
+    try:
+        os.unlink(source_path)
+    except OSError:
+        try:
+            os.unlink(destination_path)
+        except OSError:
+            pass
+        raise
+
+
 def _sha256_file(path: str | Path, *, byte_limit: int) -> str:
     """Hash a regular file with bounded memory and detect concurrent modification."""
     target = Path(path)
@@ -1294,7 +1317,7 @@ def quarantine_cleanup_candidates(
             _write_quarantine_manifest(manifest_path, manifest)
             continue
         try:
-            os.replace(source, destination)
+            _move_no_replace(source, destination)
         except OSError as exc:
             item["status"] = "move_failed"
             item["failure_type"] = type(exc).__name__
@@ -1398,19 +1421,27 @@ def restore_quarantined_files(
         if destination is None:
             skipped.append({"path": original_value, "status": "skipped_destination_exists_or_unsafe"})
             continue
-        # Revalidate integrity immediately before moving; never overwrite an existing destination.
-        repeated, repeated_bytes = _inspect_quarantine_item(
-            item, session_dir, roots,
-            hash_budget_remaining=MAX_QUARANTINE_HASH_BYTES - total_hashed,
-        )
-        total_hashed += repeated_bytes
-        if not repeated.get("ready"):
-            skipped.append({"path": original_value, "status": repeated["status"]})
+        # The SHA-256 check above is already complete. Recheck metadata and destination
+        # immediately before the atomic no-overwrite move without hashing the bytes twice.
+        try:
+            final_info = quarantine_file.stat(follow_symlinks=False)
+            expected_mtime_ns = item.get("modified_ns")
+            if (not quarantine_file.is_file() or final_info.st_size != item["size_bytes"]
+                    or not isinstance(expected_mtime_ns, int)
+                    or final_info.st_mtime_ns != expected_mtime_ns):
+                skipped.append({"path": original_value, "status": "skipped_quarantine_file_changed"})
+                continue
+        except OSError:
+            skipped.append({"path": original_value, "status": "skipped_quarantine_file_missing"})
+            continue
+        destination = _safe_restore_destination(original_value, roots[item["root_label"]])
+        if destination is None:
+            skipped.append({"path": original_value, "status": "skipped_destination_exists_or_unsafe"})
             continue
         item["status"] = "restoring"
         _write_quarantine_manifest(path, manifest)
         try:
-            os.replace(quarantine_file, destination)
+            _move_no_replace(quarantine_file, destination)
         except OSError as exc:
             item["status"] = "quarantined"
             item["failure_type"] = type(exc).__name__
