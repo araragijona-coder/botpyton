@@ -15,6 +15,12 @@ class QueuedLocalPlanTests(unittest.TestCase):
                 "goal": "Create a small Python module from an explicit local change plan",
                 "allowed_actions": ["apply_local_plan", "prepare_report"],
                 "success_conditions": ["The requested file exists with the exact planned content"],
+                "verification_checks": [
+                    {"type": "local_plan_applied"},
+                    {"type": "file_exists", "path": "src/hello.py"},
+                    {"type": "python_syntax"},
+                    {"type": "report_exists"},
+                ],
                 "local_change_plan": {
                     "schema_version": 1,
                     "task_id": "worker-create-file",
