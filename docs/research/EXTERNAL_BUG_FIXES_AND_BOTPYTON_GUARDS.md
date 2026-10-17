@@ -197,3 +197,42 @@ El cambio no modifica la selección de herramientas, no agrega dependencias y ma
 - Añadir pruebas que rechacen una allowlist no calificada, simulen un ejecutable falso en la carpeta actual y verifiquen que el proceso secundario recibe un `PATH` saneado.
 
 Este cambio reduce el riesgo de binary planting desde el directorio de trabajo y hace que la allowlist sea una comparación de rutas absolutas. No puede determinar por sí solo si una carpeta absoluta del `PATH` fue comprometida o si un ejecutable instalado es malicioso; las rutas de herramientas de confianza deben seguir siendo mantenidas por el usuario/sistema. No añade dependencias ni cambia el ámbito de limpieza. La integración requiere CI general y Windows.
+
+## Phase 17 — Actualización de GitHub Actions a correcciones upstream (2026-10-17)
+
+### Hallazgo
+
+Los cuatro workflows del repositorio fijaban acciones a revisiones antiguas: `actions/checkout` v4.2.2, `actions/setup-python` v5.6.0 y acciones de artefactos v4.6.2/v4. Aunque las referencias ya eran SHA completos (inmutables), había correcciones upstream más recientes que el repositorio todavía no recibía. Esto era deuda de mantenimiento del CI; por sí solo no demuestra una vulnerabilidad explotable en BOTPYTON.
+
+### Cambio aplicado en la rama de mantenimiento
+
+Todas las llamadas externas de los workflows se actualizaron a las siguientes versiones y sus commits completos publicados por los repositorios oficiales:
+
+- `actions/checkout` v7.0.1 — `3d3c42e5aac5ba805825da76410c181273ba90b1`.
+- `actions/setup-python` v7.0.0 — `5fda3b95a4ea91299a34e894583c3862153e4b97`.
+- `actions/upload-artifact` v7.0.2 — `cf430e030ddbb5b0abf93d22962f4752f3646cd9`.
+- `actions/download-artifact` v8.0.1 — `3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c`.
+- `actions/github-script` v9.0.0 — `3a2844b7e9c422d3c10d287c895573f7108da1b3`.
+
+Los SHA se comprobaron contra las referencias de versiones en los repositorios oficiales. Se conserva `persist-credentials: false` en los pasos de checkout y el alcance de permisos existente por workflow. El script de `github-script` usa `context`, `github.rest` y `core`; no depende del patrón CommonJS `require('@actions/github')` retirado en v9.
+
+### Correcciones upstream que motivan la actualización
+
+- Checkout v7 incorpora medidas adicionales para evitar ciertos checkouts inseguros de PRs y escape correcto de valores pasados a `git --unset`.
+- setup-python v7 actualiza dependencias y corrige la validación/reintento al recuperar el manifiesto de Python para evitar fallos silenciosos.
+- upload-artifact v7.0.2 mejora los reintentos cuando el servicio responde HTTP 429 y respeta un encabezado `Retry-After` válido.
+- download-artifact v8 cambia el comportamiento ante un hash que no coincide: falla de forma predeterminada, en lugar de dejar solo una advertencia. Esto es apropiado para los checkpoints, que deben rechazarse si su integridad no coincide.
+
+Referencias oficiales:
+- https://github.com/actions/checkout/releases
+- https://github.com/actions/setup-python/releases
+- https://github.com/actions/upload-artifact/releases
+- https://github.com/actions/download-artifact/releases
+- https://github.com/actions/github-script/releases
+- https://docs.github.com/en/actions/reference/security/secure-use
+
+### Guardia de regresión y validación requerida
+
+Se añade `tests/test_workflow_action_pins.py` para exigir que cada acción externa de los workflows se fije a un SHA de 40 caracteres, evitando volver a usar etiquetas mutables como `@v7`. El cambio no agrega dependencias al runtime del programa ni altera sus funciones de limpieza local.
+
+Estas versiones usan el runtime Node.js 24 en las acciones indicadas y requieren runners de GitHub Actions compatibles (mínimo upstream documentado: 2.327.1). Los workflows del repositorio usan runners hospedados por GitHub. El CI de la rama debe confirmar la compatibilidad y la continuidad de artefactos antes de integrar esta fase en `main`.
