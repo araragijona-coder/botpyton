@@ -4,6 +4,7 @@ from __future__ import annotations
 import hashlib
 import re
 import shutil
+import tempfile
 from pathlib import Path
 
 from .process_runner import ProcessRunnerError, run_process
@@ -84,7 +85,14 @@ def create_isolated_workspace(
     if workspace.exists():
         raise WorkspaceError(f"Workspace path already exists; refusing to overwrite: {workspace}")
 
-    result = _git(git_root, ["worktree", "add", "-b", branch, str(workspace), base_sha], timeout_seconds=60)
+    # Disable repository hooks for this checkout operation: a post-checkout hook
+    # is executable code from the source repository and is not part of workspace setup.
+    with tempfile.TemporaryDirectory(prefix=".botpyton-hooks-disabled-", dir=parent) as hooks_path:
+        result = _git(
+            git_root,
+            ["-c", f"core.hooksPath={hooks_path}", "worktree", "add", "-b", branch, str(workspace), base_sha],
+            timeout_seconds=60,
+        )
     if result["exit_code"] != 0:
         reason = (result["stderr"] or result["stdout"]).strip()[-2000:]
         raise WorkspaceError(f"Git could not create the worktree: {reason}")
