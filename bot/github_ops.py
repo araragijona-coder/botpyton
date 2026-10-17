@@ -224,7 +224,7 @@ class GitHubClient:
         if not self.token and self._allow_github_cli:
             self.token = _github_cli_token()
         if not self.token:
-            raise GitHubOpsError("GITHUB_TOKEN or an authenticated GitHub CLI session is required for real GitHub operations")
+            raise GitHubOpsError("GITHUB_TOKEN is required for real GitHub operations unless the GitHub CLI is authenticated")
         url = "https://api.github.com" + endpoint
         body = None if payload is None else json.dumps(
             payload, ensure_ascii=False, separators=(",", ":"), allow_nan=False
