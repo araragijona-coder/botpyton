@@ -202,28 +202,34 @@ Este cambio reduce el riesgo de binary planting desde el directorio de trabajo y
 
 ### Hallazgo
 
-Los cuatro workflows del repositorio fijaban acciones a revisiones antiguas: `actions/checkout` v4.2.2, `actions/setup-python` v5.6.0 y acciones de artefactos v4.6.2/v4. Aunque las referencias ya eran SHA completos (inmutables), había correcciones upstream más recientes que el repositorio todavía no recibía. Esto era deuda de mantenimiento del CI; por sí solo no demuestra una vulnerabilidad explotable en BOTPYTON.
+Los cuatro workflows utilizaban referencias inmutables, pero estaban fijados a revisiones antiguas: checkout v4.2.2, setup-python v5.6.0 y upload-artifact v4.6.2. Las notas oficiales anunciaron correcciones posteriores. Esto es deuda de mantenimiento del CI, no evidencia de una vulnerabilidad explotable en BOTPYTON.
 
-### Cambio aplicado en la rama de mantenimiento
+### Cambios aplicados
 
-Todas las llamadas externas de los workflows se actualizaron a las siguientes versiones y sus commits completos publicados por los repositorios oficiales:
+En los cuatro workflows se actualizó:
 
-- `actions/checkout` v7.0.1 — `3d3c42e5aac5ba805825da76410c181273ba90b1`.
-- `actions/setup-python` v7.0.0 — `5fda3b95a4ea91299a34e894583c3862153e4b97`.
-- `actions/upload-artifact` v7.0.2 — `cf430e030ddbb5b0abf93d22962f4752f3646cd9`.
-- `actions/download-artifact` v8.0.1 — `3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c`.
-- `actions/github-script` v9.0.0 — `3a2844b7e9c422d3c10d287c895573f7108da1b3`.
+- `actions/checkout` a v7.0.1 — SHA `3d3c42e5aac5ba805825da76410c181273ba90b1`.
+- `actions/setup-python` a v7.0.0 — SHA `5fda3b95a4ea91299a34e894583c3862153e4b97`.
 
-Los SHA se comprobaron contra las referencias de versiones en los repositorios oficiales. Se conserva `persist-credentials: false` en los pasos de checkout y el alcance de permisos existente por workflow. El script de `github-script` usa `context`, `github.rest` y `core`; no depende del patrón CommonJS `require('@actions/github')` retirado en v9.
+En `.github/workflows/bot-tests.yml` y `.github/workflows/bot-windows-smoke.yml`, también se actualizó:
 
-### Correcciones upstream que motivan la actualización
+- `actions/upload-artifact` a v7.0.2 — SHA `cf430e030ddbb5b0abf93d22962f4752f3646cd9`.
 
-- Checkout v7 incorpora medidas adicionales para evitar ciertos checkouts inseguros de PRs y escape correcto de valores pasados a `git --unset`.
-- setup-python v7 actualiza dependencias y corrige la validación/reintento al recuperar el manifiesto de Python para evitar fallos silenciosos.
-- upload-artifact v7.0.2 mejora los reintentos cuando el servicio responde HTTP 429 y respeta un encabezado `Retry-After` válido.
-- download-artifact v8 cambia el comportamiento ante un hash que no coincide: falla de forma predeterminada, en lugar de dejar solo una advertencia. Esto es apropiado para los checkpoints, que deben rechazarse si su integridad no coincide.
+Se conserva `persist-credentials: false` en checkout y los permisos/condiciones de escritura existentes. Se añade `tests/test_workflow_action_pins.py` para exigir SHA completos de 40 caracteres para todas las acciones externas.
 
-Referencias oficiales:
+### Migración deliberadamente aplazada
+
+El workflow `.github/workflows/botpyton-worker.yml` transporta checkpoints entre ejecuciones: usa conjuntamente `upload-artifact` y `download-artifact`, y `github-script` descubre artefactos de ejecuciones anteriores. Los dos jobs de CI que corren automáticamente en este PR prueban las nuevas versiones de checkout, setup-python y upload-artifact, pero no ejecutan el flujo manual completo del worker ni prueban la restauración desde un checkpoint real.
+
+Por ese motivo, esta fase **no** migra las versiones de artefactos del worker ni `github-script`: se conservan los SHA anteriormente usados y compatibles (`upload-artifact` v4.6.2 con `download-artifact` v4, y `github-script` v7.0.1). No afirmo que esas migraciones estén verificadas. Deben actualizarse en una fase separada cuando exista una ejecución end-to-end del ciclo anterior run → checkpoint → siguiente run → restauración.
+
+### Motivación upstream y fuentes oficiales
+
+- Checkout v7.0.1 incorpora protecciones adicionales para ciertos checkouts inseguros de PRs y corrige el manejo de valores pasados a `git --unset`.
+- setup-python v7.0.0 actualiza dependencias y valida/reintenta la descarga de manifiestos para reducir fallos silenciosos.
+- upload-artifact v7.0.2 mejora los reintentos ante HTTP 429 y respeta encabezados `Retry-After` válidos.
+
+Referencias:
 - https://github.com/actions/checkout/releases
 - https://github.com/actions/setup-python/releases
 - https://github.com/actions/upload-artifact/releases
@@ -231,8 +237,6 @@ Referencias oficiales:
 - https://github.com/actions/github-script/releases
 - https://docs.github.com/en/actions/reference/security/secure-use
 
-### Guardia de regresión y validación requerida
+Las acciones nuevas usan Node.js 24 y requieren un runner compatible; los workflows regulares del proyecto usan runners hospedados por GitHub. La ejecución del PR verificará su funcionamiento en Linux y Windows.
 
-Se añade `tests/test_workflow_action_pins.py` para exigir que cada acción externa de los workflows se fije a un SHA de 40 caracteres, evitando volver a usar etiquetas mutables como `@v7`. El cambio no agrega dependencias al runtime del programa ni altera sus funciones de limpieza local.
-
-Estas versiones usan el runtime Node.js 24 en las acciones indicadas y requieren runners de GitHub Actions compatibles (mínimo upstream documentado: 2.327.1). Los workflows del repositorio usan runners hospedados por GitHub. El CI de la rama debe confirmar la compatibilidad y la continuidad de artefactos antes de integrar esta fase en `main`.
+No cambia el código de limpieza local ni se agregan dependencias de runtime, servicios residentes, llamadas de IA o acciones del sistema operativo.
