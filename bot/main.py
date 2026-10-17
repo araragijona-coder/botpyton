@@ -24,7 +24,7 @@ from .repository_analyzer import inspect_repository
 from .process_runner import ProcessRunnerError, run_tool_probe
 from .tool_registry import discover_tools
 from .system_profile import get_system_profile
-from .pc_care import get_pc_care_report
+from .pc_care import get_pc_care_report, QUARANTINE_CONFIRMATION, RESTORE_CONFIRMATION, quarantine_cleanup_candidates, restore_quarantined_files
 from .project_checks import ProjectCheckError, discover_project_checks, run_project_check
 from .policy import PolicyError, validate_task, validate_relative_path
 from .queue import QueueError, TaskQueue
@@ -81,6 +81,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--pc-check", action="store_true", help="run the read-only, offline local PC-care audit")
     parser.add_argument("--pc-processes", action="store_true", help="show a bounded read-only snapshot of Windows process memory usage")
     parser.add_argument("--pc-cleanup-preview", action="store_true", help="list exact eligible temporary-file candidates without deleting anything")
+    parser.add_argument("--pc-cleanup-quarantine", action="store_true", help="move verified temporary-file candidates to reversible quarantine after typed confirmation")
+    parser.add_argument("--pc-cleanup-restore", metavar="MANIFEST_JSON", help="restore a BOTPYTON quarantine session without overwriting existing files")
     parser.add_argument("--pc-apps", action="store_true", help="list installed Windows application metadata without running uninstallers")
     parser.add_argument("--tools", action="store_true", help="list installed developer tools without running them")
     parser.add_argument("--probe-tool", metavar="TOOL_ID", help="run the fixed version probe for one registered tool")
@@ -152,6 +154,49 @@ def main(argv: list[str] | None = None) -> int:
             from .pc_care import read_installed_applications
             _print_json(read_installed_applications())
             return 0
+        if args.pc_cleanup_quarantine and args.pc_cleanup_restore:
+            raise ValueError("Choose either --pc-cleanup-quarantine or --pc-cleanup-restore, not both")
+        if args.pc_cleanup_quarantine:
+            from .pc_care import get_cleanup_preview, MAX_QUARANTINE_CANDIDATES
+            preview = get_cleanup_preview(max_candidates=MAX_QUARANTINE_CANDIDATES)
+            print("REVERSIBLE CLEANUP — review every exact path below.")
+            print(f"Preview status: {preview['status']}; candidates: {preview['candidate_count']}; estimated bytes: {preview['candidate_bytes']}")
+            for candidate in preview["candidates"]:
+                print(f"  [{candidate['size_bytes']} bytes] {candidate['path']}")
+            if preview["status"] != "preview_complete":
+                _print_json({"status": "cancelled_partial_preview", "files_quarantined": 0, "preview": preview})
+                return 2
+            if not preview["candidates"]:
+                _print_json({"status": "no_candidates", "files_quarantined": 0, "message": "No eligible old temporary files were found."})
+                return 0
+            print("Nothing will be permanently deleted. Files are moved to a quarantine folder.")
+            typed = input(f'Type exactly "{QUARANTINE_CONFIRMATION}" to continue: ')
+            if typed != QUARANTINE_CONFIRMATION:
+                print("CANCELLED: confirmation did not match; no files were moved.")
+                return 2
+            result = quarantine_cleanup_candidates(preview, confirmation=typed)
+            _print_json(result)
+            return 0 if result["status"] in {"completed", "no_candidates", "partial"} else 1
+        if args.pc_cleanup_restore:
+            from .pc_care import MAX_QUARANTINE_CANDIDATES
+            manifest_path = Path(args.pc_cleanup_restore).expanduser()
+            if manifest_path.stat().st_size > 200_000:
+                raise ValueError("Quarantine manifest exceeds 200000 bytes")
+            manifest_preview = json.loads(manifest_path.read_text(encoding="utf-8-sig"))
+            entries = manifest_preview.get("items", []) if isinstance(manifest_preview, dict) else []
+            if not isinstance(entries, list) or len(entries) > MAX_QUARANTINE_CANDIDATES:
+                raise ValueError("Quarantine manifest is invalid or exceeds its safety limits")
+            print("RESTORE PREVIEW — no existing file will be overwritten.")
+            for entry in entries:
+                if isinstance(entry, dict):
+                    print(f"  [{entry.get('status', 'unknown')}] {entry.get('original_path', '(path missing)')}")
+            typed = input(f'Type exactly "{RESTORE_CONFIRMATION}" to restore these entries: ')
+            if typed != RESTORE_CONFIRMATION:
+                print("CANCELLED: confirmation did not match; no files were restored.")
+                return 2
+            result = restore_quarantined_files(manifest_path, confirmation=typed)
+            _print_json(result)
+            return 0 if result["status"] in {"restored", "no_files_restored"} else 1
         if args.pc_cleanup_preview:
             from .pc_care import get_cleanup_preview
             _print_json(get_cleanup_preview())
@@ -323,7 +368,7 @@ def main(argv: list[str] | None = None) -> int:
         parser.print_help()
         return 0
     except (OSError, UnicodeError, json.JSONDecodeError, PolicyError, MemoryError,
-            QueueError, CheckpointError, GitHubOpsError, AutonomousCycleError, ProcessRunnerError, LocalChangeError, ProjectCheckError, ValueError) as exc:
+            QueueError, CheckpointError, GitHubOpsError, AutonomousCycleError, ProcessRunnerError, LocalChangeError, ProjectCheckError, ValueError, EOFError) as exc:
         print(f"CHECK FAIL: {exc}", file=sys.stderr)
         return 2
 

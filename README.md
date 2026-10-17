@@ -276,9 +276,16 @@ On Windows, run `python -m bot.main --pc-processes` to list a bounded snapshot o
 
 ## Phase 14: exact cleanup preview
 
-Run `python -m bot.main --pc-cleanup-preview` to list exact old-file candidates in approved temporary directories. The output is read-only, bounded to 200 candidates, and explicitly excludes browser profiles, cookies, sessions, downloads, personal documents, and system directories. Nothing is deleted or moved. Review every path before any future cleanup feature; see `docs/PC-CARE-ROADMAP.md`.
+\`python -m bot.main --pc-cleanup-preview\` lists exact old-file candidates in approved temporary directories. The output is read-only, bounded to 200 candidates, and excludes browser caches, cookies, sessions, downloads, personal documents, and system directories from the executable cleanup scope. Partial scans are explicitly marked. Nothing is moved or deleted by the preview.
 
 
 ## Phase 15: installed application inventory
 
-On Windows, run `python -m bot.main --pc-apps` to list installed application names, publishers, display versions and install dates from uninstall registry metadata. The inventory is read-only and capped at 500 by default. It does not run uninstallers, change registry data, or determine update availability. See `docs/PC-CARE-ROADMAP.md`.
+On Windows, run \`python -m bot.main --pc-apps\` to list installed application names, publishers, display versions and install dates from uninstall registry metadata. The inventory is capped at 500 by default. It does not run uninstallers, change registry data, or determine update availability.
+
+
+## Phase 16: reversible cleanup quarantine and restore
+
+Run \`python -m bot.main --pc-cleanup-quarantine\` for a fresh scan. BOTPYTON prints the exact paths, requires the literal confirmation \`QUARANTINE OLD TEMP FILES\`, revalidates each candidate and moves supported files to \`%LOCALAPPDATA%\\BOTPYTON\\Quarantine\\session-...\\\` instead of permanently deleting them. A manifest records original locations and file metadata.
+
+Restore with \`python -m bot.main --pc-cleanup-restore "PATH\\manifest.json"\` and type \`RESTORE BOTPYTON QUARANTINE\`. Restoration checks that the original location remains within an approved temp directory and never overwrites an existing file. Partial scans are rejected; at most 100 files are handled in one operation. Cross-volume, locked, changed, inaccessible and linked files are skipped/reported. This recovery feature has automated tests using temporary test directories; it has not been run on the user's PC. See \`docs/PC-CARE-ROADMAP.md\`.

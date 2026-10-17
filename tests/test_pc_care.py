@@ -151,5 +151,131 @@ class PcCareTests(unittest.TestCase):
         self.assertEqual(result["candidate_bytes"], 0)
 
 
+    def test_quarantine_requires_exact_confirmation_and_does_not_move_on_mismatch(self):
+        from bot.pc_care import quarantine_cleanup_candidates, QUARANTINE_CONFIRMATION
+        with tempfile.TemporaryDirectory() as tmp:
+            temp_root = Path(tmp) / "temporary"
+            temp_root.mkdir()
+            quarantine_root = Path(tmp) / "Quarantine"
+            old_file = temp_root / "old.tmp"
+            old_file.write_bytes(b"old data")
+            now = 1_700_000_000.0
+            os.utime(old_file, (now - 12 * 86400, now - 12 * 86400))
+            preview = get_cleanup_preview(scan_roots=[("temporary files", temp_root)], now=now)
+            with self.assertRaises(ValueError):
+                quarantine_cleanup_candidates(
+                    preview, confirmation="yes", scan_roots=[("temporary files", temp_root)],
+                    quarantine_root=quarantine_root, now=now,
+                )
+            self.assertTrue(old_file.exists())
+            self.assertFalse(quarantine_root.exists())
+            self.assertEqual(QUARANTINE_CONFIRMATION, "QUARANTINE OLD TEMP FILES")
+
+    def test_quarantine_and_restore_round_trip_with_manifest(self):
+        from bot.pc_care import (
+            QUARANTINE_CONFIRMATION, RESTORE_CONFIRMATION,
+            quarantine_cleanup_candidates, restore_quarantined_files,
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            temp_root = Path(tmp) / "temporary"
+            temp_root.mkdir()
+            quarantine_root = Path(tmp) / "Quarantine"
+            old_file = temp_root / "old.tmp"
+            old_file.write_bytes(b"old data to restore")
+            now = 1_700_000_000.0
+            old_mtime = now - 12 * 86400
+            os.utime(old_file, (old_mtime, old_mtime))
+            original_bytes = old_file.read_bytes()
+            preview = get_cleanup_preview(scan_roots=[("temporary files", temp_root)], now=now)
+            result = quarantine_cleanup_candidates(
+                preview, confirmation=QUARANTINE_CONFIRMATION,
+                scan_roots=[("temporary files", temp_root)],
+                quarantine_root=quarantine_root, now=now,
+            )
+            self.assertEqual(result["status"], "completed")
+            self.assertEqual(result["files_quarantined"], 1)
+            self.assertFalse(old_file.exists())
+            manifest_path = Path(result["manifest_path"])
+            self.assertTrue(manifest_path.is_file())
+            self.assertTrue((manifest_path.parent / "0001-old.tmp").is_file())
+            restored = restore_quarantined_files(
+                manifest_path, confirmation=RESTORE_CONFIRMATION,
+                scan_roots=[("temporary files", temp_root)],
+            )
+            self.assertEqual(restored["status"], "restored")
+            self.assertEqual(restored["files_restored"], 1)
+            self.assertTrue(old_file.is_file())
+            self.assertEqual(old_file.read_bytes(), original_bytes)
+            self.assertFalse((manifest_path.parent / "0001-old.tmp").exists())
+
+    def test_quarantine_rejects_partial_preview(self):
+        from bot.pc_care import quarantine_cleanup_candidates, QUARANTINE_CONFIRMATION
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "temporary"
+            root.mkdir()
+            old_file = root / "old.tmp"
+            old_file.write_bytes(b"x")
+            now = 1_700_000_000.0
+            os.utime(old_file, (now - 12 * 86400, now - 12 * 86400))
+            preview = get_cleanup_preview(scan_roots=[("temporary files", root)], now=now, max_candidates=1)
+            preview["status"] = "preview_partial"
+            with self.assertRaises(ValueError):
+                quarantine_cleanup_candidates(
+                    preview, confirmation=QUARANTINE_CONFIRMATION,
+                    scan_roots=[("temporary files", root)],
+                    quarantine_root=Path(tmp) / "Quarantine", now=now,
+                )
+            self.assertTrue(old_file.exists())
+
+    def test_quarantine_skips_file_changed_since_preview(self):
+        from bot.pc_care import quarantine_cleanup_candidates, QUARANTINE_CONFIRMATION
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "temporary"
+            root.mkdir()
+            old_file = root / "old.tmp"
+            old_file.write_bytes(b"x")
+            now = 1_700_000_000.0
+            os.utime(old_file, (now - 12 * 86400, now - 12 * 86400))
+            preview = get_cleanup_preview(scan_roots=[("temporary files", root)], now=now)
+            old_file.write_bytes(b"changed size after preview")
+            result = quarantine_cleanup_candidates(
+                preview, confirmation=QUARANTINE_CONFIRMATION,
+                scan_roots=[("temporary files", root)],
+                quarantine_root=Path(tmp) / "Quarantine", now=now,
+            )
+            self.assertEqual(result["files_quarantined"], 0)
+            self.assertTrue(old_file.exists())
+            self.assertEqual(result["files_skipped"], 1)
+
+    def test_restore_never_overwrites_an_existing_original_path(self):
+        from bot.pc_care import (
+            QUARANTINE_CONFIRMATION, RESTORE_CONFIRMATION,
+            quarantine_cleanup_candidates, restore_quarantined_files,
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "temporary"
+            root.mkdir()
+            quarantine_root = Path(tmp) / "Quarantine"
+            old_file = root / "old.tmp"
+            old_file.write_bytes(b"original")
+            now = 1_700_000_000.0
+            os.utime(old_file, (now - 12 * 86400, now - 12 * 86400))
+            preview = get_cleanup_preview(scan_roots=[("temporary files", root)], now=now)
+            moved = quarantine_cleanup_candidates(
+                preview, confirmation=QUARANTINE_CONFIRMATION,
+                scan_roots=[("temporary files", root)],
+                quarantine_root=quarantine_root, now=now,
+            )
+            self.assertEqual(moved["files_quarantined"], 1)
+            old_file.write_bytes(b"user's new file")
+            restored = restore_quarantined_files(
+                moved["manifest_path"], confirmation=RESTORE_CONFIRMATION,
+                scan_roots=[("temporary files", root)],
+            )
+            self.assertEqual(restored["files_restored"], 0)
+            self.assertEqual(old_file.read_bytes(), b"user's new file")
+            self.assertEqual(restored["files_skipped"], 1)
+
+
 if __name__ == "__main__":
     unittest.main()

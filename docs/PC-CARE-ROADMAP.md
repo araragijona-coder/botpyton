@@ -1,42 +1,69 @@
 # BOTPYTON PC Care — implementation roadmap
 
-## Phase 12 — Read-only local audit
+## Phase 12 — Read-only local audit — implemented
 
-**Branch:** `bot-bootstrap/phase-12-pc-care-read-only`  
-**Goal:** give BOTPYTON a trustworthy, low-cost local diagnostic instead of alarm-style upsell messages.
+- On-demand command: \`python -m bot.main --pc-check\`.
+- Reports available physical memory, free disk space, selected temp/cache metadata and startup registration names.
+- Uses the Python standard library and local OS information; no telemetry, AI/API calls, network update checks, package installation, service or scheduled task.
+- No cleanup, process termination, registry changes, or updates are performed by this audit.
 
-### Included in this phase
+## Phase 13 — Process memory snapshot — implemented
 
-- On-demand command: `python -m bot.main --pc-check`.
-- Reports available physical memory and free disk space.
-- Estimates old files in selected user temp/cache locations using metadata only (older than seven days), with an entry/depth cap.
-- On Windows, lists startup registration names and source locations without exposing command-line arguments.
-- Emits structured findings with severity labels, recommendations, and explicit unknown/not-checked states.
-- Uses only Python's standard library and local OS information. No AI model, API key, telemetry, network query, package installation, startup service, or scheduled task is used.
-- No files are deleted, no processes are stopped, no registry settings are changed, and nothing is updated.
+- \`python -m bot.main --pc-processes\` and launcher option I.
+- Uses Windows \`tasklist\` with a five-second timeout, no shell, no command-line capture; returns at most 30 processes sorted by working-set memory.
+- Snapshot only. No process is terminated, reprioritized or modified.
 
-### Important accuracy rules
+## Phase 14 — Exact cleanup preview — implemented
 
-- A cleanup estimate is not a promise that every byte can be reclaimed. Some files may be locked or needed by an active application.
-- A startup entry is not proof of performance impact. The user must identify the publisher and purpose before disabling it.
-- A driver is not “obsolete” merely because its date is old. Driver compatibility and a trusted Windows Update/vendor source are needed.
-- The count of installed applications alone cannot establish that the PC is slow.
-- A bounded scan may be partial; the report marks that condition and must not present itself as exhaustive.
-- The report may contain local paths. Inspect it before posting it publicly.
+- \`python -m bot.main --pc-cleanup-preview\` and launcher option J.
+- Lists exact file paths, byte sizes, timestamps and age from a bounded set of approved roots.
+- Preview is capped at 200 candidates. A partial scan is visibly marked and cannot be used for the Phase 16 execution path.
+- Does not open file contents, move, or delete files. Browser profiles/caches, cookies, sessions, downloads, personal documents, and system directories are outside the executable cleanup scope.
 
-### Phase 13 — Process memory snapshot (implemented in this branch)
+## Phase 15 — Installed application inventory — implemented
 
-- Adds `python -m bot.main --pc-processes` and option I to the Windows launcher.
-- Reads the built-in Windows `tasklist` CSV output with a five-second timeout, no shell, no command-line arguments, and no third-party dependency.
-- Returns at most 30 processes, sorted by working-set memory; the default report includes the top 20.
-- The data is a momentary snapshot. No process is terminated, reprioritized, or modified. CPU trend, startup impact over time, and publisher reputation are not yet verified.
-- Includes mocked tests for parsing, memory sorting, output limits, unsupported platforms, and timeouts.
+- \`python -m bot.main --pc-apps\` and launcher option K.
+- Reads application name, publisher, display version and install date from Windows uninstall registry metadata (default cap 500).
+- Does not execute uninstallers, change registry data, or claim that an application is outdated based on inventory alone.
 
-### Next phases — not yet implemented
+## Phase 16 — Reversible cleanup quarantine and restore — implemented on the development branch
 
-1. **Phase 14 — Explicit cleanup preview:** calculate candidates first; display exact paths, age, file count and size; require a separate typed confirmation for each cleanup category; keep browser profiles, cookies, sessions, downloads, personal documents and system folders out of scope by default.
-3. **Phase 15 — Update checks, opt-in:** use Windows Update, Microsoft Store, winget, or official vendor sources only on explicit user request; no third-party driver packs; never auto-install in the initial release.
-4. **Phase 16 — Backups and restore:** create a manifest and reversible quarantine before any supported deletion; skip locked, linked, protected, or ambiguous paths.
-5. **Phase 17 — Windows smoke tests and packaging:** verify on Windows 10/11, measure idle and peak RAM on the user's actual machine, build a portable launcher, and document the minimum supported Windows/Python versions.
+### Run interactively
 
-Each phase must be separately tested. A selection to continue authorizes only the next listed phase; it does not authorize background services, automatic cleanup, driver installation, registry edits, or merges into `main`.
+\`\`\`powershell
+python -m bot.main --pc-cleanup-preview
+python -m bot.main --pc-cleanup-quarantine
+python -m bot.main --pc-cleanup-restore "C:\\path\\to\\BOTPYTON\\Quarantine\\session-...\\manifest.json"
+\`\`\`
+
+- Execution always performs a fresh scan; it accepts only a complete preview with at most 100 candidates.
+- Before moving any file, it prints the exact path list and requires the exact phrase \`QUARANTINE OLD TEMP FILES\`. Any other input cancels without moving files.
+- Eligible files are revalidated against an approved conventional temporary root, regular-file type, no symlink/reparse components, exact preview size/timestamp, and minimum age.
+- Files are moved with \`os.replace\` to \`%LOCALAPPDATA%\\BOTPYTON\\Quarantine\\session-...\\\`; a JSON manifest is atomically written before and after each move.
+- Restoration requires the exact phrase \`RESTORE BOTPYTON QUARANTINE\`, accepts only a manifest in a BOTPYTON quarantine session, validates original paths against approved temporary roots and never overwrites an existing original path.
+- Cross-volume moves or files locked by a process may fail safely. Those files remain in place or in quarantine and are reported.
+- No permanent deletion, registry edits, service installation, process termination, driver installation, or network/API calls are part of Phase 16.
+- Tests use temporary folders only; no cleanup has been run on the user's PC. Windows CI still needs to pass for the candidate commit.
+
+## Phase 17 — Explicit opt-in update checks — planned
+
+Use only trusted, current sources such as Windows Update, Microsoft Store, winget metadata, or official hardware/software vendor sources. Run no network check without a separate opt-in; never install updates automatically in the initial release. Driver packages must not come from generic third-party driver packs.
+
+## Phase 18 — Broader backup, restore and operation audit — planned
+
+Extend recovery protection beyond temporary-file quarantine: validate backups, retain integrity hashes, produce durable audit records, and provide a dry-run restore checklist. The existing quarantine manifest is a first narrow recovery mechanism, not a general system backup.
+
+## Phase 19 — Windows smoke tests, packaging and resource measurements — planned
+
+Test supported Windows 10/11 configurations; measure idle/peak RAM, CPU and scan time on the actual Ryzen 5 5600G machine with only about 2 GB available; verify path/permission/locked-file edge cases; build a portable launcher and document Python/Windows minimums. The target remains on-demand, serial, bounded operation with no resident service.
+
+## Safety and accuracy rules
+
+- A cleanup estimate is not a guarantee that every byte can be reclaimed; some files may be locked or actively used.
+- A startup item is not proof of performance impact. Do not disable an item based only on its name.
+- A driver is not “obsolete” merely because its date is old. A reliable compatibility check and trusted source are required.
+- Application inventory alone cannot establish that software is outdated or unnecessary.
+- Bounded/partial scans are not exhaustive. Phase 16 refuses partial previews.
+- Reports and manifests may contain local paths. Inspect them before sharing publicly.
+- Development changes remain isolated on the development branch. No automatic merge into \`main\` and no test cleanup on the user's PC.
+

@@ -31,8 +31,12 @@ echo  H. Auditoria del PC (solo lectura, sin borrar ni actualizar nada)
 echo  I. Ver procesos que mas memoria usan (solo lectura)
 echo  J. Vista previa de limpieza (no borra nada)
 echo  K. Inventario de aplicaciones instaladas (solo lectura)
+echo  L. Limpiar archivos temporales mediante cuarentena reversible
+echo  M. Restaurar una cuarentena usando su manifest.json
 echo.
-choice /c 123456789ABCDEFGHIJK /n /m "Selecciona una opcion: "
+choice /c 123456789ABCDEFGHIJKLM /n /m "Selecciona una opcion: "
+if errorlevel 22 goto restorecleanup
+if errorlevel 21 goto quarantinecleanup
 if errorlevel 20 goto appinventory
 if errorlevel 19 goto cleanpreview
 if errorlevel 18 goto processcheck
@@ -247,3 +251,23 @@ goto menu
 :end
 endlocal
 exit /b 0
+
+
+:quarantinecleanup
+echo.
+echo ATENCION: se moveran archivos temporales antiguos a cuarentena, no se borraran permanentemente.
+echo La herramienta mostrara y volvera a validar cada ruta antes de moverla.
+python -m bot.main --pc-cleanup-quarantine
+echo.
+pause
+goto menu
+
+:restorecleanup
+echo.
+set "MANIFEST_PATH="
+set /p "MANIFEST_PATH=Ruta completa del manifest.json de una cuarentena BOTPYTON: "
+if not defined MANIFEST_PATH goto menu
+python -m bot.main --pc-cleanup-restore "%MANIFEST_PATH%"
+echo.
+pause
+goto menu
