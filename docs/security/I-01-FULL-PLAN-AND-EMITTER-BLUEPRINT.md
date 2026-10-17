@@ -18,7 +18,7 @@
 
 ## 2. Administrative verification checklist
 
-Capture dated screenshots or exportable settings evidence, with sensitive values redacted.
+**Operator-reported checklist (2026-10-16):** the operator marked all four controls below complete: main protection, Actions permissions, workflow approval/restrictions, and credential inventory. This is recorded as an attestation, not as independently verified configuration. No screenshots, settings export, or authorized API evidence was attached in this task. Keep the effective state UNKNOWN until such evidence is recorded. Capture dated screenshots or exportable settings evidence, with sensitive values redacted.
 
 1. Branch rules for main: require pull requests and appropriate approvals; dismiss stale approvals or require approval of latest push where supported; block force-push and deletion; restrict bypass actors; require status checks from trusted workflows.
 2. Ruleset scope: verify whether organization-level rulesets apply, whether they target main, and who can bypass them.
@@ -34,9 +34,10 @@ Capture dated screenshots or exportable settings evidence, with sensitive values
 | Candidate CI on exact SHA | VERIFIED | Workflow run head SHA matches; success; 96 tests OK |
 | Live sender disabled in candidate workflows | VERIFIED in candidate source | sender job has if:false and read-only permissions |
 | Repository rulesets | OBSERVED EMPTY | Does not rule out organization rulesets |
-| main branch protection | UNKNOWN | API 403 from integration |
-| Effective Actions policy | UNKNOWN | Endpoint inaccessible through connector |
-| Credential isolation | UNKNOWN | Access boundary not independently audited |
+| main branch protection | OPERATOR-REPORTED COMPLETE / UNKNOWN VERIFIED STATE | User checklist marked complete; API 403 from integration; no supporting settings evidence attached |
+| Effective Actions policy | OPERATOR-REPORTED COMPLETE / UNKNOWN VERIFIED STATE | User checklist marked complete; endpoint inaccessible through connector; no supporting settings evidence attached |
+| Workflow approval and untrusted-workflow policy | OPERATOR-REPORTED COMPLETE / UNKNOWN VERIFIED STATE | User checklist marked complete; effective policy not independently inspected |
+| Credential inventory / worker isolation | OPERATOR-REPORTED COMPLETE / UNKNOWN VERIFIED STATE | User checklist marked complete; no secret values read and no independent proof of isolation attached |
 | Independent trust boundary | NOT VERIFIED | Simulation module is in worker repository |
 
 ## 3. Independent emitter repository — blueprint only
@@ -111,7 +112,7 @@ Run the full existing test workflow on the final commit. Report exact head SHA a
 
 ## 5. Stage gates
 
-- Stage A — Administrative audit: incomplete until branch/ruleset, Actions policy, actors, environments, and credential isolation have evidence from an authorized settings view.
+- Stage A — Administrative audit: operator reports the four checklist controls complete; still incomplete for I-01 exit until the effective branch/ruleset, Actions policy, workflow approval policy, actor inventory, environments, and credential isolation have dated evidence from an authorized settings view.
 - Stage B — Emitter blueprint: prepared here; no repository or secret created.
 - Stage C — Adversarial simulation tests: pending implementation and CI.
 - Stage D — Independent trust-boundary review: pending separate repository, ownership/protection evidence, and review of actual credential path.
