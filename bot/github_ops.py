@@ -106,6 +106,8 @@ def validate_change_plan(plan: Any) -> NormalizedPlan:
     draft = plan.get("draft", True)
     if not isinstance(draft, bool):
         raise GitHubOpsError("draft must be a JSON boolean")
+    if draft is not True:
+        raise GitHubOpsError("draft must be true; non-draft pull requests are disabled")
     raw_changes = plan.get("changes")
     if not isinstance(raw_changes, list) or not 1 <= len(raw_changes) <= MAX_FILES_PER_PLAN:
         raise GitHubOpsError(f"changes must be a list containing 1–{MAX_FILES_PER_PLAN} files")
