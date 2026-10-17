@@ -632,5 +632,79 @@ class PcCareTests(unittest.TestCase):
             self.assertEqual(result["status"], "unsafe_root")
 
 
+    def test_duplicate_finder_detects_identical_files_not_merely_same_size(self):
+        from bot.pc_care import find_duplicate_files
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            first = root / "copy-a.bin"
+            second = root / "copy-b.bin"
+            different = root / "different.bin"
+            first.write_bytes(b"identical payload")
+            second.write_bytes(b"identical payload")
+            different.write_bytes(b"unrelated content")
+            result = find_duplicate_files(root, max_entries=100, max_depth=4, timeout_seconds=5)
+            self.assertEqual(result["status"], "scan_complete")
+            self.assertTrue(result["read_only"])
+            self.assertTrue(result["file_contents_read_for_sha256"])
+            self.assertFalse(result["network_used"])
+            self.assertEqual(result["files_deleted"], 0)
+            self.assertEqual(result["files_hashed"], 3)
+            self.assertEqual(result["duplicate_group_count"], 1)
+            group = result["duplicate_groups"][0]
+            self.assertEqual(group["file_count"], 2)
+            self.assertEqual(set(group["paths"]), {str(first), str(second)})
+            self.assertEqual(group["potential_duplicate_bytes"], len(b"identical payload"))
+            self.assertTrue(first.exists() and second.exists() and different.exists())
+
+    def test_duplicate_finder_respects_hash_budget_and_reports_partial(self):
+        from bot.pc_care import find_duplicate_files
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            content = b"larger than test budget"
+            (root / "a.bin").write_bytes(content)
+            (root / "b.bin").write_bytes(content)
+            result = find_duplicate_files(
+                root, max_entries=100, max_hash_bytes=5, max_file_bytes=100, timeout_seconds=5
+            )
+            self.assertEqual(result["status"], "scan_partial")
+            self.assertTrue(result["scan_limited"])
+            self.assertEqual(result["files_hashed"], 0)
+            self.assertGreater(result["hash_budget_skipped_files"], 0)
+            self.assertEqual(result["duplicate_group_count"], 0)
+
+    def test_duplicate_finder_skips_oversized_files(self):
+        from bot.pc_care import find_duplicate_files
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            content = b"too big for this pass"
+            (root / "a.bin").write_bytes(content)
+            (root / "b.bin").write_bytes(content)
+            result = find_duplicate_files(
+                root, max_entries=100, max_file_bytes=5, max_hash_bytes=100, timeout_seconds=5
+            )
+            self.assertEqual(result["status"], "scan_partial")
+            self.assertEqual(result["files_hashed"], 0)
+            self.assertEqual(result["oversize_candidate_files_skipped"], 2)
+
+    def test_duplicate_finder_validates_limits_and_never_follows_symlink_root(self):
+        from bot.pc_care import find_duplicate_files
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            actual = root / "actual"
+            actual.mkdir()
+            (actual / "a.txt").write_text("same", encoding="utf-8")
+            with self.assertRaises(ValueError):
+                find_duplicate_files(actual, max_entries=0)
+            with self.assertRaises(ValueError):
+                find_duplicate_files(actual, max_groups=100)
+            link = root / "link"
+            try:
+                link.symlink_to(actual, target_is_directory=True)
+            except (OSError, NotImplementedError):
+                self.skipTest("Symlink creation is not permitted in this test environment")
+            result = find_duplicate_files(link)
+            self.assertEqual(result["status"], "unsafe_root")
+
+
 if __name__ == "__main__":
     unittest.main()

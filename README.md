@@ -325,3 +325,10 @@ El ZIP incluye los módulos, documentación y ejemplos, más un manifiesto con S
 \`python -m bot.main --pc-storage "RUTA_DE_CARPETA"\` o la opción R del menú analiza una carpeta que elijas. Informa bytes observados, número de archivos/directorios, archivos más grandes y resumen por extensión. No abre contenidos ni cambia nada.
 
 La pasada tiene límites estrictos: 5.000 entradas, profundidad 6, top 20 y cinco segundos por defecto; máximo absoluto 20.000 entradas, profundidad 8, top 50 y diez segundos. Omite enlaces y puntos de reanálisis, y marca resultados parciales cuando llega a un límite o encuentra errores. No analiza toda la unidad de forma automática; debes escoger la carpeta. El informe contiene rutas locales, así que revísalo antes de compartirlo.
+
+
+## Phase 21: buscador de duplicados sin eliminacion automatica
+
+\`python -m bot.main --pc-duplicates "RUTA_DE_CARPETA"\` o la opción S busca archivos de contenido idéntico dentro de una carpeta que selecciones. Agrupa por tamaño antes de calcular SHA-256 en bloques de 256 KiB. Límites por defecto: 5.000 entradas, profundidad 6, cinco segundos, 32 MiB máximo por archivo y 256 MiB de lectura total para hashes. Los límites duros son 20.000 entradas, profundidad 8, diez segundos y 2.000 hashes.
+
+La salida estima el espacio potencialmente duplicado, pero no elimina archivos: puede haber hard links, archivos en uso o diferencias entre espacio estimado y realmente recuperable. Los contenidos se leen localmente solo para calcular hashes; no se envían a ningún servicio. Si se alcanza un límite, se informa un resultado parcial. Los informes contienen rutas locales.

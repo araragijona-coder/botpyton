@@ -844,6 +844,257 @@ def analyze_storage_path(
     return report
 
 
+
+MAX_DUPLICATE_SCAN_ENTRIES = 20_000
+MAX_DUPLICATE_SCAN_DEPTH = 8
+MAX_DUPLICATE_GROUPS = 25
+MAX_DUPLICATE_HASH_FILES = 2_000
+MAX_DUPLICATE_FILE_BYTES = 32 * 1024 * 1024
+MAX_DUPLICATE_HASH_BYTES = 256 * 1024 * 1024
+MAX_DUPLICATE_PATH_CHARS = 1_024
+DUPLICATE_HASH_CHUNK_BYTES = 256 * 1024
+
+
+def find_duplicate_files(
+    root: str | Path,
+    *,
+    max_entries: int = 5_000,
+    max_depth: int = 6,
+    timeout_seconds: float = 5.0,
+    max_file_bytes: int = MAX_DUPLICATE_FILE_BYTES,
+    max_hash_bytes: int = MAX_DUPLICATE_HASH_BYTES,
+    max_groups: int = 20,
+) -> dict:
+    """Find likely exact duplicate files in an explicitly selected folder; never deletes files."""
+    if not isinstance(max_entries, int) or isinstance(max_entries, bool) or not 1 <= max_entries <= MAX_DUPLICATE_SCAN_ENTRIES:
+        raise ValueError(f"max_entries must be between 1 and {MAX_DUPLICATE_SCAN_ENTRIES}")
+    if not isinstance(max_depth, int) or isinstance(max_depth, bool) or not 0 <= max_depth <= MAX_DUPLICATE_SCAN_DEPTH:
+        raise ValueError(f"max_depth must be between 0 and {MAX_DUPLICATE_SCAN_DEPTH}")
+    if (not isinstance(timeout_seconds, (int, float)) or isinstance(timeout_seconds, bool)
+            or not 0.1 <= float(timeout_seconds) <= MAX_STORAGE_TIMEOUT_SECONDS):
+        raise ValueError(f"timeout_seconds must be between 0.1 and {MAX_STORAGE_TIMEOUT_SECONDS}")
+    if (not isinstance(max_file_bytes, int) or isinstance(max_file_bytes, bool)
+            or not 1 <= max_file_bytes <= MAX_DUPLICATE_FILE_BYTES):
+        raise ValueError(f"max_file_bytes must be between 1 and {MAX_DUPLICATE_FILE_BYTES}")
+    if (not isinstance(max_hash_bytes, int) or isinstance(max_hash_bytes, bool)
+            or not 1 <= max_hash_bytes <= MAX_DUPLICATE_HASH_BYTES):
+        raise ValueError(f"max_hash_bytes must be between 1 and {MAX_DUPLICATE_HASH_BYTES}")
+    if not isinstance(max_groups, int) or isinstance(max_groups, bool) or not 1 <= max_groups <= MAX_DUPLICATE_GROUPS:
+        raise ValueError(f"max_groups must be between 1 and {MAX_DUPLICATE_GROUPS}")
+
+    target = Path(root).expanduser()
+    started = time.perf_counter()
+    report = {
+        "product": "BOTPYTON PC Care",
+        "schema_version": 1,
+        "status": "not_present",
+        "root_path": str(target),
+        "read_only": True,
+        "network_used": False,
+        "file_contents_read_for_sha256": True,
+        "files_deleted": 0,
+        "settings_changed": False,
+        "entries_examined": 0,
+        "directories_examined": 0,
+        "files_examined": 0,
+        "same_size_candidate_files": 0,
+        "files_hashed": 0,
+        "hash_bytes_examined": 0,
+        "oversize_candidate_files_skipped": 0,
+        "hash_budget_skipped_files": 0,
+        "changed_or_inaccessible_files": 0,
+        "duplicate_group_count": 0,
+        "potential_duplicate_bytes": 0,
+        "duplicate_groups": [],
+        "access_errors": 0,
+        "skipped_links": 0,
+        "scan_limited": False,
+        "timeout_hit": False,
+        "max_entries": max_entries,
+        "max_depth": max_depth,
+        "timeout_seconds": float(timeout_seconds),
+        "max_file_bytes": max_file_bytes,
+        "max_hash_bytes": max_hash_bytes,
+        "max_groups": max_groups,
+        "elapsed_ms": 0.0,
+        "limitations": [
+            "The selected files are read in bounded chunks to calculate SHA-256; file contents are not sent anywhere.",
+            "Only same-size candidates are hashed. Files larger than the per-file cap are excluded, and the report may be partial when budgets are reached.",
+            "Potential reclaimable bytes assume one copy could be kept; hard links, application use, permissions or file locks can make actual reclaim different.",
+            "Duplicate detection is advisory only. BOTPYTON never deletes, moves or rewrites a candidate.",
+            "Reports include local paths. Review them before sharing.",
+        ],
+    }
+    try:
+        if not target.exists():
+            report["status"] = "not_present"
+            return report
+        if _is_link_or_reparse(target):
+            report["status"] = "unsafe_root"
+            return report
+        if not target.is_dir():
+            report["status"] = "not_a_directory"
+            return report
+        root_path = target.resolve(strict=True)
+        if not root_path.is_dir() or _is_link_or_reparse(root_path):
+            report["status"] = "unsafe_root"
+            return report
+    except (OSError, RuntimeError, ValueError):
+        report["status"] = "access_limited"
+        report["access_errors"] = 1
+        return report
+    report["root_path"] = str(root_path)
+
+    deadline = started + float(timeout_seconds)
+    stack: list[tuple[Path, int]] = [(root_path, 0)]
+    metadata: list[dict] = []
+    limited = False
+    while stack:
+        if time.perf_counter() >= deadline:
+            limited = True
+            report["timeout_hit"] = True
+            break
+        current, depth = stack.pop()
+        try:
+            with os.scandir(current) as entries:
+                for entry in entries:
+                    if time.perf_counter() >= deadline:
+                        limited = True
+                        report["timeout_hit"] = True
+                        break
+                    if report["entries_examined"] >= max_entries:
+                        limited = True
+                        break
+                    report["entries_examined"] += 1
+                    entry_path = Path(entry.path)
+                    try:
+                        if entry.is_symlink() or _is_link_or_reparse(entry_path):
+                            report["skipped_links"] += 1
+                            continue
+                        if entry.is_dir(follow_symlinks=False):
+                            report["directories_examined"] += 1
+                            if depth < max_depth and len(stack) < max_entries:
+                                stack.append((entry_path, depth + 1))
+                            else:
+                                limited = True
+                            continue
+                        if not entry.is_file(follow_symlinks=False):
+                            continue
+                        info = entry.stat(follow_symlinks=False)
+                        if not stat.S_ISREG(info.st_mode):
+                            continue
+                        report["files_examined"] += 1
+                        if info.st_size < 0 or info.st_size > 2**63 - 1:
+                            report["changed_or_inaccessible_files"] += 1
+                            limited = True
+                            continue
+                        path_text = str(entry_path)
+                        if len(path_text) > MAX_DUPLICATE_PATH_CHARS:
+                            report["changed_or_inaccessible_files"] += 1
+                            limited = True
+                            continue
+                        metadata.append({
+                            "path": path_text,
+                            "size_bytes": int(info.st_size),
+                            "modified_ns": int(info.st_mtime_ns),
+                            "device": int(getattr(info, "st_dev", 0)),
+                            "inode": int(getattr(info, "st_ino", 0)),
+                        })
+                    except OSError:
+                        report["access_errors"] += 1
+        except OSError:
+            report["access_errors"] += 1
+        if limited:
+            break
+
+    by_size: dict[int, list[dict]] = {}
+    for item in metadata:
+        by_size.setdefault(item["size_bytes"], []).append(item)
+    candidate_buckets = [bucket for bucket in by_size.values() if len(bucket) > 1]
+    candidate_buckets.sort(key=lambda bucket: (bucket[0]["size_bytes"], bucket[0]["path"].casefold()))
+    report["same_size_candidate_files"] = sum(len(bucket) for bucket in candidate_buckets)
+
+    hash_groups: dict[str, list[dict]] = {}
+    hash_limit_hit = False
+    for bucket in candidate_buckets:
+        if time.perf_counter() >= deadline:
+            limited = True
+            report["timeout_hit"] = True
+            break
+        size_bytes = bucket[0]["size_bytes"]
+        if size_bytes > max_file_bytes:
+            report["oversize_candidate_files_skipped"] += len(bucket)
+            limited = True
+            continue
+        for item in bucket:
+            if time.perf_counter() >= deadline:
+                limited = True
+                report["timeout_hit"] = True
+                hash_limit_hit = True
+                break
+            if report["files_hashed"] >= MAX_DUPLICATE_HASH_FILES:
+                report["hash_budget_skipped_files"] += sum(len(entries) for entries in candidate_buckets[candidate_buckets.index(bucket):])
+                limited = True
+                hash_limit_hit = True
+                break
+            remaining = max_hash_bytes - report["hash_bytes_examined"]
+            if size_bytes > remaining:
+                report["hash_budget_skipped_files"] += sum(len(entries) for entries in candidate_buckets[candidate_buckets.index(bucket):])
+                limited = True
+                hash_limit_hit = True
+                break
+            candidate_path = Path(item["path"])
+            try:
+                if _is_link_or_reparse(candidate_path) or not _no_link_components(candidate_path, stop_at=root_path):
+                    raise OSError("path includes a link or reparse point")
+                resolved = candidate_path.resolve(strict=True)
+                if not resolved.is_relative_to(root_path):
+                    raise OSError("path moved outside selected folder")
+                before = candidate_path.stat(follow_symlinks=False)
+                if (not stat.S_ISREG(before.st_mode) or before.st_size != size_bytes
+                        or before.st_mtime_ns != item["modified_ns"]):
+                    raise OSError("file metadata changed during scan")
+                digest = _sha256_file(candidate_path, byte_limit=min(size_bytes, remaining, max_file_bytes))
+                after = candidate_path.stat(follow_symlinks=False)
+                if (after.st_size != before.st_size or after.st_mtime_ns != before.st_mtime_ns
+                        or int(getattr(after, "st_ino", 0)) != item["inode"]):
+                    raise OSError("file metadata changed during hashing")
+            except (OSError, RuntimeError, ValueError):
+                report["changed_or_inaccessible_files"] += 1
+                limited = True
+                continue
+            report["files_hashed"] += 1
+            report["hash_bytes_examined"] += size_bytes
+            hash_groups.setdefault(digest, []).append(item)
+        if hash_limit_hit:
+            break
+
+    groups = []
+    for digest, members in hash_groups.items():
+        if len(members) < 2:
+            continue
+        members.sort(key=lambda item: item["path"].casefold())
+        file_size = members[0]["size_bytes"]
+        potential_bytes = file_size * (len(members) - 1)
+        groups.append({
+            "sha256": digest,
+            "size_bytes": file_size,
+            "file_count": len(members),
+            "potential_duplicate_bytes": potential_bytes,
+            "paths_total": len(members),
+            "paths": [item["path"] for item in members[:10]],
+            "paths_truncated": len(members) > 10,
+        })
+    groups.sort(key=lambda item: (-item["potential_duplicate_bytes"], -item["file_count"], item["sha256"]))
+    report["duplicate_group_count"] = len(groups)
+    report["potential_duplicate_bytes"] = sum(item["potential_duplicate_bytes"] for item in groups)
+    report["duplicate_groups"] = groups[:max_groups]
+    report["scan_limited"] = limited or bool(report["access_errors"])
+    report["status"] = "scan_partial" if report["scan_limited"] else "scan_complete"
+    report["elapsed_ms"] = round((time.perf_counter() - started) * 1000, 2)
+    return report
+
+
 def _process_memory_snapshot(*, windows: bool | None = None) -> dict:
     """Read current and lifetime peak resident memory for this process without dependencies."""
     is_windows = os.name == "nt" if windows is None else windows

@@ -95,6 +95,15 @@ python -m bot.main --pc-cleanup-restore "C:\\path\\to\\BOTPYTON\\Quarantine\\ses
 - The result contains local file paths. No network, registry changes, file moves, deletions or settings changes occur.
 - Automated tests cover totals, ordering, limits, depth, invalid roots and symlink refusal. CI must pass before treating this phase as verified; real disk timing still depends on the target PC.
 
+## Phase 21 — Bounded SHA-256 duplicate-file inventory — implemented on the development branch
+
+- Run \`python -m bot.main --pc-duplicates "C:\\Users\\YOUR_USER\\Downloads"\` or choose S in the launcher. The user selects one folder; nothing scans an entire drive automatically.
+- Uses file-size grouping before hashing; only same-size candidates are read. SHA-256 is calculated in 256 KiB chunks, with a default 32 MiB per-file cap, 256 MiB aggregate hash budget, 2,000-hash cap, 5-second deadline and 5,000-entry metadata scan.
+- Hard scan limits: 20,000 entries, depth 8, top 25 groups, 10 seconds max. Oversized files, path/access failures, hash-budget exhaustion or timeouts make the result partial rather than implying a complete scan.
+- Refuses a linked/reparse root; skips linked/reparse descendants; verifies file size and nanosecond mtime before and after hashing. The output groups identical SHA-256 values and gives a potential duplicate-byte estimate only.
+- No file is moved, renamed, changed, or deleted. File contents are read locally to hash them but never sent over a network. The output lists local paths.
+- Automated tests cover identical vs same-size non-identical content, hash/file budgets and symlink-root rejection. CI must pass before treating this phase as verified.
+
 ## Safety and accuracy rules
 
 - A cleanup estimate is not a guarantee that every byte can be reclaimed; some files may be locked or actively used.

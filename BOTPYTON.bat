@@ -38,8 +38,10 @@ echo  O. Ver auditoria local de PC Care (solo lectura)
 echo  P. Vista previa de restauracion (integridad; no restaura)
 echo  Q. Medir recursos con un diagnostico de una pasada (solo lectura)
 echo  R. Analizar una carpeta para localizar archivos grandes (solo lectura)
+echo  S. Buscar archivos duplicados por SHA-256 (solo lectura; no borra)
 echo.
-choice /c 123456789ABCDEFGHIJKLMNOPQR /n /m "Selecciona una opcion: "
+choice /c 123456789ABCDEFGHIJKLMNOPQRS /n /m "Selecciona una opcion: "
+if errorlevel 28 goto duplicateanalysis
 if errorlevel 27 goto storageanalysis
 if errorlevel 26 goto resourcebenchmark
 if errorlevel 25 goto restorepreview
@@ -330,6 +332,20 @@ set "STORAGE_PATH="
 set /p "STORAGE_PATH=Ruta completa de la carpeta a analizar: "
 if not defined STORAGE_PATH goto menu
 python -m bot.main --pc-storage "%STORAGE_PATH%"
+echo.
+pause
+goto menu
+
+
+:duplicateanalysis
+echo.
+echo Busca duplicados exactos por hash dentro de una carpeta elegida.
+echo Lee archivos en bloques para calcular SHA-256; no los sube ni los borra.
+echo Limites por defecto: 5000 entradas, 5 segundos, maximo 32 MiB por archivo.
+set "DUPLICATE_PATH="
+set /p "DUPLICATE_PATH=Ruta completa de la carpeta a analizar: "
+if not defined DUPLICATE_PATH goto menu
+python -m bot.main --pc-duplicates "%DUPLICATE_PATH%"
 echo.
 pause
 goto menu
