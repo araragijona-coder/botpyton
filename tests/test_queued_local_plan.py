@@ -37,6 +37,30 @@ class QueuedLocalPlanTests(unittest.TestCase):
             self.assertEqual(result["actions"][0]["action"], "apply_local_plan")
             self.assertTrue(Path(root / result["report_path"]).is_file())
 
+    def test_failed_verification_prevents_task_success(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            task = {
+                "id": "worker-bad-hash-check",
+                "goal": "Demonstrate failed postcondition",
+                "allowed_actions": ["apply_local_plan", "prepare_report"],
+                "success_conditions": ["The created file matches the expected digest"],
+                "local_change_plan": {
+                    "schema_version": 1,
+                    "task_id": "worker-bad-hash-check",
+                    "changes": [{"path": "created.py", "content": "VALUE = 1\\n"}],
+                },
+                "verification_checks": [
+                    {"type": "local_plan_applied"},
+                    {"type": "file_sha256", "path": "created.py", "sha256": "0" * 64},
+                ],
+            }
+            result = TaskExecutor(root).execute({"payload": task, "attempts": 1})
+            self.assertFalse(result["ok"])
+            self.assertEqual(result["failed_action"], "verify_success_conditions")
+            self.assertFalse(result["verification"]["all_passed"])
+            self.assertTrue((root / "created.py").is_file())
+
     def test_local_plan_task_id_must_match_worker_task(self):
         task = {
             "id": "task-one",
