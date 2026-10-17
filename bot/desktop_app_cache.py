@@ -204,6 +204,8 @@ def preview_desktop_app_cache(*, env: dict[str, str] | None = None,
                                         errors += 1
                         except (OSError, RuntimeError):
                             errors += 1
+                except (OSError, RuntimeError):
+                    errors += 1
                 if stop:
                     break
         except (OSError, RuntimeError):
