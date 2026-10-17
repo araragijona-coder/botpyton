@@ -332,3 +332,10 @@ La pasada tiene límites estrictos: 5.000 entradas, profundidad 6, top 20 y cinc
 \`python -m bot.main --pc-duplicates "RUTA_DE_CARPETA"\` o la opción S busca archivos de contenido idéntico dentro de una carpeta que selecciones. Agrupa por tamaño antes de calcular SHA-256 en bloques de 256 KiB. Límites por defecto: 5.000 entradas, profundidad 6, cinco segundos, 32 MiB máximo por archivo y 256 MiB de lectura total para hashes. Los límites duros son 20.000 entradas, profundidad 8, diez segundos y 2.000 hashes.
 
 La salida estima el espacio potencialmente duplicado, pero no elimina archivos: puede haber hard links, archivos en uso o diferencias entre espacio estimado y realmente recuperable. Los contenidos se leen localmente solo para calcular hashes; no se envían a ningún servicio. Si se alcanza un límite, se informa un resultado parcial. Los informes contienen rutas locales.
+
+
+## Phase 22: inventario local de controladores
+
+Ejecuta \`python -m bot.main --pc-drivers\` o elige T en el menú. Obtiene del proveedor local de Windows una lista limitada de controladores Plug-and-Play: dispositivo, clase, fabricante/proveedor, versión, fecha, estado de firma e INF. Omite identificadores de dispositivo. La consulta utiliza PowerShell local con timeout de 15 segundos, límite de 200 registros y sin shell ni red.
+
+Esto es solo inventario. Una fecha antigua no demuestra que el controlador esté obsoleto, y esta fase no consulta catálogos de fabricantes ni descarga, instala, quita o desactiva controladores.

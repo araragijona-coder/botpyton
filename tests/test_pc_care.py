@@ -725,5 +725,83 @@ class PcCareTests(unittest.TestCase):
             self.assertTrue(timed["timeout_hit"])
             self.assertEqual(timed["files_hashed"], 0)
 
+    def test_driver_inventory_is_unsupported_off_windows_without_process(self):
+        from bot.pc_care import read_device_driver_inventory
+        with patch("bot.pc_care.subprocess.run") as run:
+            result = read_device_driver_inventory(windows=False)
+        self.assertEqual(result["status"], "unsupported_platform")
+        self.assertFalse(result["network_used"])
+        self.assertEqual(result["drivers_updated"], 0)
+        run.assert_not_called()
+
+    def test_driver_inventory_uses_fixed_local_powershell_query_and_bounds_output(self):
+        import json
+        from bot.pc_care import read_device_driver_inventory
+        with tempfile.TemporaryDirectory() as tmp:
+            powershell = Path(tmp) / "System32" / "WindowsPowerShell" / "v1.0" / "powershell.exe"
+            powershell.parent.mkdir(parents=True)
+            powershell.write_bytes(b"test placeholder")
+            payload = json.dumps({
+                "device_name": "Example Adapter",
+                "device_class": "Net",
+                "manufacturer": "Example Vendor",
+                "driver_provider": "Example Vendor",
+                "driver_version": "1.2.3.4",
+                "driver_date": "2025-01-02",
+                "is_signed": "True",
+                "inf_name": "oem42.inf",
+            })
+            with patch.dict(os.environ, {"SystemRoot": tmp}, clear=False):
+                with patch("bot.pc_care.subprocess.run", return_value=Mock(returncode=0, stdout=payload, stderr="")) as run:
+                    result = read_device_driver_inventory(windows=True)
+        self.assertEqual(result["status"], "collected")
+        self.assertEqual(result["items_count"], 1)
+        self.assertEqual(result["items"][0]["device_name"], "Example Adapter")
+        self.assertTrue(result["items"][0]["is_signed"])
+        self.assertFalse(result["network_used"])
+        self.assertEqual(result["drivers_updated"], 0)
+        command = run.call_args.args[0]
+        self.assertIn("-NoProfile", command)
+        self.assertIn("-NonInteractive", command)
+        self.assertIn("Get-CimInstance -ClassName Win32_PnPSignedDriver", command[-1])
+        self.assertIn("Select-Object -First 201", command[-1])
+        self.assertFalse(run.call_args.kwargs["shell"])
+        self.assertEqual(run.call_args.kwargs["timeout"], 15)
+
+    def test_driver_inventory_timeout_and_invalid_output_fail_closed(self):
+        import subprocess
+        from bot.pc_care import read_device_driver_inventory
+        with tempfile.TemporaryDirectory() as tmp:
+            powershell = Path(tmp) / "System32" / "WindowsPowerShell" / "v1.0" / "powershell.exe"
+            powershell.parent.mkdir(parents=True)
+            powershell.write_bytes(b"test placeholder")
+            with patch.dict(os.environ, {"SystemRoot": tmp}, clear=False):
+                with patch("bot.pc_care.subprocess.run", side_effect=subprocess.TimeoutExpired(cmd="powershell.exe", timeout=15)):
+                    timeout_result = read_device_driver_inventory(windows=True)
+                with patch("bot.pc_care.subprocess.run", return_value=Mock(returncode=0, stdout="not json", stderr="")):
+                    invalid_result = read_device_driver_inventory(windows=True)
+        self.assertEqual(timeout_result["status"], "timeout")
+        self.assertEqual(invalid_result["status"], "invalid_output")
+        self.assertEqual(timeout_result["drivers_updated"], 0)
+        self.assertEqual(invalid_result["drivers_updated"], 0)
+
+    def test_driver_inventory_caps_records_at_requested_limit(self):
+        import json
+        from bot.pc_care import read_device_driver_inventory
+        with tempfile.TemporaryDirectory() as tmp:
+            powershell = Path(tmp) / "System32" / "WindowsPowerShell" / "v1.0" / "powershell.exe"
+            powershell.parent.mkdir(parents=True)
+            powershell.write_bytes(b"test placeholder")
+            payload = json.dumps([
+                {"device_name": f"Device {i}", "is_signed": "False"} for i in range(4)
+            ])
+            with patch.dict(os.environ, {"SystemRoot": tmp}, clear=False):
+                with patch("bot.pc_care.subprocess.run", return_value=Mock(returncode=0, stdout=payload, stderr="")):
+                    result = read_device_driver_inventory(windows=True, limit=2)
+        self.assertEqual(result["status"], "partial_limit")
+        self.assertEqual(result["items_count"], 2)
+        self.assertFalse(result["items"][0]["is_signed"])
+
+
 if __name__ == "__main__":
     unittest.main()

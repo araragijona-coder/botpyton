@@ -39,8 +39,10 @@ echo  P. Vista previa de restauracion (integridad; no restaura)
 echo  Q. Medir recursos con un diagnostico de una pasada (solo lectura)
 echo  R. Analizar una carpeta para localizar archivos grandes (solo lectura)
 echo  S. Buscar archivos duplicados por SHA-256 (solo lectura; no borra)
+echo  T. Inventario de controladores locales (solo lectura; no actualiza)
 echo.
-choice /c 123456789ABCDEFGHIJKLMNOPQRS /n /m "Selecciona una opcion: "
+choice /c 123456789ABCDEFGHIJKLMNOPQRST /n /m "Selecciona una opcion: "
+if errorlevel 29 goto driverinventory
 if errorlevel 28 goto duplicateanalysis
 if errorlevel 27 goto storageanalysis
 if errorlevel 26 goto resourcebenchmark
@@ -346,6 +348,16 @@ set "DUPLICATE_PATH="
 set /p "DUPLICATE_PATH=Ruta completa de la carpeta a analizar: "
 if not defined DUPLICATE_PATH goto menu
 python -m bot.main --pc-duplicates "%DUPLICATE_PATH%"
+echo.
+pause
+goto menu
+
+
+:driverinventory
+echo.
+echo Inventario local de controladores Plug-and-Play.
+echo No consulta Internet, no declara controladores obsoletos y no instala ni actualiza nada.
+python -m bot.main --pc-drivers
 echo.
 pause
 goto menu

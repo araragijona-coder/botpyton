@@ -104,6 +104,15 @@ python -m bot.main --pc-cleanup-restore "C:\\path\\to\\BOTPYTON\\Quarantine\\ses
 - No file is moved, renamed, changed, or deleted. File contents are read locally to hash them but never sent over a network. The output lists local paths.
 - Automated tests cover identical vs same-size non-identical content, hash/file budgets and symlink-root rejection. CI must pass before treating this phase as verified.
 
+## Phase 22 — Local Windows device-driver inventory — implemented on the development branch
+
+- Run \`python -m bot.main --pc-drivers\` or choose T in the launcher.
+- Uses the standard Windows PowerShell binary from \`%SystemRoot%\\System32\\WindowsPowerShell\\v1.0\\powershell.exe\` and a fixed, non-interactive local \`Get-CimInstance Win32_PnPSignedDriver\` query. It does not accept paths, queries, or script fragments from user input.
+- Reads at most 201 metadata records from the provider and returns at most 200: device name/class, manufacturer, driver provider/version/date, signature state and INF name. It omits device IDs and serial-like identifiers from the report.
+- Fifteen-second timeout, fixed field/output caps, no shell, no network access, no installation/update/deletion/disable action. Non-Windows systems report unsupported.
+- Inventory metadata is not a verdict that a driver is obsolete. No vendor catalog comparison or driver package recommendation is made by this phase.
+- Regression tests cover platform gating, the fixed query shape, no-shell timeout, bad-output handling and record limits. The Windows CI smoke exercises the real inventory command; behavior on the user's PC still needs local validation.
+
 ## Safety and accuracy rules
 
 - A cleanup estimate is not a guarantee that every byte can be reclaimed; some files may be locked or actively used.

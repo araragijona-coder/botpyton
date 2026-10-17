@@ -855,6 +855,152 @@ MAX_DUPLICATE_PATH_CHARS = 1_024
 DUPLICATE_HASH_CHUNK_BYTES = 256 * 1024
 
 
+
+DRIVER_INVENTORY_TIMEOUT_SECONDS = 15
+DRIVER_INVENTORY_LIMIT = 200
+DRIVER_INVENTORY_STDOUT_MAX_BYTES = 500_000
+DRIVER_INVENTORY_FIELD_MAX_CHARS = 240
+
+
+def read_device_driver_inventory(*, windows: bool | None = None, limit: int = DRIVER_INVENTORY_LIMIT) -> dict:
+    """Read a bounded local Plug-and-Play driver inventory; never rates, installs, or updates drivers."""
+    is_windows = os.name == "nt" if windows is None else windows
+    if not isinstance(limit, int) or isinstance(limit, bool) or not 1 <= limit <= DRIVER_INVENTORY_LIMIT:
+        raise ValueError(f"limit must be between 1 and {DRIVER_INVENTORY_LIMIT}")
+    base_report = {
+        "product": "BOTPYTON PC Care",
+        "schema_version": 1,
+        "source": "Win32_PnPSignedDriver via local Windows PowerShell",
+        "status": "unavailable",
+        "read_only": True,
+        "network_used": False,
+        "drivers_installed": 0,
+        "drivers_updated": 0,
+        "settings_changed": False,
+        "items_count": 0,
+        "items": [],
+        "limit": limit,
+        "limitations": [
+            "This is a local metadata inventory only. It does not compare drivers to online vendor catalogs or determine that a driver is outdated.",
+            "No driver package is downloaded, installed, removed, disabled, or changed.",
+            "The query is bounded to a maximum of 201 returned records and 15 seconds.",
+            "Some devices/providers may expose incomplete metadata; inventory coverage is not a guarantee that every driver component is represented.",
+        ],
+    }
+    if not is_windows:
+        return {**base_report, "status": "unsupported_platform", "note": "Device-driver inventory requires Windows."}
+
+    system_root = os.environ.get("SystemRoot") or os.environ.get("WINDIR")
+    if not system_root:
+        return {**base_report, "status": "unavailable", "note": "The Windows system directory was not found."}
+    executable = Path(system_root) / "System32" / "WindowsPowerShell" / "v1.0" / "powershell.exe"
+    try:
+        if not executable.is_file() or _is_link_or_reparse(executable):
+            return {**base_report, "status": "unavailable", "note": "The standard Windows PowerShell executable was not found or did not pass path checks."}
+        executable = executable.resolve(strict=True)
+    except (OSError, RuntimeError, ValueError):
+        return {**base_report, "status": "unavailable", "note": "The standard Windows PowerShell executable could not be validated."}
+
+    script = (
+        "[Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false); "
+        "$ErrorActionPreference = 'Stop'; "
+        "function Get-BoundedText([object]$Value) { "
+        "$Text = [string]$Value; if ($Text.Length -gt 240) { $Text = $Text.Substring(0,240) }; return $Text }; "
+        "Get-CimInstance -ClassName Win32_PnPSignedDriver -ErrorAction Stop | "
+        "Select-Object -First 201 DeviceName,DeviceClass,Manufacturer,DriverProviderName,DriverVersion,DriverDate,IsSigned,InfName | "
+        "ForEach-Object { [PSCustomObject]@{ "
+        "device_name = (Get-BoundedText -Value $_.DeviceName); "
+        "device_class = (Get-BoundedText -Value $_.DeviceClass); "
+        "manufacturer = (Get-BoundedText -Value $_.Manufacturer); "
+        "driver_provider = (Get-BoundedText -Value $_.DriverProviderName); "
+        "driver_version = (Get-BoundedText -Value $_.DriverVersion); "
+        "driver_date = (Get-BoundedText -Value $_.DriverDate); "
+        "is_signed = (Get-BoundedText -Value $_.IsSigned); "
+        "inf_name = (Get-BoundedText -Value $_.InfName) } } | ConvertTo-Json -Compress -Depth 2"
+    )
+    try:
+        result = subprocess.run(
+            [
+                str(executable), "-NoLogo", "-NoProfile", "-NonInteractive",
+                "-Command", script,
+            ],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=DRIVER_INVENTORY_TIMEOUT_SECONDS,
+            check=False,
+            shell=False,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+    except subprocess.TimeoutExpired:
+        return {**base_report, "status": "timeout", "note": f"Local driver inventory exceeded {DRIVER_INVENTORY_TIMEOUT_SECONDS} seconds; no changes were made."}
+    except OSError as exc:
+        return {**base_report, "status": "query_unavailable", "note": f"Local driver inventory could not start ({type(exc).__name__}); no changes were made."}
+
+    if result.returncode != 0:
+        return {
+            **base_report,
+            "status": "query_error",
+            "return_code": int(result.returncode),
+            "note": "Windows returned an error for its local driver metadata query; no update or installation was attempted.",
+        }
+    output = result.stdout or ""
+    if len(output.encode("utf-8", errors="replace")) > DRIVER_INVENTORY_STDOUT_MAX_BYTES:
+        return {**base_report, "status": "output_too_large", "note": "Driver inventory exceeded the output safety cap; results were rejected."}
+    try:
+        decoded = json.loads(output) if output.strip() else []
+    except (TypeError, json.JSONDecodeError):
+        return {**base_report, "status": "invalid_output", "note": "Windows driver inventory output was not valid JSON; no data was inferred."}
+    if decoded is None:
+        records = []
+    elif isinstance(decoded, dict):
+        records = [decoded]
+    elif isinstance(decoded, list):
+        records = decoded
+    else:
+        return {**base_report, "status": "invalid_output", "note": "Windows driver inventory had an unexpected result shape."}
+    if any(not isinstance(record, dict) for record in records):
+        return {**base_report, "status": "invalid_output", "note": "Windows returned a driver record with an unexpected shape."}
+
+    items = []
+    for record in records[:limit]:
+        def bounded_text(key: str) -> str:
+            value = record.get(key, "")
+            return value.strip()[:DRIVER_INVENTORY_FIELD_MAX_CHARS] if isinstance(value, str) else ""
+
+        signed_raw = record.get("is_signed")
+        if isinstance(signed_raw, bool):
+            is_signed = signed_raw
+        elif isinstance(signed_raw, str) and signed_raw.strip().casefold() in {"true", "false"}:
+            is_signed = signed_raw.strip().casefold() == "true"
+        else:
+            is_signed = None
+        items.append({
+            "device_name": bounded_text("device_name"),
+            "device_class": bounded_text("device_class"),
+            "manufacturer": bounded_text("manufacturer"),
+            "driver_provider": bounded_text("driver_provider"),
+            "driver_version": bounded_text("driver_version"),
+            "driver_date": bounded_text("driver_date"),
+            "is_signed": is_signed,
+            "inf_name": bounded_text("inf_name"),
+        })
+    capped = len(records) > limit
+    return {
+        **base_report,
+        "status": "partial_limit" if capped else "collected",
+        "items_count": len(items),
+        "items": items,
+        "provider_records_seen": min(len(records), DRIVER_INVENTORY_LIMIT + 1),
+        "note": (
+            "Inventory reached its cap; records may be incomplete."
+            if capped else
+            "Local Plug-and-Play driver metadata only. Driver date/version is not evidence of being outdated; no online comparison or driver change was performed."
+        ),
+    }
+
+
 def find_duplicate_files(
     root: str | Path,
     *,
