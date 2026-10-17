@@ -30,6 +30,8 @@ class BoundedIOTests(unittest.TestCase):
                 st_dev=actual.st_dev,
                 st_ino=actual.st_ino,
                 st_size=10,
+                st_mtime=actual.st_mtime,
+                st_ctime=actual.st_ctime,
                 st_mtime_ns=actual.st_mtime_ns,
                 st_ctime_ns=actual.st_ctime_ns,
                 st_mode=actual.st_mode,
