@@ -49,6 +49,18 @@ class WorkspaceTests(unittest.TestCase):
         self.assertFalse(status["has_changes"])
         self.assertEqual(status["head_sha"], result["base_sha"])
 
+    def test_workspace_status_reports_changes_for_review(self):
+        result = create_isolated_workspace(
+            self.root, "task-review-diff", workspace_parent=self.base / "workspaces"
+        )
+        workspace = Path(result["workspace_path"])
+        (workspace / "app.py").write_text("VALUE = 2\\n", encoding="utf-8")
+        status = inspect_workspace(workspace)
+        self.assertTrue(status["has_changes"])
+        self.assertIn("app.py", status["working_tree_status"])
+        self.assertIn("app.py", status["diff_stat"])
+        self.assertFalse(status["merge_performed"])
+
     def test_refuses_dirty_source_repository(self):
         (self.root / "uncommitted.py").write_text("VALUE = 2\n", encoding="utf-8")
         with self.assertRaisesRegex(WorkspaceError, "not clean"):
