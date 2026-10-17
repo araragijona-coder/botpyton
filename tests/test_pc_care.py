@@ -190,7 +190,7 @@ class PcCareTests(unittest.TestCase):
             result = quarantine_cleanup_candidates(
                 preview, confirmation=QUARANTINE_CONFIRMATION,
                 scan_roots=[("temporary files", temp_root)],
-                quarantine_root=quarantine_root, now=now,
+                quarantine_root=quarantine_root, now=now, audit_dir=Path(tmp) / "audit",
             )
             self.assertEqual(result["status"], "completed")
             self.assertEqual(result["files_quarantined"], 1)
@@ -241,7 +241,7 @@ class PcCareTests(unittest.TestCase):
             result = quarantine_cleanup_candidates(
                 preview, confirmation=QUARANTINE_CONFIRMATION,
                 scan_roots=[("temporary files", root)],
-                quarantine_root=Path(tmp) / "Quarantine", now=now,
+                quarantine_root=Path(tmp) / "Quarantine", now=now, audit_dir=Path(tmp) / "audit",
             )
             self.assertEqual(result["files_quarantined"], 0)
             self.assertTrue(old_file.exists())
@@ -264,7 +264,7 @@ class PcCareTests(unittest.TestCase):
             moved = quarantine_cleanup_candidates(
                 preview, confirmation=QUARANTINE_CONFIRMATION,
                 scan_roots=[("temporary files", root)],
-                quarantine_root=quarantine_root, now=now,
+                quarantine_root=quarantine_root, now=now, audit_dir=Path(tmp) / "audit",
             )
             self.assertEqual(moved["files_quarantined"], 1)
             old_file.write_bytes(b"user's new file")
@@ -492,6 +492,19 @@ class PcCareTests(unittest.TestCase):
             self.assertEqual(result["status"], "integrity_error")
             self.assertEqual(result["integrity_status"], "error")
             self.assertEqual(result["items"][0]["integrity"], "failed")
+
+
+    def test_no_replace_move_preserves_an_existing_destination(self):
+        from bot.pc_care import _move_no_replace
+        with tempfile.TemporaryDirectory() as tmp:
+            source = Path(tmp) / "source.tmp"
+            destination = Path(tmp) / "destination.tmp"
+            source.write_bytes(b"source content")
+            destination.write_bytes(b"keep existing content")
+            with self.assertRaises(FileExistsError):
+                _move_no_replace(source, destination)
+            self.assertEqual(source.read_bytes(), b"source content")
+            self.assertEqual(destination.read_bytes(), b"keep existing content")
 
 
 if __name__ == "__main__":
