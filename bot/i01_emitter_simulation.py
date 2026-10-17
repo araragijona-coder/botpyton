@@ -60,7 +60,11 @@ def _valid_ref(value: Any) -> bool:
     if value.startswith("/") or value.endswith(("/", ".")) or "//" in value or ".." in value or "@{" in value:
         return False
     parts = value.split("/")
-    if any(not part or part in {".", ".."} or part.endswith(".lock") for part in parts):
+    if any(
+        not part or part in {".", ".."} or part.startswith(".")
+        or part.endswith(".") or part.lower().endswith(".lock")
+        for part in parts
+    ):
         return False
     return True
 
