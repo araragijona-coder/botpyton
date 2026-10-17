@@ -63,3 +63,25 @@ Audited at candidate commit `2d948aa842f38c96ddbac118197f577570ba1746`.
 - Obtain independent administrative evidence for default-branch protection, required reviews/checks, Actions token defaults, and who may dispatch/approve privileged workflows.
 
 **Disposition: OPEN / FAIL-CLOSED / NOT CLEARED FOR LIVE SUBMISSION.** This audit note is a source-level assessment, not proof of an authenticated checkpoint boundary.
+
+## Adversarial spoofing tests — worker claims vs trusted evidence (2026-10-17)
+
+Candidate code under test: `82c1244422726913da14888d33488f14077cc796`; final exact-SHA CI is pending until the documentation commit is complete.
+
+### Change made
+
+The simulation emitter no longer accepts `authenticated_actor` or `resolved_head_sha` as per-request keyword arguments. It receives an evidence resolver once during construction and invokes it using the requested repository/ref; request data cannot directly provide the actor or independently resolved SHA. The resolver is explicitly a trusted-deployment dependency, not implemented by this simulation.
+
+### Adversarial cases added
+
+- Passing identity/SHA as per-call arguments raises `TypeError` and records no operation.
+- Adding `authenticated_actor`, `verified_actor`, `resolved_head_sha`, or `verified_head_sha` to the request is rejected as an unexpected field.
+- A request SHA differing from the resolver's SHA is rejected before recording.
+- Resolver failure is fail-closed and records no operation.
+- Existing unauthorized actor, malformed SHA, policy, and no-live-write cases remain covered.
+
+### Security interpretation
+
+These are regression tests for the interface and fail-closed behavior; they do **not** prove the resolver is independent. The simulation fixture uses a test resolver. A real deployment must bind the resolver to authenticated transport metadata and an authoritative GitHub ref/commit lookup, in a separately protected sender environment inaccessible to worker-controlled code. The worker must not be allowed to instantiate or replace that production resolver, change sender policy, or access sender credentials.
+
+**Disposition remains OPEN / FAIL-CLOSED / NOT CLEARED FOR LIVE SUBMISSION.**
