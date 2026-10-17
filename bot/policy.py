@@ -9,6 +9,7 @@ ALLOWED_ACTIONS = frozenset({
     "validate_task",
     "run_tests",
     "apply_known_fix",
+    "apply_local_plan",
     "prepare_report",
 })
 PROTECTED_PATH_PREFIXES = (
@@ -43,6 +44,14 @@ def validate_task(task: dict[str, Any]) -> None:
     deps = task.get("depends_on", [])
     if not isinstance(deps, list) or not all(isinstance(d, str) for d in deps):
         raise PolicyError("depends_on must be a list of task IDs")
+    if "apply_local_plan" in actions:
+        local_plan = task.get("local_change_plan")
+        if not isinstance(local_plan, dict):
+            raise PolicyError("apply_local_plan requires a local_change_plan object")
+        if local_plan.get("schema_version") != 1:
+            raise PolicyError("local_change_plan schema_version must be 1")
+        if local_plan.get("task_id") != task["id"]:
+            raise PolicyError("local_change_plan task_id must match the queue task id")
 
 
 def validate_relative_path(path: str) -> str:
