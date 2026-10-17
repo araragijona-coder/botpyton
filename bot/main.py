@@ -160,7 +160,7 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         if args.github_plan:
             plan_path = Path(validate_relative_path(args.github_plan))
-            plan_data = json.loads(plan_path.read_text(encoding="utf-8"))
+            plan_data = _read_bounded_json(str(plan_path))
             client = GitHubClient()
             result = submit_change_plan(plan_data, client=client, execute=args.execute_github_plan)
             _print_json(result)
@@ -176,19 +176,25 @@ def main(argv: list[str] | None = None) -> int:
             _print_json(result)
             return 0
         if args.validate_task:
-            task = json.loads(Path(args.validate_task).read_text(encoding="utf-8"))
+            task = _read_bounded_json(args.validate_task)
+            if not isinstance(task, dict):
+                raise PolicyError("Task file must contain a JSON object")
             validate_task(task)
             print(f"VALID task={task['id']}")
             return 0
         if args.plan:
-            tasks = json.loads(Path(args.plan).read_text(encoding="utf-8"))
+            tasks = _read_bounded_json(args.plan)
             if not isinstance(tasks, list):
                 raise PolicyError("Plan file must contain a JSON array")
             print("\n".join(task["id"] for task in order_tasks(tasks)))
             return 0
         if args.diagnose:
             log_path = Path(validate_relative_path(args.diagnose))
+            if log_path.stat().st_size > 50_000:
+                raise OrchestrationError("Diagnostic log exceeds 50000 bytes")
             log_text = log_path.read_text(encoding="utf-8")
+            if len(log_text.encode("utf-8")) > 50_000:
+                raise OrchestrationError("Diagnostic log exceeds 50000 bytes")
             _print_json(diagnose_failure(log_text, Path.cwd()))
             return 0
         if args.check:
@@ -202,7 +208,7 @@ def main(argv: list[str] | None = None) -> int:
 
         queue = TaskQueue(JsonMemory(args.memory))
         if args.enqueue:
-            incoming = json.loads(Path(args.enqueue).read_text(encoding="utf-8"))
+            incoming = _read_bounded_json(args.enqueue)
             tasks = incoming if isinstance(incoming, list) else [incoming]
             _print_json([{"id": record["payload"]["id"], "status": record["status"],
                           "idempotency_key": record["idempotency_key"]}
