@@ -14,18 +14,16 @@ BotPyton is a deterministic software-work automation bot. It uses **no AI models
 
 ## Interfaz de escritorio
 
-La forma recomendada de usar BOTPYTON es **hacer doble clic en `BOTPYTON.bat`**. Se abre un panel de escritorio con categorías, botones en lenguaje común, resultados resumidos y selección manual de archivos. No hace falta memorizar comandos.
+La forma más sencilla de usar BOTPYTON es **hacer doble clic en `BOTPYTON.bat`**. Se abre una pantalla simple: no hace falta conocer comandos ni interpretar informes de programación.
 
-- **Inicio:** análisis local del PC y herramientas de uso frecuente.
-- **Cuidado del PC:** vista previa de temporales y cachés, selección de archivos para cuarentena reversible, información de memoria, inicio, aplicaciones y discos.
-- **Proyectos:** elegir una carpeta, inspeccionarla, descubrir pruebas conocidas y ejecutar una tarea solo después de una confirmación.
-- **Más herramientas:** diagnóstico del programa, cola de tareas, pruebas y ZIP del código fuente.
-- Los resultados se explican en lenguaje común; el informe JSON completo queda disponible al pulsar **Ver JSON técnico**.
-- Solo se ejecuta una operación a la vez. La ventana no instala un servicio ni se añade al inicio de Windows. Las tareas sensibles piden confirmación y la cuarentena tiene recuperación desde `manifest.json`.
+- **Analizar mi PC:** encadena ocho comprobaciones locales en serie: estado general, recursos básicos, uso de memoria, programas de inicio, aplicaciones instaladas, discos, controladores y temporales antiguos.
+- La ventana muestra el nombre de cada etapa en lenguaje común y resume los resultados. Los comandos y los informes originales quedan escondidos tras **Ver detalle técnico**.
+- El análisis es de solo lectura: no elimina archivos, no cierra programas, no instala controladores, no consulta actualizaciones por Internet y no cambia configuraciones.
+- **Revisar archivos** solo crea una vista previa. Para elegir archivos individualmente, ponerlos en cuarentena reversible o restaurarlos, abrí **Más herramientas** en la pantalla simple o ejecutá `python -m bot.gui`.
+- **BOTPYTON-CLI.bat** conserva el menú de texto para quien lo prefiera. Las tareas de proyecto, cola, pruebas, auditoría y otras funciones avanzadas siguen disponibles en la interfaz completa.
+- La aplicación se inicia a demanda, ejecuta una operación a la vez y no instala servicios ni se agrega al inicio de Windows. Las comprobaciones se ejecutan en serie para evitar trabajo paralelo innecesario.
 - Requiere Python 3.11+ con Tk/Tcl habilitado. Usa la biblioteca estándar, sin dependencias de interfaz externas ni servicios de IA.
-- Para conservar el menú anterior basado en texto, ejecuta `BOTPYTON-CLI.bat`.
-
-Esta interfaz no convierte aún el proyecto en un ejecutable autónomo. El ZIP portátil sigue siendo un paquete de código fuente.
+- Es una revisión técnica amplia, no un antivirus, una búsqueda exhaustiva de cada archivo del disco ni una reparación automática. El resultado puede indicar límites si Windows no permite consultar algún dato.
 
 ## Quick start
 
