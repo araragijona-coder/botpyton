@@ -55,6 +55,28 @@ class LocalPlanCliTests(unittest.TestCase):
         self.assertLessEqual(report["recommended_child_memory_limit_mb"], 768)
         self.assertFalse(report["network_used"])
 
+    def test_project_check_discovery_cli_is_static(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            (root / "tests").mkdir()
+            output = io.StringIO()
+            with contextlib.redirect_stdout(output):
+                code = main(["--list-project-checks", "--project-root", str(root)])
+            self.assertEqual(code, 0)
+            report = json.loads(output.getvalue())
+            self.assertFalse(report["project_code_executed"])
+            self.assertEqual(report["checks"][0]["check_id"], "python-unittest")
+
+    def test_project_check_cli_requires_explicit_code_execution(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            (root / "tests").mkdir()
+            errors = io.StringIO()
+            with contextlib.redirect_stderr(errors):
+                code = main(["--run-project-check", "python-unittest", "--project-root", str(root)])
+            self.assertEqual(code, 2)
+            self.assertIn("explicit approval is required", errors.getvalue())
+
 
 if __name__ == "__main__":
     unittest.main()
