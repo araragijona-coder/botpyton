@@ -133,6 +133,34 @@ def default_scan_roots(env: dict[str, str] | None = None) -> list[tuple[str, Pat
     return roots
 
 
+
+def _is_conventional_temp_path(
+    path: str | Path,
+    *,
+    env: dict[str, str] | None = None,
+    windows: bool | None = None,
+) -> bool:
+    """Allow execution only in the canonical per-user Windows Temp directory."""
+    is_windows = os.name == "nt" if windows is None else windows
+    if not is_windows:
+        return False
+    environ = os.environ if env is None else env
+    local_app_data = environ.get("LOCALAPPDATA")
+    if not local_app_data:
+        return False
+    try:
+        actual = Path(path).expanduser().resolve(strict=True)
+        expected = (Path(local_app_data).expanduser() / "Temp").resolve(strict=True)
+        if not actual.is_dir() or not expected.is_dir():
+            return False
+        if os.path.normcase(str(actual)) != os.path.normcase(str(expected)):
+            return False
+        # Reject junctions/symlinks in ancestors as well as at the root itself.
+        return _no_link_components(actual)
+    except (OSError, RuntimeError, ValueError):
+        return False
+
+
 def read_startup_entries(*, windows: bool | None = None) -> dict:
     """List startup registry value names and Startup-folder filenames, never commands."""
     is_windows = os.name == "nt" if windows is None else windows
@@ -400,6 +428,9 @@ def get_cleanup_preview(
             skipped_roots.append({"label": label, "reason": "not_an_approved_temporary_directory"})
             continue
         root = Path(root_value).expanduser()
+        if scan_roots is None and not _is_conventional_temp_path(root):
+            skipped_roots.append({"label": label, "reason": "not_a_conventional_user_temp_path"})
+            continue
         try:
             if not root.is_dir() or _is_link_or_reparse(root):
                 skipped_roots.append({"label": label, "reason": "missing_or_linked_root"})
@@ -508,6 +539,8 @@ def _approved_temporary_roots(scan_roots: list[tuple[str, Path]] | None) -> dict
         if not isinstance(label, str) or not _is_temporary_root_label(label) or label in approved:
             continue
         root = Path(value).expanduser()
+        if scan_roots is None and not _is_conventional_temp_path(root):
+            continue
         try:
             if root.is_dir() and not _is_link_or_reparse(root):
                 approved[label] = root.resolve(strict=True)

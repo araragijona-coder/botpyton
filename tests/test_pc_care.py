@@ -277,5 +277,20 @@ class PcCareTests(unittest.TestCase):
             self.assertEqual(restored["files_skipped"], 1)
 
 
+    def test_cleanup_execution_root_must_be_canonical_windows_user_temp(self):
+        from bot.pc_care import _is_conventional_temp_path
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            local_app_data = root / "AppData" / "Local"
+            canonical_temp = local_app_data / "Temp"
+            personal_documents = root / "Documents"
+            canonical_temp.mkdir(parents=True)
+            personal_documents.mkdir()
+            env = {"LOCALAPPDATA": str(local_app_data), "TEMP": str(personal_documents)}
+            self.assertTrue(_is_conventional_temp_path(canonical_temp, env=env, windows=True))
+            self.assertFalse(_is_conventional_temp_path(personal_documents, env=env, windows=True))
+            self.assertFalse(_is_conventional_temp_path(canonical_temp, env=env, windows=False))
+
+
 if __name__ == "__main__":
     unittest.main()

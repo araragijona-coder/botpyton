@@ -38,7 +38,7 @@ python -m bot.main --pc-cleanup-restore "C:\\path\\to\\BOTPYTON\\Quarantine\\ses
 
 - Execution always performs a fresh scan; it accepts only a complete preview with at most 100 candidates.
 - Before moving any file, it prints the exact path list and requires the exact phrase \`QUARANTINE OLD TEMP FILES\`. Any other input cancels without moving files.
-- Eligible files are revalidated against an approved conventional temporary root, regular-file type, no symlink/reparse components, exact preview size/timestamp, and minimum age.
+- Eligible files are revalidated against the canonical per-user Windows `%LOCALAPPDATA%\\Temp` root, regular-file type, no symlink/reparse components, exact preview size/timestamp, and minimum age. If `TEMP` is misconfigured to a personal folder, it is not accepted for execution.
 - Files are moved with \`os.replace\` to \`%LOCALAPPDATA%\\BOTPYTON\\Quarantine\\session-...\\\`; a JSON manifest is atomically written before and after each move.
 - Restoration requires the exact phrase \`RESTORE BOTPYTON QUARANTINE\`, accepts only a manifest in a BOTPYTON quarantine session, validates original paths against approved temporary roots and never overwrites an existing original path.
 - Cross-volume moves or files locked by a process may fail safely. Those files remain in place or in quarantine and are reported.
