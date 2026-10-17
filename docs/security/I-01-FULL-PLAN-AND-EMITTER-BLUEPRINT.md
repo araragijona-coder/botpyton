@@ -11,7 +11,7 @@
 - CI run: https://github.com/araragijona-coder/botpyton/actions/runs/38987022365 — conclusion success; head_sha matches the candidate; test log reports 96 tests and OK.
 - The run has pull_requests: []; it did not create a PR.
 - Repository-level rulesets query returned an empty list. This does not prove organization-level rulesets are absent.
-- Branch enumeration showed protected:false. Direct branch protection read for main returned HTTP 403 Resource not accessible by integration. Treat this as UNKNOWN, not proof of no protection.
+- Fresh branch API read for main returned protected:false and protection.enabled:false. This is direct evidence that GitHub's branch-protection API does not report main as protected at the time of the read. Repository-level rulesets query was empty; organization-level or other external controls remain unknown and would need separate evidence. This conflicts with the operator-reported completed checkbox and must be reconciled before I-01 can close.
 - Actions permissions endpoints were rejected by the connector allowlist; effective repository and organization settings remain UNKNOWN.
 - .github/workflows was not found on main; candidate branch contains workflows. This does not establish whether an organization policy overrides repository settings.
 - No secret values or privileged credential contents were read.
@@ -34,7 +34,7 @@
 | Candidate CI on exact SHA | VERIFIED | Workflow run head SHA matches; success; 96 tests OK |
 | Live sender disabled in candidate workflows | VERIFIED in candidate source | sender job has if:false and read-only permissions |
 | Repository rulesets | OBSERVED EMPTY | Does not rule out organization rulesets |
-| main branch protection | OPERATOR-REPORTED COMPLETE / UNKNOWN VERIFIED STATE | User checklist marked complete; API 403 from integration; no supporting settings evidence attached |
+| main branch protection | CONFLICT / REQUIRES RECONCILIATION | User checklist marked complete, but fresh branch API returned protected:false and protection.enabled:false; repository-level rulesets query empty; external/org controls not verified |
 | Effective Actions policy | OPERATOR-REPORTED COMPLETE / UNKNOWN VERIFIED STATE | User checklist marked complete; endpoint inaccessible through connector; no supporting settings evidence attached |
 | Workflow approval and untrusted-workflow policy | OPERATOR-REPORTED COMPLETE / UNKNOWN VERIFIED STATE | User checklist marked complete; effective policy not independently inspected |
 | Credential inventory / worker isolation | OPERATOR-REPORTED COMPLETE / UNKNOWN VERIFIED STATE | User checklist marked complete; no secret values read and no independent proof of isolation attached |
