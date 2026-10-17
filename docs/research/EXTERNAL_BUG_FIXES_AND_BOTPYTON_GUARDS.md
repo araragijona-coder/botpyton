@@ -253,7 +253,7 @@ Las notas oficiales de BleachBit 6.0.4 describen el uso de rutas absolutas para 
 
 - La lista saneada descarta una entrada si su ruta absoluta normalizada está dentro del directorio de trabajo, no solo cuando coincide exactamente con él.
 - También descarta alias de symlink/junction ubicados léxicamente bajo el directorio de trabajo, incluso si su destino resuelto apunta fuera; además, rechaza entradas externas cuyo destino canónico vuelva a caer dentro del árbol de trabajo.
-- La comprobación usa límites de componentes de ruta (`os.path.commonpath` + normalización de plataforma), evitando comparaciones de prefijos textuales que confundan, por ejemplo, `project-tools` con `project`.
+- La comprobación usa rutas normalizadas y compara el límite con un separador de directorio incluido, evitando que un prefijo vecino como `project-tools` se confunda con `project`; se evalúa tanto la ruta léxica como la ruta canónica resuelta.
 - Se agregaron regresiones para subdirectorios de herramientas, alias simbólicos y el `PATH` observado por un proceso secundario.
 
 ### Fuentes oficiales
