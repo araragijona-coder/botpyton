@@ -73,13 +73,9 @@ def exclusive_file_lock(path: str | Path) -> Iterator[None]:
             if os.name == "nt":
                 import msvcrt
 
-                # Windows byte-range locks require the locked byte to exist on
-                # older runtimes/filesystems; concurrent initialization writes
-                # the same single NUL byte before anyone acquires the lock.
-                if opened.st_size == 0:
-                    os.lseek(descriptor, 0, os.SEEK_SET)
-                    os.write(descriptor, b"\0")
-                    os.fsync(descriptor)
+                # Windows permits locking a byte range beyond EOF. Do not
+                # initialize the file first: that would race with a process
+                # that has already acquired the exclusive lock.
                 os.lseek(descriptor, 0, os.SEEK_SET)
                 msvcrt.locking(descriptor, msvcrt.LK_LOCK, 1)
             else:
