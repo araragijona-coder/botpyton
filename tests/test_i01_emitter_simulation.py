@@ -178,5 +178,67 @@ class SimulationEmitterTests(unittest.TestCase):
         self.assert_rejected_without_operations(changed)
         self.assertEqual(len(self.recorder.operations), 1)
 
+
+    def test_policy_rejects_empty_or_malformed_allowlists(self):
+        invalid_policies = [
+            {"authorized_actors": frozenset()},
+            {"authorized_actors": frozenset({"  "})},
+            {"authorized_actors": frozenset({7})},
+            {"allowed_base_refs": frozenset()},
+            {"allowed_base_refs": frozenset({"bad//ref"})},
+            {"allowed_base_refs": frozenset({"../main"})},
+            {"allowed_head_prefixes": ()},
+            {"allowed_head_prefixes": ("bot-bootstrap",)},
+            {"allowed_head_prefixes": ("../",)},
+        ]
+        for overrides in invalid_policies:
+            with self.subTest(overrides=overrides):
+                kwargs = {
+                    "repository": "araragijona-coder/botpyton",
+                    "authorized_actors": frozenset({"trusted-worker"}),
+                    "allowed_base_refs": frozenset({"main"}),
+                    "allowed_head_prefixes": ("bot-bootstrap/",),
+                }
+                kwargs.update(overrides)
+                with self.assertRaises(ValueError):
+                    EmitterPolicy(**kwargs)
+
+    def test_returned_operation_cannot_mutate_recorded_audit_entry(self):
+        result = self.emitter.process(
+            request(), authenticated_actor="trusted-worker", resolved_head_sha=VALID_SHA
+        )
+        result["live_write_performed"] = True
+        result["repository"] = "attacker/repo"
+        self.assertFalse(self.recorder.operations[0]["live_write_performed"])
+        self.assertEqual(
+            self.recorder.operations[0]["repository"], "araragijona-coder/botpyton"
+        )
+
+    def test_simulation_module_has_no_network_process_or_filesystem_imports(self):
+        import ast
+        from pathlib import Path
+
+        source = Path("bot/i01_emitter_simulation.py").read_text(encoding="utf-8")
+        tree = ast.parse(source)
+        forbidden_roots = {
+            "socket", "subprocess", "requests", "httpx", "urllib", "http",
+            "pathlib", "os", "shutil", "ftplib", "telnetlib",
+        }
+        imported_roots = set()
+        forbidden_calls = {"eval", "exec", "open", "compile", "__import__"}
+        called_names = set()
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                imported_roots.update(alias.name.split(".")[0] for alias in node.names)
+            elif isinstance(node, ast.ImportFrom) and node.module:
+                imported_roots.add(node.module.split(".")[0])
+            elif isinstance(node, ast.Call):
+                if isinstance(node.func, ast.Name):
+                    called_names.add(node.func.id)
+                elif isinstance(node.func, ast.Attribute):
+                    called_names.add(node.func.attr)
+        self.assertFalse(imported_roots & forbidden_roots)
+        self.assertFalse(called_names & forbidden_calls)
+
 if __name__ == "__main__":
     unittest.main()
