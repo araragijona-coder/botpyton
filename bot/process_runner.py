@@ -37,13 +37,21 @@ class ProcessRunnerError(ValueError):
     """Raised when a process request violates execution policy."""
 
 
+def _path_is_same_or_within(path: Path, root: Path) -> bool:
+    """Compare canonical path boundaries without confusing sibling prefixes."""
+    try:
+        common = os.path.commonpath((str(path), str(root)))
+    except (OSError, ValueError):
+        return False
+    return os.path.normcase(os.path.normpath(common)) == os.path.normcase(os.path.normpath(str(root)))
+
+
 def _safe_search_path(path_value: str | None, *, cwd: str | Path) -> str:
-    """Keep only absolute, existing PATH directories and exclude the working directory."""
+    """Keep absolute existing PATH directories outside cwd and its descendants."""
     safe: list[str] = []
     seen: set[str] = set()
     try:
         current = Path(cwd).expanduser().resolve(strict=True)
-        current_key = os.path.normcase(os.path.normpath(str(current)))
     except (OSError, RuntimeError, ValueError):
         return ""
     if not isinstance(path_value, str) or not path_value:
@@ -55,12 +63,17 @@ def _safe_search_path(path_value: str | None, *, cwd: str | Path) -> str:
         if not candidate.is_absolute():
             continue
         try:
+            # Reject lexical paths under cwd even if a repository-local junction/symlink
+            # resolves elsewhere. Also reject external aliases which resolve back into cwd.
+            lexical = Path(os.path.abspath(str(candidate)))
+            if _path_is_same_or_within(lexical, current):
+                continue
             resolved = candidate.resolve(strict=True)
-            if not resolved.is_dir():
+            if not resolved.is_dir() or _path_is_same_or_within(resolved, current):
                 continue
             resolved_text = str(resolved)
             key = os.path.normcase(os.path.normpath(resolved_text))
-            if key == current_key or key in seen:
+            if key in seen:
                 continue
         except (OSError, RuntimeError, ValueError):
             continue
