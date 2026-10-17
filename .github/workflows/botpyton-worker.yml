@@ -233,7 +233,8 @@ jobs:
           retention-days: 7
 
   submit-draft-prs:
-    if: github.event_name == 'workflow_dispatch' && inputs.execute_prs == true
+    # I-01 fail-closed: no external trust boundary is configured/verified yet.
+    if: false
     needs: [validate-inputs, worker]
     runs-on: ubuntu-latest
     timeout-minutes: 8
@@ -252,7 +253,6 @@ jobs:
       - name: Submit validated draft-only change plans
         env:
           GITHUB_REPOSITORY: ${{ github.repository }}
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           BOTPYTON_CHANGE_PLANS_JSON: ${{ inputs.change_plans_json || '[]' }}
         run: |
           python - <<'PY'
