@@ -79,3 +79,32 @@ En `bot/pc_care.py`, `_persist_pc_care_audit_event()` comprobaba que el nombre f
 Los puntos sobre variables de entorno heredadas, XML/URI y DLL search path de BleachBit se registran como controles preventivos a mantener en futuras funciones; no se afirma que BOTPYTON reproduzca esos fallos. BOTPYTON no debe añadir reglas de limpieza descargables ni ejecutar definiciones de limpieza suministradas por usuarios como código. Los procesos ya auditados usan `shell=False`; las futuras llamadas deben conservar ejecutables explícitos, argumentos separados y límites temporales.
 
 Esta corrección aún requiere que pasen las pruebas de CI de la rama y las pruebas posteriores a la integración en `main`. La CI no equivale a una prueba en el PC del usuario.
+
+
+## Auditoría adicional — 2026-10-17: publicación exclusiva y preservación de cambios concurrentes
+
+### Notas oficiales revisadas
+
+- BleachBit 6.0.2 documenta una corrección de seguridad para evitar que la limpieza con privilegios elevados pudiera borrar archivos arbitrarios, además de cambios de robustez para enlaces simbólicos: https://www.bleachbit.org/news/bleachbit-602
+- El aviso GHSA-q5ww-c3j6-8j23 explica que una definición de limpieza maliciosa colocada en una ubicación escribible podía ejecutar comandos en versiones anteriores a BleachBit 6.0.3: https://github.com/bleachbit/bleachbit/security/advisories/GHSA-q5ww-c3j6-8j23
+- El historial oficial de CCleaner registra una corrección de seguridad relacionada con escritura de archivos, fallos de sincronización al cerrar mientras existen tareas en curso y un arreglo para que las limpiezas programadas respeten las exclusiones: https://www.ccleaner.com/ccleaner/version-history/
+- Python documenta que la resistencia de operaciones recursivas frente a enlaces simbólicos varía según la plataforma y la implementación: https://docs.python.org/3/library/shutil.html
+
+### Hallazgo concreto confirmado en BOTPYTON
+
+En `bot/local_changes.py`, el plan de cambios locales validaba que un archivo nuevo no existiera y después `_write_atomic()` publicaba el temporal mediante `os.replace()`. Si otro proceso creaba el destino entre ambas operaciones, el reemplazo podía sobrescribir el archivo que acababa de aparecer. Además, la ruta de copias de seguridad era determinista y la escritura atómica podía reemplazar una copia previa sin comprobar que sus bytes correspondieran al original esperado.
+
+### Correcciones añadidas en la rama candidata
+
+- Los archivos **nuevos** se publican con creación exclusiva mediante `os.link()`: si ya existe el destino, la operación falla y conserva el contenido existente; no se degrada a `os.replace()`.
+- Los archivos de respaldo ya existentes se aceptan únicamente cuando son archivos regulares, no contienen enlaces/reparse points y su SHA-256 coincide con los bytes originales que se quieren respaldar. Un respaldo diferente se conserva y bloquea el plan.
+- Antes de escribir se rechazan componentes existentes que sean enlaces simbólicos o puntos de reanálisis de Windows en la raíz del proyecto, la ruta de respaldo y los destinos.
+- Para reemplazar un archivo existente, la publicación vuelve a comprobar el hash esperado tras preparar el temporal. Si el contenido cambió, aborta.
+- Si una operación posterior falla, el rollback verifica que cada destino aún contiene los bytes escritos por BOTPYTON antes de restaurar o retirar ese archivo. Un cambio externo concurrente no debe borrarse silenciosamente durante el rollback.
+- Se agregaron pruebas de regresión para colisión en la creación de un archivo nuevo, respaldo previo con contenido diferente, cambio concurrente de un archivo existente y raíz marcada como reparse point.
+
+### Límite explícito
+
+Las operaciones portables de rutas de Python no proporcionan una garantía universal de compare-and-swap de archivo y directorio contra un proceso hostil que compita exactamente en el último instante. Las comprobaciones cercanas a publicación reducen la ventana y las creaciones exclusivas impiden reemplazar destinos nuevos; no deben describirse como una solución matemática a toda carrera TOCTOU. BOTPYTON debe seguir rechazando enlaces/reparse points y abortar cuando detecta una discrepancia.
+
+Estas son correcciones locales, sin servicios residentes, llamadas de IA, nuevas dependencias ni limpieza automática no solicitada. La integración queda condicionada a pruebas de CI; esa CI tampoco sustituye una prueba en el PC del usuario.
