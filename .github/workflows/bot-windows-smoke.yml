@@ -28,6 +28,8 @@ jobs:
         run: python -m unittest discover -s tests -v
       - name: Report available RAM and disk
         run: python -m bot.main --system-profile
+      - name: Run actionable read-only preflight
+        run: python -m bot.main --doctor
       - name: Exercise bounded read-only PC care benchmark
         run: python -m bot.main --pc-benchmark
       - name: Inventory local device-driver metadata (read-only)

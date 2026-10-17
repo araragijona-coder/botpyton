@@ -24,6 +24,7 @@ from .repository_analyzer import inspect_repository
 from .process_runner import ProcessRunnerError, run_tool_probe
 from .tool_registry import discover_tools
 from .system_profile import get_system_profile
+from .doctor import run_preflight
 from .pc_care import get_pc_care_report, QUARANTINE_CONFIRMATION, RESTORE_CONFIRMATION, quarantine_cleanup_candidates, restore_quarantined_files, check_application_updates, preview_quarantined_restore, read_pc_care_audit
 from .packaging import build_portable_package, verify_portable_archive
 from .pc_care import get_pc_care_benchmark, analyze_storage_path, find_duplicate_files, read_device_driver_inventory, read_disk_health_inventory
@@ -80,6 +81,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--inspect-repository", metavar="PATH", nargs="?", const=".",
                         help="bounded read-only project inventory; candidate checks are not executed")
     parser.add_argument("--system-profile", action="store_true", help="report available RAM, disk space and a conservative child-process memory budget")
+    parser.add_argument("--doctor", action="store_true", help="run read-only preflight and show concrete next steps for common setup/resource problems")
     parser.add_argument("--pc-check", action="store_true", help="run the read-only, offline local PC-care audit")
     parser.add_argument("--pc-processes", action="store_true", help="show a bounded read-only snapshot of Windows process memory usage")
     parser.add_argument("--pc-cleanup-preview", action="store_true", help="list exact eligible temporary-file candidates without deleting anything")
@@ -147,6 +149,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--memory", default=".cerebro/memory/state.json", help="memory file path")
     args = parser.parse_args(argv)
     try:
+        if args.doctor:
+            result = run_preflight(args.project_root)
+            _print_json(result)
+            return 0 if result["ready"] else (2 if result["status"] == "blocked" else 0)
         if args.inspect_repository is not None:
             _print_json(inspect_repository(args.inspect_repository))
             return 0

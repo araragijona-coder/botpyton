@@ -348,3 +348,10 @@ Run python -m bot.main --pc-disk-health or choose **U** in BOTPYTON.bat.
 BOTPYTON asks the local Windows PowerShell providers Get-PhysicalDisk and Win32_DiskDrive for bounded device/status metadata. It reports the health and operational status that Windows exposes, plus basic disk/interface metadata. Each provider is capped at 100 records, output is capped, the command has a 15-second timeout and uses no shell or network connection.
 
 This is **not** a complete S.M.A.R.T. attribute reader, and an OK, Healthy, blank, or missing result is not a guarantee of drive health. Some USB bridges, RAID controllers, virtual disks and storage drivers do not expose the same fields. If Windows reports a warning or the drive behaves abnormally, use the drive manufacturer's diagnostic and maintain a current backup. The feature does not run repair, CHKDSK, formatting, optimization, driver updates or other disk-changing operations. The Windows smoke workflow exercises the command; the actual target PC still needs a local run.
+
+
+## Phase 24 — Read-only doctor / actionable preflight
+
+Run `python -m bot.main --doctor` or choose **V** in `BOTPYTON.bat`. It checks the Python minimum version, required BOTPYTON core files, available RAM, free disk space, Git availability and (on Windows) the standard PowerShell path. Each warning/block includes a concrete next step; it explicitly tells the operator to stop rather than guess when core files are missing.
+
+The doctor is local, deterministic, and read-only. It does not install packages, launch tests/builds, access the network, edit files, change settings, or attempt automatic repair. A low-memory result advises running one bounded operation at a time rather than starting heavier tasks. Exit code 0 means ready or caution; exit code 2 means a blocking prerequisite was detected. This is a preflight, not a guarantee that every later operation will succeed.

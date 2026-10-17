@@ -41,8 +41,10 @@ echo  R. Analizar una carpeta para localizar archivos grandes (solo lectura)
 echo  S. Buscar archivos duplicados por SHA-256 (solo lectura; no borra)
 echo  T. Inventario de controladores locales (solo lectura; no actualiza)
 echo  U. Estado reportado de discos (solo lectura; no repara)
+echo  V. Diagnostico previo: requisitos, memoria y siguientes pasos (solo lectura)
 echo.
-choice /c 123456789ABCDEFGHIJKLMNOPQRSTU /n /m "Selecciona una opcion: "
+choice /c 123456789ABCDEFGHIJKLMNOPQRSTUV /n /m "Selecciona una opcion: "
+if errorlevel 31 goto doctor
 if errorlevel 30 goto diskhealth
 if errorlevel 29 goto driverinventory
 if errorlevel 28 goto duplicateanalysis
@@ -370,6 +372,15 @@ echo.
 echo Instantanea local de estado de discos; no es un diagnostico S.M.A.R.T. completo.
 echo No repara, formatea, optimiza ni modifica discos.
 python -m bot.main --pc-disk-health
+echo.
+pause
+goto menu
+
+
+:doctor
+echo.
+echo Diagnostico de solo lectura: no ejecuta reparaciones ni instala nada.
+python -m bot.main --doctor
 echo.
 pause
 goto menu

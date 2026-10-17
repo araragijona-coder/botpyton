@@ -133,3 +133,13 @@ python -m bot.main --pc-cleanup-restore "C:\\path\\to\\BOTPYTON\\Quarantine\\ses
 - Caps each provider at 100 returned records (requests 101 to detect a cap), output at 500 KB, field lengths at 200 characters and execution at 15 seconds. No shell, network, repair, formatting, optimization, update or disk modification.
 - The report explicitly says this is not a full S.M.A.R.T. attribute report. Missing, Unknown, OK, or Healthy status is not a guarantee that a disk has no fault; hardware/bridge/controller support varies.
 - Automated tests cover non-Windows gating, query shape, output normalization, record caps and timeout/invalid-output handling. The Windows smoke workflow exercises the command. Real-device coverage and timing on the target PC remain unverified until locally run.
+
+
+## Phase 24 — Read-only doctor and concrete next steps — implemented on the development branch
+
+- Run `python -m bot.main --doctor` or choose **V** in `BOTPYTON.bat`.
+- Checks Python >=3.11, required BOTPYTON files, available physical RAM, free disk space, Git discovery and the standard Windows PowerShell path.
+- Reports `ready`, `caution` or `blocked`; every warning/block includes an actionable next step. Missing core files explicitly instruct the operator to restore/re-extract a known-good checkout rather than inventing replacements.
+- Low RAM advises stopping heavy work and avoiding parallel workers; low disk space warns against arbitrary deletion. No tools are launched, no packages are installed, no network/API calls occur, no files/settings change.
+- Automated tests inject platform/resources for deterministic coverage of ready, old-Python, low-RAM, missing-file, low-disk and missing-root outcomes. Windows CI invokes the real preflight command.
+- Exit code 0 means ready or caution; exit code 2 means a blocking prerequisite was detected. A successful preflight is not a promise that later commands cannot fail.
