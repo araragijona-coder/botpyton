@@ -105,6 +105,12 @@ def report_status(report: Any, exit_code: int = 0) -> tuple[str, str]:
     else:
         result = ("Resultado recibido", "neutral")
 
+    # A failing process exit must not be hidden by a nominal JSON status.
+    # Preserve explicit partial/warning states, but surface otherwise-neutral
+    # or successful-looking reports as errors when the command failed.
+    if exit_code != 0 and result[1] not in {"error", "warning"}:
+        result = ("Necesita revisión", "error")
+
     # A nominal operation status must never hide an error/critical finding.
     findings = report.get("findings") if isinstance(report, dict) else None
     severities = {
