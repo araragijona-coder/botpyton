@@ -38,13 +38,25 @@ class ProcessRunnerTests(unittest.TestCase):
                     approved_executables=["python"],
                 )
 
-    def test_safe_search_path_drops_current_directory_relative_and_empty_entries(self):
+    def test_safe_search_path_drops_working_tree_descendants_relative_and_empty_entries(self):
         with tempfile.TemporaryDirectory() as temp, tempfile.TemporaryDirectory() as trusted:
+            nested = Path(temp) / "tools"
+            nested.mkdir()
             safe = _safe_search_path(
-                os.pathsep.join([temp, ".", "", trusted, "missing-relative"]),
+                os.pathsep.join([temp, str(nested), ".", "", trusted, "missing-relative"]),
                 cwd=temp,
             )
             self.assertEqual(safe.split(os.pathsep), [str(Path(trusted).resolve())])
+
+    def test_safe_search_path_rejects_repository_local_symlink_alias_even_if_it_resolves_outside(self):
+        with tempfile.TemporaryDirectory() as temp, tempfile.TemporaryDirectory() as trusted:
+            local_alias = Path(temp) / "external-tools"
+            try:
+                local_alias.symlink_to(Path(trusted), target_is_directory=True)
+            except (OSError, NotImplementedError) as exc:
+                self.skipTest(f"directory symlinks unavailable on this runner: {exc}")
+            safe = _safe_search_path(os.pathsep.join([str(local_alias)]), cwd=temp)
+            self.assertEqual(safe, "")
 
     def test_tool_lookup_never_selects_executable_from_current_directory(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -56,9 +68,11 @@ class ProcessRunnerTests(unittest.TestCase):
             found = _find_executable_in_path("python", path_value=temp, cwd=temp)
             self.assertIsNone(found, "a project-local lookalike must not be treated as an installed tool")
 
-    def test_child_path_does_not_contain_its_working_directory(self):
+    def test_child_path_excludes_working_tree_and_nested_tool_directories(self):
         with tempfile.TemporaryDirectory() as temp, tempfile.TemporaryDirectory() as other:
-            env_path = os.pathsep.join([temp, other])
+            nested = Path(temp) / "tools"
+            nested.mkdir()
+            env_path = os.pathsep.join([temp, str(nested), other])
             code = "import os; print(os.environ.get('PATH', ''))"
             with mock.patch.dict(os.environ, {"PATH": env_path}):
                 result = run_process(
@@ -71,6 +85,7 @@ class ProcessRunnerTests(unittest.TestCase):
             self.assertEqual(result["exit_code"], 0, result["stderr"])
             child_entries = result["stdout"].strip().split(os.pathsep)
             self.assertNotIn(str(Path(temp).resolve()), child_entries)
+            self.assertNotIn(str(nested.resolve()), child_entries)
             self.assertIn(str(Path(other).resolve()), child_entries)
 
     def test_rejects_unapproved_executable(self):
