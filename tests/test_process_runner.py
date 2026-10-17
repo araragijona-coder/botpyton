@@ -1,7 +1,9 @@
+import os
 import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from bot.process_runner import ProcessRunnerError, run_process
 
@@ -61,6 +63,40 @@ class ProcessRunnerTests(unittest.TestCase):
             )
             self.assertTrue(output["stdout_truncated"])
             self.assertLessEqual(len(output["stdout"].encode("utf-8")), 32)
+
+    def test_strips_inherited_python_code_loading_environment(self):
+        with tempfile.TemporaryDirectory() as temp:
+            marker = Path(temp) / "sitecustomize-ran.txt"
+            payload = Path(temp) / "sitecustomize.py"
+            payload.write_text(
+                "from pathlib import Path\n"
+                f"Path({str(marker)!r}).write_text('unexpected import', encoding='utf-8')\n",
+                encoding="utf-8",
+            )
+            with mock.patch.dict(os.environ, {"PYTHONPATH": temp}):
+                result = run_process(
+                    [sys.executable, "-c", "print('isolated-child')"],
+                    cwd=temp,
+                    allowed_root=temp,
+                    approved_executables=[sys.executable],
+                    timeout_seconds=5,
+                )
+            self.assertEqual(result["exit_code"], 0, result["stderr"])
+            self.assertIn("isolated-child", result["stdout"])
+            self.assertFalse(marker.exists(), "inherited PYTHONPATH must not inject sitecustomize into a child")
+
+    def test_rejects_code_loading_environment_overrides(self):
+        with tempfile.TemporaryDirectory() as temp:
+            for variable in ("PYTHONPATH", "node_options", "JAVA_TOOL_OPTIONS", "LD_PRELOAD"):
+                with self.subTest(variable=variable):
+                    with self.assertRaises(ProcessRunnerError):
+                        run_process(
+                            [sys.executable, "--version"],
+                            cwd=temp,
+                            allowed_root=temp,
+                            approved_executables=[sys.executable],
+                            env_overrides={variable: "injected-loader-payload"},
+                        )
 
     def test_rejects_secret_environment_overrides_and_invalid_limits(self):
         with tempfile.TemporaryDirectory() as temp:

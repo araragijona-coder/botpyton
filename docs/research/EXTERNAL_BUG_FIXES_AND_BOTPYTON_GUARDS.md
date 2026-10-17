@@ -153,3 +153,25 @@ La cuarentena y la restauración utilizaban dos operaciones consecutivas: crear 
 - Ampliar las pruebas de colisión para insertar un destino entre la comprobación previa y la llamada de movimiento. La prueba de carrera nativa requiere Windows; no se considerará demostrada por el test sintético de Linux.
 
 La operación atómica puede fallar si origen y destino están en sistemas de archivos diferentes; el fallo se reporta y no se hace un fallback con copia y borrado, para no debilitar la garantía de no sobrescritura. Sin nuevas dependencias, servicios residentes, llamadas de IA ni cambios de limpieza automática.
+
+
+## Auditoría adicional — 2026-10-17: aislamiento de variables de entorno de carga de código
+
+### Referencias oficiales revisadas
+
+- BleachBit 6.0.3 beta documenta la sanitización de `PATH` y la eliminación de variables de entorno que cargan código para procesos secundarios en contextos privilegiados; 6.0.4 también registra endurecimiento de búsquedas de DLL y mejoras de seguridad de subprocesos: https://www.bleachbit.org/news/bleachbit-603-beta y https://www.bleachbit.org/news/bleachbit-604
+- La documentación oficial de Node.js explica que `NODE_OPTIONS` se procesa antes de las opciones de línea de comandos y admite opciones de carga como `--require`: https://nodejs.org/api/cli.html#node_optionsoptions
+- La documentación de Python aclara que `subprocess.Popen(..., env=...)` utiliza el mapa de entorno entregado para el nuevo proceso, en lugar de heredar automáticamente el entorno predeterminado: https://docs.python.org/3/library/subprocess.html
+
+### Hallazgo concreto en BOTPYTON
+
+`bot/process_runner.py` filtraba nombres de entorno que parecían contener secretos, pero heredaba opciones de carga de código como `PYTHONPATH`, `NODE_OPTIONS`, `JAVA_TOOL_OPTIONS` y variables de pre-carga de bibliotecas. Así, una llamada diseñada para consultar la versión de una herramienta podía verse afectada por opciones externas antes de procesar los argumentos fijos. Por ejemplo, Node.js procesa `NODE_OPTIONS` antes de las opciones explícitas; `--require` puede cargar un módulo anticipadamente. No se afirma que una ejecución maliciosa haya ocurrido en el equipo del usuario.
+
+### Corrección candidata
+
+- Filtrar, sin distinguir mayúsculas/minúsculas, un conjunto explícito de variables de arranque/carga de código para Python, Node.js, Ruby, Perl, Java, .NET y cargadores nativos POSIX.
+- Rechazar overrides explícitos que intenten volver a introducir cualquiera de esas variables, en lugar de aceptarlos silenciosamente.
+- Añadir una prueba de integración que coloca un `sitecustomize.py` señuelo en una carpeta temporal mediante `PYTHONPATH` y comprueba que el proceso hijo no lo ejecuta.
+- Añadir pruebas de rechazo para overrides de `PYTHONPATH`, `NODE_OPTIONS`, `JAVA_TOOL_OPTIONS` y `LD_PRELOAD`.
+
+El cambio no modifica la selección de herramientas, no agrega dependencias y mantiene `shell=False`, el límite de memoria y los límites de tiempo/salida existentes. No es una defensa completa contra una herramienta instalada deliberadamente de forma maliciosa ni sustituye la validación de su ejecutable; aísla una clase concreta de inyección por entorno heredado. La corrección requiere pasar CI y pruebas de Windows antes de integrar en `main`.
