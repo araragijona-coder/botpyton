@@ -90,6 +90,12 @@ class LocalPlanCliTests(unittest.TestCase):
                 "goal": "Create a file in the selected project",
                 "allowed_actions": ["apply_local_plan", "prepare_report"],
                 "success_conditions": ["File created"],
+                "verification_checks": [
+                    {"type": "local_plan_applied"},
+                    {"type": "file_exists", "path": "created.py"},
+                    {"type": "python_syntax"},
+                    {"type": "report_exists"},
+                ],
                 "local_change_plan": {
                     "schema_version": 1,
                     "task_id": "cli-target-project",
