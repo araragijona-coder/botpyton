@@ -39,6 +39,10 @@ jobs:
           $code = $LASTEXITCODE
           $output | Write-Output
           $report = ($output -join [Environment]::NewLine) | ConvertFrom-Json
+          $operationNames = @($report.measurements.operations | ForEach-Object { $_.name })
+          if ($operationNames -notcontains 'desktop_app_cache_preview') {
+            throw 'Benchmark omitted the desktop-app cache preview measurement.'
+          }
           if ($code -eq 2 -and $report.operation_assessment.outcome -eq 'partial') {
             Write-Host 'PASS: application-cache preview explicitly reported a bounded partial result.'
             exit 0

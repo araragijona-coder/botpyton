@@ -546,7 +546,12 @@ class PcCareTests(unittest.TestCase):
         self.assertFalse(result["ai_enabled"])
         self.assertEqual(result["files_deleted"], 0)
         self.assertFalse(result["settings_changed"])
-        self.assertEqual(len(result["measurements"]["operations"]), 5)
+        self.assertEqual(len(result["measurements"]["operations"]), 6)
+        operation_names = [item["name"] for item in result["measurements"]["operations"]]
+        self.assertIn("desktop_app_cache_preview", operation_names)
+        desktop_scan = next(item for item in result["measurements"]["operations"]
+                            if item["name"] == "desktop_app_cache_preview")
+        self.assertEqual(desktop_scan["status"], "unsupported_platform")
         self.assertGreaterEqual(result["measurements"]["total_elapsed_wall_ms"], 0)
         self.assertGreaterEqual(result["measurements"]["total_elapsed_cpu_ms"], 0)
         for operation in result["measurements"]["operations"]:

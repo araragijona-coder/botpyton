@@ -73,7 +73,7 @@ python -m bot.main --pc-cleanup-restore "C:\\path\\to\\BOTPYTON\\Quarantine\\ses
 - Package manifest lists every packaged source file with byte count and SHA-256. \`python -m bot.main --verify-portable-package ZIP_PATH\` checks ZIP CRCs, path traversal/duplicate/symlink members, archive-size caps, manifest membership, and every member hash. Package creation/verification use only the standard library.
 - This is a portable Python source archive, not a bundled interpreter or standalone EXE. Python 3.11+ is required; optional GitHub/developer worker features can need external tools and local authentication.
 - CI builds and verifies the archive on Ubuntu and Windows and publishes a short-retention artifact for inspection/download.
-- \`python -m bot.main --pc-benchmark\` (menu option Q) runs one bounded read-only pass: system profile, startup inventory, top-10 process memory snapshot, installed-app metadata capped at 100, and cleanup preview capped at 30 candidates / 1,000 entries per root. It reports wall/CPU time per operation and current/lifetime-peak resident memory where the OS exposes it. It runs no network/update command and performs no cleanup.
+- \`python -m bot.main --pc-benchmark\` (menu option Q) runs one bounded read-only pass: system profile, startup inventory, top-10 process memory snapshot, installed-app metadata capped at 100, and cleanup preview capped at 30 candidates / 1,000 entries per root. It reports wall/CPU time per operation and current/lifetime-peak resident memory where the OS exposes it. It also measures the bounded read-only Discord/Slack/VS Code cache preview as a separate serial operation. It runs no network/update command and performs no cleanup.
 - Benchmark measurements are a one-pass snapshot, not a CCleaner comparison. CI confirms code/packaging behavior; it cannot measure the user's own Ryzen 5 5600G with approximately 2 GB available. Actual idle/peak RAM and timings remain pending until the package is executed on that PC.
 - The launcher remains on-demand; no service, scheduled task, background monitor, API or telemetry was added.
 
@@ -226,3 +226,11 @@ python -m bot.main --pc-cleanup-restore "C:\\path\\to\\BOTPYTON\\Quarantine\\ses
 - Rechecks each queued traversal directory immediately before scanning it and confirms its canonical path remains inside that cache root. This reduces the chance that a redirected cache directory or subdirectory is traversed after an earlier path check.
 - Adds a regression test that places a cache-area symlink to an external folder and verifies the scan marks the result partial, returns no candidates, and leaves the external file untouched.
 - Updates the Windows CI step label so it accurately names the Discord, Slack, and VS Code catalog. No new application profiles, file movement, deletion, or quarantine are enabled.
+
+
+## Phase 34 — Include desktop-cache preview in the resource benchmark
+
+- Adds `desktop_app_cache_preview` as a sixth separately timed step in `--pc-benchmark`. The step is serial and reuses the same on-demand bounded scan; it does not trigger file content reads, movement, deletion, settings changes, network, or AI APIs.
+- The operation report records its status, candidate count, entries examined, wall time, and CPU time alongside the existing benchmark steps. Before/after process RSS remains a process-level snapshot/high-water mark, not a peak uniquely attributed to this operation.
+- Adds a unit assertion for the sixth operation and a Windows smoke assertion that the emitted benchmark includes `desktop_app_cache_preview`. Non-Windows test mode must explicitly label the desktop preview unsupported rather than scanning.
+- This improves measurement coverage but is not a measurement of the user's Ryzen 5 5600G. Target-PC RAM/CPU/timing checks and any comparison with CCleaner remain pending.

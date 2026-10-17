@@ -15,6 +15,7 @@ import time
 from pathlib import Path
 
 from .system_profile import get_system_profile
+from .desktop_app_cache import preview_desktop_app_cache
 
 STALE_DAYS = 7
 MAX_SCAN_ENTRIES = 5_000
@@ -1553,6 +1554,7 @@ def get_pc_care_benchmark(
     measure("cleanup_preview", lambda: get_cleanup_preview(
         scan_roots=scan_roots, max_entries_per_root=1_000, max_candidates=30
     ))
+    measure("desktop_app_cache_preview", lambda: preview_desktop_app_cache(windows=windows))
     memory_after = _process_memory_snapshot(windows=windows)
     elapsed_wall = max(0.0, time.perf_counter() - started_wall)
     elapsed_cpu = max(0.0, time.process_time() - started_cpu)
