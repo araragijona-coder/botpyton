@@ -107,6 +107,126 @@ class LocalChangePlanTests(unittest.TestCase):
                 with self.assertRaisesRegex(LocalChangeError, "reparse-point"):
                     validate_local_change_plan(plan, root)
 
+    def test_rejects_reparse_point_project_root(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp) / "project"
+            root.mkdir()
+            plan = {
+                "schema_version": 1,
+                "task_id": "root-reparse-guard",
+                "changes": [{"path": "new.py", "content": "safe = True\\n"}],
+            }
+
+            with patch("bot.local_changes._is_link_or_reparse", side_effect=lambda path: Path(path).name == "project"):
+                with self.assertRaisesRegex(LocalChangeError, "Project root"):
+                    validate_local_change_plan(plan, root)
+
+    def test_new_file_publication_never_overwrites_concurrent_destination(self):
+        import os
+
+        with tempfile.TemporaryDirectory() as temp:
+            base = Path(temp)
+            root = base / "project"
+            root.mkdir()
+            target = root / "new_file.py"
+            plan = {
+                "schema_version": 1,
+                "task_id": "new-file-race",
+                "changes": [{"path": "new_file.py", "content": "safe = True\\n"}],
+            }
+            sentinel = b"created concurrently; preserve me"
+            real_link = os.link
+
+            def create_collision_then_link(source, destination, *args, **kwargs):
+                Path(destination).write_bytes(sentinel)
+                return real_link(source, destination, *args, **kwargs)
+
+            with patch("bot.local_changes.os.link", side_effect=create_collision_then_link):
+                with self.assertRaises(LocalChangeError):
+                    apply_local_change_plan(plan, root, backup_root=base / "backups")
+
+            self.assertEqual(target.read_bytes(), sentinel)
+            self.assertEqual(list(root.glob(".*.botpyton-tmp")), [])
+
+    def test_existing_file_changed_during_backup_is_not_overwritten(self):
+        import os
+
+        with tempfile.TemporaryDirectory() as temp:
+            base = Path(temp)
+            root = base / "project"
+            root.mkdir()
+            target = root / "app.py"
+            original = b"print('old')\\n"
+            proposed = b"print('new')\\n"
+            target.write_bytes(original)
+            plan = {
+                "schema_version": 1,
+                "task_id": "existing-file-race",
+                "changes": [{
+                    "path": "app.py",
+                    "content": proposed.decode("utf-8"),
+                    "expected_sha256": digest(original),
+                }],
+            }
+            sentinel = b"external change must survive"
+            real_fsync = os.fsync
+            changed = False
+
+            def inject_external_change(fd):
+                nonlocal changed
+                result = real_fsync(fd)
+                if not changed:
+                    changed = True
+                    target.write_bytes(sentinel)
+                return result
+
+            with patch("bot.local_changes.os.fsync", side_effect=inject_external_change):
+                with self.assertRaises(LocalChangeError):
+                    apply_local_change_plan(plan, root, backup_root=base / "backups")
+
+            self.assertTrue(changed)
+            self.assertEqual(target.read_bytes(), sentinel)
+            self.assertEqual(
+                next((base / "backups").rglob("app.py")).read_bytes(),
+                original,
+                "the backup must retain the original bytes even when a concurrent change is detected",
+            )
+
+    def test_existing_backup_with_different_content_is_never_overwritten(self):
+        import json
+
+        with tempfile.TemporaryDirectory() as temp:
+            base = Path(temp)
+            root = base / "project"
+            root.mkdir()
+            target = root / "app.py"
+            original = b"print('old')\\n"
+            proposed = b"print('new')\\n"
+            target.write_bytes(original)
+            plan = {
+                "schema_version": 1,
+                "task_id": "backup-conflict",
+                "changes": [{
+                    "path": "app.py",
+                    "content": proposed.decode("utf-8"),
+                    "expected_sha256": digest(original),
+                }],
+            }
+            fingerprint = digest(json.dumps(
+                [{"path": "app.py", "new_sha256": digest(proposed), "expected_sha256": digest(original)}],
+                sort_keys=True, separators=(",", ":"),
+            ).encode("utf-8"))
+            backup_path = base / "backups" / "backup-conflict" / fingerprint / "app.py"
+            backup_path.parent.mkdir(parents=True)
+            sentinel = b"pre-existing unrelated backup data"
+            backup_path.write_bytes(sentinel)
+
+            with self.assertRaisesRegex(LocalChangeError, "existing backup"):
+                apply_local_change_plan(plan, root, backup_root=base / "backups")
+
+            self.assertEqual(target.read_bytes(), original)
+            self.assertEqual(backup_path.read_bytes(), sentinel)
+
     def test_reads_bounded_json_plan(self):
         with tempfile.TemporaryDirectory() as temp:
             path = Path(temp) / "plan.json"
