@@ -6,6 +6,8 @@ import unittest
 from pathlib import Path
 
 from bot.main import main
+from bot.memory import JsonMemory
+from bot.queue import TaskQueue
 
 
 class LocalPlanCliTests(unittest.TestCase):
@@ -76,6 +78,33 @@ class LocalPlanCliTests(unittest.TestCase):
                 code = main(["--run-project-check", "python-unittest", "--project-root", str(root)])
             self.assertEqual(code, 2)
             self.assertIn("explicit approval is required", errors.getvalue())
+
+    def test_queued_task_targets_selected_project_root(self):
+        with tempfile.TemporaryDirectory() as temp:
+            base = Path(temp)
+            project = base / "other-project"
+            project.mkdir()
+            memory_path = base / "bot-state.json"
+            task = {
+                "id": "cli-target-project",
+                "goal": "Create a file in the selected project",
+                "allowed_actions": ["apply_local_plan", "prepare_report"],
+                "success_conditions": ["File created"],
+                "local_change_plan": {
+                    "schema_version": 1,
+                    "task_id": "cli-target-project",
+                    "changes": [{"path": "created.py", "content": "VALUE = 7\\n"}],
+                },
+            }
+            TaskQueue(JsonMemory(memory_path)).enqueue_many([task])
+            output = io.StringIO()
+            with contextlib.redirect_stdout(output):
+                code = main([
+                    "--work-once", "--project-root", str(project), "--memory", str(memory_path)
+                ])
+            self.assertEqual(code, 0)
+            self.assertEqual((project / "created.py").read_text(encoding="utf-8"), "VALUE = 7\\n")
+            self.assertTrue((project / ".cerebro" / "reports").is_dir())
 
 
 if __name__ == "__main__":
