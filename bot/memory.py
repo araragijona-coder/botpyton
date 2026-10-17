@@ -74,10 +74,10 @@ class JsonMemory:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         fd, temporary = tempfile.mkstemp(prefix=f".{self.path.name}.", dir=self.path.parent)
         try:
-            with os.fdopen(fd, "w", encoding="utf-8", newline="\\n") as stream:
+            with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as stream:
                 limited = _LimitedTextWriter(stream, MAX_MEMORY_BYTES)
                 json.dump(data, limited, ensure_ascii=False, indent=2, sort_keys=True)
-                limited.write("\\n")
+                limited.write("\n")
                 stream.flush()
                 os.fsync(stream.fileno())
             os.replace(temporary, self.path)
