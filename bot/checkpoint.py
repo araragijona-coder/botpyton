@@ -63,7 +63,7 @@ def _read_bounded_checkpoint_file(path: Path, *, byte_limit: int, label: str) ->
     except CheckpointError:
         raise
     except (OSError, UnicodeError) as exc:
-        raise CheckpointError(f"Cannot read checkpoint {label}: {exc}") from exc
+        raise CheckpointError(f"Cannot read complete checkpoint component {label}: {exc}") from exc
 
 
 def _canonical_json(value: Any) -> bytes:
