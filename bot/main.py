@@ -26,6 +26,7 @@ from .tool_registry import discover_tools
 from .system_profile import get_system_profile
 from .doctor import run_preflight
 from .operation_guard import print_pc_result
+from .startup_advisor import read_startup_advisor
 from .pc_care import get_pc_care_report, QUARANTINE_CONFIRMATION, RESTORE_CONFIRMATION, quarantine_cleanup_candidates, restore_quarantined_files, check_application_updates, preview_quarantined_restore, read_pc_care_audit
 from .packaging import build_portable_package, verify_portable_archive
 from .pc_care import get_pc_care_benchmark, analyze_storage_path, find_duplicate_files, read_device_driver_inventory, read_disk_health_inventory
@@ -84,6 +85,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--system-profile", action="store_true", help="report available RAM, disk space and a conservative child-process memory budget")
     parser.add_argument("--doctor", action="store_true", help="run read-only preflight and show concrete next steps for common setup/resource problems")
     parser.add_argument("--pc-check", action="store_true", help="run the read-only, offline local PC-care audit")
+    parser.add_argument("--pc-startup-advisor", action="store_true", help="inspect Windows startup entry targets locally; never disables entries")
     parser.add_argument("--pc-processes", action="store_true", help="show a bounded read-only snapshot of Windows process memory usage")
     parser.add_argument("--pc-cleanup-preview", action="store_true", help="list exact eligible temporary-file candidates without deleting anything")
     parser.add_argument("--pc-cleanup-quarantine", action="store_true", help="move verified temporary-file candidates to reversible quarantine after typed confirmation")
@@ -169,6 +171,8 @@ def main(argv: list[str] | None = None) -> int:
         if args.workspace_status:
             _print_json(inspect_workspace(args.workspace_status))
             return 0
+        if args.pc_startup_advisor:
+            return print_pc_result(read_startup_advisor())
         if args.pc_apps:
             from .pc_care import read_installed_applications
             return print_pc_result(read_installed_applications())

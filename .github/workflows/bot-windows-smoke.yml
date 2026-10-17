@@ -30,6 +30,19 @@ jobs:
         run: python -m bot.main --system-profile
       - name: Run actionable read-only preflight
         run: python -m bot.main --doctor
+      - name: Inventory startup entry targets (read-only)
+        shell: pwsh
+        run: |
+          $output = python -m bot.main --pc-startup-advisor
+          $code = $LASTEXITCODE
+          $output | Write-Output
+          $report = ($output -join [Environment]::NewLine) | ConvertFrom-Json
+          if ($code -eq 2 -and $report.operation_assessment.outcome -eq 'partial') {
+            Write-Host 'PASS: startup advisor explicitly reported a bounded partial result.'
+            exit 0
+          }
+          if ($code -ne 0) { exit $code }
+          if ($report.operation_assessment.outcome -ne 'reported_success') { throw 'Startup advisor result was not recognized as a valid success.' }
       - name: Exercise bounded read-only PC care benchmark
         shell: pwsh
         run: |

@@ -369,3 +369,8 @@ The doctor is local, deterministic, and read-only. It does not install packages,
 ## Competitive scope audit
 
 The current feature gap against CCleaner is documented in [`docs/CCLEANER-PARITY-AUDIT.md`](docs/CCLEANER-PARITY-AUDIT.md). BOTPYTON is **not yet feature-equivalent**: it prioritizes local/offline diagnostics, bounded scans and reversible actions, while CCleaner offers broader browser/application cleaning, startup controls, software and driver updating, background optimization, and scheduled/real-time features depending on edition. Do not market BOTPYTON as faster or more capable until feature and target-PC measurements support that claim.
+
+
+## Phase 27 — Read-only startup target advisor
+
+Run `python -m bot.main --pc-startup-advisor` or select **W** in `BOTPYTON.bat`. The advisor reads Windows Run/RunOnce entries and startup-folder items, extracts only a recognized executable/script target, checks whether that target exists, and never returns registry command arguments. It does not disable entries, launch commands, measure actual boot impact, or label a program unnecessary. Results can include local paths; inspect them before sharing.

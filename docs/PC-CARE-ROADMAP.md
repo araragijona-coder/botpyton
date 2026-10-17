@@ -160,3 +160,11 @@ python -m bot.main --pc-cleanup-restore "C:\\path\\to\\BOTPYTON\\Quarantine\\ses
 - The audit explicitly records feature gaps rather than claiming equivalence: broad application/browser cleaning, startup control, app/driver updates, performance optimizer, scheduled/real-time operation, full uninstaller, disk wipe and hardware monitoring remain absent or incomplete.
 - Future parity work must preserve BOTPYTON's constraints: on-demand startup, no AI/API calls, bounded serial work, explicit user consent, reversible file handling and truthful partial/error reporting. Any feature that needs network access must be separately opted in and documented.
 - This is a documentation/research checkpoint, not proof of comparative speed, quality, safety or RAM use. Benchmark comparisons require the target PC and identical task scopes.
+
+
+## Phase 27 — Read-only startup target advisor — candidate; CI pending
+
+- Added `--pc-startup-advisor` and launcher option **W**. Reads bounded HKCU/HKLM Run/RunOnce values and Startup-folder items; caps output at 200 records.
+- Extracts only an executable/script token from recognized command formats, never returns command arguments, and reports target present/missing/unresolved. Startup shortcuts remain explicitly unresolved because the tool does not invoke shell/COM to resolve them.
+- Does not disable entries, execute commands, change registry/settings, access the network, or claim boot impact from a name. It reports local paths and warns that they should be reviewed before sharing.
+- Includes parser tests and a Windows smoke step. Target path checks on the user's own PC remain unverified until the command is run there.

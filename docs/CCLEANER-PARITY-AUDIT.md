@@ -28,7 +28,7 @@ The vendor describes cleaning of Windows/browser/application junk and privacy da
 | Installed applications | Local metadata inventory | Uninstaller and app management | **Partial.** No uninstall execution or uninstall safety workflow. |
 | Application updates | Opt-in WinGet availability listing; does not install/update | Software Updater can retrieve and install selected app updates (edition-dependent) | **Partial.** No app-update installation, publisher matching UI or rollback flow. |
 | Driver inventory/update | Local Windows driver metadata; does not decide freshness or update | Driver Updater checks and installs compatible driver packages | **Inventory only.** No trusted catalog matching, compatibility proof, backup or restore. Never infer “outdated” from date alone. |
-| Startup management | Lists names/sources; does not disable entries | Health Check offers startup optimization/disable controls | **Read-only only.** Needs publisher/path evidence, impact explanation and explicit per-item confirmation. |
+| Startup management | Read-only startup advisor extracts target path, checks present/missing/unresolved, omits command arguments; never disables | Health Check offers startup optimization/disable controls | **Partial.** No publisher/signature or boot-impact evidence and no disable workflow. Requires explicit per-item confirmation before any future change. |
 | Background performance | Process working-set snapshot; no suspension/termination | Performance Optimizer can put selected background apps to sleep | **Not implemented.** Never terminate/suspend unfamiliar or system processes automatically. |
 | Scheduled / real-time operation | On-demand only; no service, scheduled task or telemetry | Some paid editions advertise scheduled cleaning and real-time monitoring | **Intentionally absent** to protect low free RAM and avoid background work. If added, it must be opt-in and disabled by default. |
 | Disk health | Windows disk-status metadata snapshot, not full SMART data | Product bundle includes hardware/drive utilities; product edition varies | **Partial.** No SMART attribute interpretation or hardware-specific diagnosis. |
@@ -59,3 +59,8 @@ The most important parity gaps are:
 - Never present a partial scan as exhaustive or an unknown result as success.
 - Keep potentially destructive actions explicitly confirmed and reversible where technically possible.
 - Record every future feature as **implemented**, **tested in CI**, **verified on target PC**, or **not verified**. These are different evidence levels.
+
+
+### Follow-up after Phase 27
+
+The startup advisor closes part of the evidence gap by checking whether a target path can be resolved, but it is not a startup optimizer. It does not measure boot impact, verify publisher signatures, resolve shortcut targets, or disable entries. Those must be separate, tested capabilities before claiming parity with CCleaner's startup controls.
