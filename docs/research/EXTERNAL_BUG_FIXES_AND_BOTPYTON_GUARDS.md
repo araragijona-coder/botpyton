@@ -318,3 +318,33 @@ No hay evidencia de explotación en el equipo del usuario. Es un hueco de robust
 El archivo de memoria conserva las tareas históricas; al alcanzar 4 MiB, BOTPYTON informa un error en lugar de seguir creciendo indefinidamente o consumir memoria sin límite. Antes de mantener una cola histórica de mayor tamaño, será necesario diseñar una política explícita de archivo/retención compatible con las dependencias entre tareas. No se borra historial automáticamente ni se agregan llamadas de red, IA, servicios residentes o dependencias externas.
 
 Esta fase queda sujeta a las pruebas de CI Linux y Windows de la rama candidata y a la verificación posterior a la fusión en `main`.
+
+
+## Phase 21 — Evitar la doble reclamación de tareas por procesos concurrentes (2026-10-17)
+
+### Referencias externas revisadas
+
+- OWASP describe las condiciones de carrera como accesos concurrentes al mismo estado compartido sin coordinación, que pueden producir colisiones e inconsistencias: https://community.owasp.org/pages/vulnerabilities/race_conditions
+- Microsoft documenta los bloqueos exclusivos por rangos de bytes y su uso para evitar que varias aplicaciones sobrescriban el trabajo de la otra: https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-lockfileex
+- La documentación oficial de Python documenta `fcntl.flock` para bloqueos asesorados de archivos en sistemas Unix: https://docs.python.org/3/library/fcntl.html
+- SQLite explica que las operaciones transaccionales serializan escrituras para evitar que dos clientes publiquen cambios incompatibles: https://www.sqlite.org/isolation.html
+
+### Hallazgo
+
+La cola de BOTPYTON guardaba cada cambio mediante reemplazo atómico del JSON, pero las secuencias completas de leer → comprobar dependencias → cambiar estado → guardar no tenían bloqueo transaccional. Dos instancias del worker podían leer la misma tarea como `pending` a la vez, reclamarla ambas y ejecutar dos veces una acción que debía ocurrir una sola vez. El reemplazo atómico evitaba archivos JSON a medio escribir, pero no evitaba que un proceso sobrescribiera los cambios del otro.
+
+Es un riesgo de concurrencia del diseño, no evidencia de que una tarea se haya ejecutado doble en el equipo del usuario.
+
+### Corrección
+
+- Añadido `bot/file_lock.py` con bloqueo asesor entre procesos para Unix y Windows y un bloqueo reentrante por hilo para las llamadas anidadas de `JsonMemory`.
+- El bloqueo utiliza un archivo lateral estable junto al archivo de memoria y no lo elimina al salir, para no dividir a otros procesos entre distintos archivos/inodos de bloqueo.
+- `JsonMemory.load()` y `save()` toman el bloqueo para el acceso individual; `TaskQueue` lo mantiene durante toda la mutación de la cola: `enqueue_many`, `claim_next`, `fail`, finalización y recuperación.
+- `claim_next` ya no usa recursión para saltar registros con intentos agotados; los marca como fallidos por lotes y vuelve a evaluar dependencias.
+- Nueva prueba de integración con dos procesos independientes iniciados a la vez: sólo uno debe reclamar la única tarea disponible; el otro debe recibir “sin tarea disponible”, y el contador de intentos debe quedar en 1.
+
+### Alcance y límites
+
+Este bloqueo coordina instancias de BOTPYTON que usan la misma ruta local de memoria y comparten un sistema de archivos que respeta los bloqueos asesorados. No convierte el JSON en una base de datos distribuida y no protege contra programas externos que deliberadamente ignoren el bloqueo lateral. No se agregan servicios en segundo plano, llamadas de red, dependencias externas ni borrado automático de historial.
+
+La fase queda sujeta a la suite general y a la prueba de Windows antes de integrarse en `main`.
