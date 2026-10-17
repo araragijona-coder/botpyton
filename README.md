@@ -229,3 +229,8 @@ Because the reported available RAM varies with what Windows and other applicatio
 `python -m bot.main --list-project-checks --project-root "C:\\path\\project"` detects supported check profiles without executing them. When the repository has been reviewed, a specific profile can be run with `--run-project-check ID --project-root PATH --execute-project-code`. The explicit flag is mandatory because test/build scripts can execute arbitrary project code. Current profiles cover Python unittest, npm test/build scripts, Cargo, Go, Maven, .NET, Composer and Rake/Bundler where the required manifest and tool exist. See `docs/PROJECT-CHECKS.md`.
 
 The worker now supports both explicit local file-change plans and explicit project-check profiles as queue actions. It still does not translate arbitrary natural-language requests into arbitrary code on its own; that requires a structured plan or a known deterministic procedure.
+
+
+### Local GitHub authentication
+
+For local GitHub operations, BOTPYTON first uses `GITHUB_TOKEN` when explicitly supplied. If it is absent, it can read an existing authenticated GitHub CLI session through the fixed command `gh auth token --hostname github.com`. The token remains in process memory, is not written to project files, and is not included in reports. To use this path, install GitHub CLI and authenticate it yourself with `gh auth login`. GitHub writes remain behind the existing explicit execution option; merging remains disabled.
