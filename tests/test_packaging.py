@@ -23,6 +23,9 @@ class PortablePackageTests(unittest.TestCase):
             with ZipFile(archive_path) as archive:
                 names = archive.namelist()
                 self.assertIn("BOTPYTON/bot/main.py", names)
+                self.assertIn("BOTPYTON/bot/gui.py", names)
+                self.assertIn("BOTPYTON/BOTPYTON.bat", names)
+                self.assertIn("BOTPYTON/BOTPYTON-CLI.bat", names)
                 self.assertIn("BOTPYTON/package-manifest.json", names)
                 self.assertNotIn("BOTPYTON/tests/test_pc_care.py", names)
                 self.assertFalse(any("/state.json" in name or "/reports/" in name for name in names))

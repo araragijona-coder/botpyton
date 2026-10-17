@@ -42,6 +42,7 @@ def _collect_package_files(root: Path) -> list[tuple[str, Path]]:
     fixed_files = [
         "README.md",
         "BOTPYTON.bat",
+        "BOTPYTON-CLI.bat",
         "pyproject.toml",
         ".cerebro/config.json",
         ".cerebro/memory/README.md",
