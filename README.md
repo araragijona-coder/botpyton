@@ -234,3 +234,8 @@ The worker now supports both explicit local file-change plans and explicit proje
 ### Local GitHub authentication
 
 For local GitHub operations, BOTPYTON first uses `GITHUB_TOKEN` when explicitly supplied. If it is absent, it can read an existing authenticated GitHub CLI session through the fixed command `gh auth token --hostname github.com`. The token remains in process memory, is not written to project files, and is not included in reports. To use this path, install GitHub CLI and authenticate it yourself with `gh auth login`. GitHub writes remain behind the existing explicit execution option; merging remains disabled.
+
+
+## Investigación de errores no registrados
+
+El diagnóstico no depende exclusivamente de que un mensaje esté en la tabla de errores conocidos. Cuando no hay coincidencia exacta, marca el caso como `unknown`, extrae de forma acotada el último mensaje y los frames del traceback, lee unas pocas líneas alrededor de las ubicaciones que estén dentro del proyecto y propone un siguiente paso verificable. No modifica el código ni ejecuta comandos durante esta investigación. El ciclo autónomo existente aplica únicamente reparaciones exactas conocidas y se detiene ante fallos desconocidos o ambiguos; ampliar ese ciclo requiere nuevas estrategias con pruebas de regresión.
