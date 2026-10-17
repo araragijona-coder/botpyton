@@ -48,7 +48,7 @@ class QueuedLocalPlanTests(unittest.TestCase):
                 "local_change_plan": {
                     "schema_version": 1,
                     "task_id": "worker-bad-hash-check",
-                    "changes": [{"path": "created.py", "content": "VALUE = 1\\n"}],
+                    "changes": [{"path": "created.py", "content": "VALUE = 1\n"}],
                 },
                 "verification_checks": [
                     {"type": "local_plan_applied"},
