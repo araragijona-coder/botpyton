@@ -44,7 +44,7 @@ def _safe_profile_base(path: Path) -> bool:
         get_drive_type.argtypes = [ctypes.c_wchar_p]
         get_drive_type.restype = ctypes.c_uint
         # DRIVE_FIXED=3. Unknown/removable/network volumes fail closed.
-        return get_drive_type(path.drive + "\\\\") == 3
+        return get_drive_type(path.drive + "\\") == 3
     except (AttributeError, OSError):
         return False
 
