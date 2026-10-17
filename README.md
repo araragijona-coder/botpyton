@@ -251,3 +251,8 @@ python -m bot.main --workspace-status "C:\\path\\to\\workspace"
 ```
 
 The source repository must be clean and committed. BOTPYTON creates a local branch/worktree outside the repository, disables Git hooks during worktree checkout, and does not push, create a PR or merge. Run queued tasks with `--work-once --project-root WORKSPACE_PATH` to target the isolated worktree. See `docs/WORKSPACES.md`.
+
+
+## Verifiable task completion
+
+Tasks that edit files or run a project check must declare machine-verifiable `verification_checks`. The worker validates file existence/hash, Python syntax, bounded JSON validity, successful test/check results, local-plan application and report existence. A task is not marked successful when one of its configured checks fails. Human-readable `success_conditions` remain descriptive; the structured checks are the enforced acceptance criteria. See `docs/TASK-VERIFICATION.md`.
