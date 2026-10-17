@@ -200,3 +200,18 @@ The process runner uses separate arguments, an explicit executable allowlist, `s
 
 
 Local change plans can also be submitted as queue tasks using the allowlisted action `apply_local_plan`; the plan `task_id` must match the queue task `id`. This routes structured edits through the same deterministic worker and report pipeline instead of bypassing it. The goal text is treated as a label, not as executable instructions. Without an AI model, free-form requests still need an explicit plan or a deterministic procedure supported by the worker.
+
+
+### Queue a structured local programming task
+
+The Windows launcher now exposes queue actions: add a JSON task, inspect the queue, and execute one task at a time. The included example `.cerebro/examples/worker-local-change-task.json` creates `botpyton_demo_output/hello.py` only after the user explicitly runs the queued task.
+
+CLI equivalent (run from the BOTPYTON repository root):
+
+```bash
+python -m bot.main --enqueue .cerebro/examples/worker-local-change-task.json
+python -m bot.main --queue
+python -m bot.main --work-once
+```
+
+The queue stores durable state under `.cerebro/memory/state.json` by default. Tasks are JSON and actions are allowlisted. This is an auditable, deterministic work order, not natural-language AI reasoning. Review any task JSON before queueing it, especially tasks that contain `apply_local_plan`.
