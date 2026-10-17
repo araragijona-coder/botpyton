@@ -30,8 +30,10 @@ echo  G. Salir
 echo  H. Auditoria del PC (solo lectura, sin borrar ni actualizar nada)
 echo  I. Ver procesos que mas memoria usan (solo lectura)
 echo  J. Vista previa de limpieza (no borra nada)
+echo  K. Inventario de aplicaciones instaladas (solo lectura)
 echo.
-choice /c 123456789ABCDEFGHIJ /n /m "Selecciona una opcion: "
+choice /c 123456789ABCDEFGHIJK /n /m "Selecciona una opcion: "
+if errorlevel 20 goto appinventory
 if errorlevel 19 goto cleanpreview
 if errorlevel 18 goto processcheck
 if errorlevel 17 goto pccheck
@@ -209,6 +211,14 @@ echo.
 pause
 goto menu
 
+
+:appinventory
+echo.
+echo Inventario de nombres, editor y version; no ejecuta desinstaladores.
+python -m bot.main --pc-apps
+echo.
+pause
+goto menu
 
 :cleanpreview
 echo.

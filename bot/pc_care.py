@@ -283,6 +283,94 @@ def read_top_processes(*, windows: bool | None = None, limit: int = 20) -> dict:
     }
 
 
+def read_installed_applications(*, windows: bool | None = None, limit: int = 500) -> dict:
+    """Read installed-application metadata only; never read or invoke uninstall commands."""
+    is_windows = os.name == "nt" if windows is None else windows
+    if not isinstance(limit, int) or isinstance(limit, bool) or not 1 <= limit <= 1000:
+        raise ValueError("limit must be between 1 and 1000")
+    if not is_windows:
+        return {
+            "status": "unsupported_platform",
+            "items": [],
+            "items_count": 0,
+            "note": "Installed application inventory is only available on Windows.",
+        }
+    try:
+        import winreg
+    except ImportError:
+        return {"status": "unavailable", "items": [], "items_count": 0}
+
+    uninstall_path = r"Software\Microsoft\Windows\CurrentVersion\Uninstall"
+    hives = (
+        (winreg.HKEY_CURRENT_USER, "HKCU"),
+        (winreg.HKEY_LOCAL_MACHINE, "HKLM"),
+    )
+    views = []
+    if hasattr(winreg, "KEY_WOW64_64KEY"):
+        views.append(winreg.KEY_WOW64_64KEY)
+    if hasattr(winreg, "KEY_WOW64_32KEY"):
+        views.append(winreg.KEY_WOW64_32KEY)
+    if not views:
+        views = [0]
+
+    items: list[dict] = []
+    seen: set[tuple[str, str, str]] = set()
+    for hive, hive_name in hives:
+        for view in views:
+            try:
+                with winreg.OpenKey(hive, uninstall_path, 0, winreg.KEY_READ | view) as root:
+                    subkey_count = min(winreg.QueryInfoKey(root)[0], 2_000)
+                    for index in range(subkey_count):
+                        if len(items) >= limit:
+                            return {
+                                "status": "partial_limit",
+                                "items": items,
+                                "items_count": len(items),
+                                "limit": limit,
+                                "note": "Inventory reached its cap; results may be incomplete.",
+                            }
+                        try:
+                            subkey_name = winreg.EnumKey(root, index)
+                            with winreg.OpenKey(root, subkey_name, 0, winreg.KEY_READ | view) as app_key:
+                                def read_value(name: str) -> str:
+                                    try:
+                                        value, _kind = winreg.QueryValueEx(app_key, name)
+                                    except OSError:
+                                        return ""
+                                    return value.strip()[:240] if isinstance(value, str) else ""
+
+                                name = read_value("DisplayName")
+                                if not name:
+                                    continue
+                                publisher = read_value("Publisher")
+                                version = read_value("DisplayVersion")
+                                install_date = read_value("InstallDate")
+                                identity = (name.casefold(), publisher.casefold(), version.casefold())
+                                if identity in seen:
+                                    continue
+                                seen.add(identity)
+                                items.append({
+                                    "name": name,
+                                    "publisher": publisher or "Unknown",
+                                    "version": version or "Unknown",
+                                    "install_date": install_date or "Unknown",
+                                    "registry_scope": hive_name,
+                                })
+                        except OSError:
+                            continue
+            except OSError:
+                continue
+
+    items.sort(key=lambda item: (item["name"].casefold(), item["publisher"].casefold()))
+    return {
+        "status": "collected",
+        "items": items,
+        "items_count": len(items),
+        "limit": limit,
+        "note": "Inventory metadata only. No uninstall commands, install locations, or command lines were read or executed.",
+    }
+
+
 def get_cleanup_preview(
     *,
     scan_roots: list[tuple[str, Path]] | None = None,
@@ -405,6 +493,7 @@ def get_pc_care_report(
     scan_roots: list[tuple[str, Path]] | None = None,
     startup_items: dict | None = None,
     process_items: dict | None = None,
+    application_items: dict | None = None,
     windows: bool | None = None,
     now: float | None = None,
 ) -> dict:
@@ -440,6 +529,7 @@ def get_pc_care_report(
 
     startup = read_startup_entries(windows=is_windows) if startup_items is None else startup_items
     processes = read_top_processes(windows=is_windows) if process_items is None else process_items
+    applications = read_installed_applications(windows=is_windows) if application_items is None else application_items
     findings: list[dict] = []
 
     free_percent = disk_report.get("free_percent")
@@ -517,6 +607,14 @@ def get_pc_care_report(
             "detail": "A local version/date alone cannot establish that a driver is obsolete or compatible.",
             "recommendation": "Use Windows Update or the PC/component manufacturer's official support page; do not install a generic driver pack.",
         })
+        if applications.get("status") == "collected":
+            findings.append({
+                "id": "installed_application_inventory",
+                "severity": "info",
+                "title": "Installed application inventory collected",
+                "detail": f"{applications['items_count']} installed application entries were found.",
+                "recommendation": "Inventory is not an update check. Compare versions only against the app publisher or a trusted package source.",
+            })
         findings.append({
             "id": "application_updates_not_checked",
             "severity": "unknown",
@@ -556,6 +654,7 @@ def get_pc_care_report(
         "scan_locations": scans,
         "startup_inventory": startup,
         "process_inventory": processes,
+        "application_inventory": applications,
         "driver_updates": {"status": driver_status},
         "application_updates": {"status": app_update_status},
         "findings": findings,

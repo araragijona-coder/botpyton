@@ -5,7 +5,7 @@ from pathlib import Path
 
 from unittest.mock import patch, Mock
 
-from bot.pc_care import get_cleanup_preview, get_pc_care_report, read_startup_entries, read_top_processes, scan_stale_files
+from bot.pc_care import get_cleanup_preview, get_pc_care_report, read_installed_applications, read_startup_entries, read_top_processes, scan_stale_files
 
 
 class PcCareTests(unittest.TestCase):
@@ -85,6 +85,15 @@ class PcCareTests(unittest.TestCase):
             result = get_cleanup_preview(scan_roots=[("temporary files", root)], now=now, max_candidates=2)
         self.assertEqual(result["candidate_count"], 2)
         self.assertEqual(result["status"], "preview_partial")
+
+    def test_non_windows_application_inventory_is_explicitly_unsupported(self):
+        result = read_installed_applications(windows=False)
+        self.assertEqual(result["status"], "unsupported_platform")
+        self.assertEqual(result["items_count"], 0)
+
+    def test_application_inventory_limit_is_validated(self):
+        with self.assertRaises(ValueError):
+            read_installed_applications(windows=False, limit=0)
 
     def test_non_windows_process_inventory_is_explicitly_unsupported(self):
         result = read_top_processes(windows=False)
