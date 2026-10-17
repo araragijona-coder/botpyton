@@ -5,10 +5,60 @@ import unittest
 from pathlib import Path
 from zipfile import ZipFile
 
-from bot.packaging import build_portable_package, verify_portable_archive
+from bot.packaging import _collect_package_files, build_portable_package, verify_portable_archive
 
 
 class PortablePackageTests(unittest.TestCase):
+    def _minimal_package_source(self, root: Path) -> None:
+        (root / ".cerebro" / "memory").mkdir(parents=True)
+        (root / ".cerebro" / "examples").mkdir(parents=True)
+        (root / "bot").mkdir()
+        (root / "docs").mkdir()
+        (root / "README.md").write_text("readme", encoding="utf-8")
+        (root / "BOTPYTON.bat").write_text("@echo off", encoding="utf-8")
+        (root / "BOTPYTON-CLI.bat").write_text("@echo off", encoding="utf-8")
+        (root / "pyproject.toml").write_text("[project]\\nversion = \"0.0.0\"\\n", encoding="utf-8")
+        (root / ".cerebro" / "config.json").write_text("{}", encoding="utf-8")
+        (root / ".cerebro" / "memory" / "README.md").write_text("memory", encoding="utf-8")
+        (root / ".cerebro" / "examples" / "sample.json").write_text("{}", encoding="utf-8")
+        (root / "bot" / "main.py").write_text("pass\\n", encoding="utf-8")
+        (root / "docs" / "guide.md").write_text("guide", encoding="utf-8")
+
+    def test_package_collector_prunes_windows_reparse_like_directories(self):
+        from unittest.mock import patch
+
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp) / "source"
+            root.mkdir()
+            self._minimal_package_source(root)
+            outside_like = root / "docs" / "mounted"
+            outside_like.mkdir()
+            (outside_like / "private.md").write_text("must not ship", encoding="utf-8")
+
+            def reparse_probe(path):
+                return Path(path).name == "mounted"
+
+            with patch("bot.packaging._is_link_or_reparse", side_effect=reparse_probe):
+                files = dict(_collect_package_files(root))
+
+            self.assertIn("docs/guide.md", files)
+            self.assertNotIn("docs/mounted/private.md", files)
+
+    def test_package_collector_rejects_reparse_point_in_fixed_file_ancestry(self):
+        from unittest.mock import patch
+
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp) / "source"
+            root.mkdir()
+            self._minimal_package_source(root)
+
+            def reparse_probe(path):
+                return Path(path).name == ".cerebro"
+
+            with patch("bot.packaging._is_link_or_reparse", side_effect=reparse_probe):
+                with self.assertRaisesRegex(ValueError, "required portable package file.*linked"):
+                    _collect_package_files(root)
+
     def test_portable_archive_builds_and_verifies_member_hashes(self):
         repo_root = Path(__file__).resolve().parents[1]
         with tempfile.TemporaryDirectory() as tmp:
