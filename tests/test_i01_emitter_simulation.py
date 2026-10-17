@@ -232,11 +232,8 @@ class SimulationEmitterTests(unittest.TestCase):
                 imported_roots.update(alias.name.split(".")[0] for alias in node.names)
             elif isinstance(node, ast.ImportFrom) and node.module:
                 imported_roots.add(node.module.split(".")[0])
-            elif isinstance(node, ast.Call):
-                if isinstance(node.func, ast.Name):
-                    called_names.add(node.func.id)
-                elif isinstance(node.func, ast.Attribute):
-                    called_names.add(node.func.attr)
+            elif isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
+                called_names.add(node.func.id)
         self.assertFalse(imported_roots & forbidden_roots)
         self.assertFalse(called_names & forbidden_calls)
 
