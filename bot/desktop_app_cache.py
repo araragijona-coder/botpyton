@@ -162,53 +162,51 @@ def preview_desktop_app_cache(*, env: dict[str, str] | None = None,
                                 limited = True
                                 continue
                             with os.scandir(resolved_current) as iterator:
-                            for item in iterator:
-                                if time.monotonic() >= deadline or entries >= max_entries:
-                                    limited = stop = True
-                                    break
-                                entries += 1
-                                item_path = Path(item.path)
-                                try:
-                                    if item.is_symlink() or _unsafe(item_path):
-                                        unsafe_count += 1
-                                        limited = True
-                                        continue
-                                    if item.is_dir(follow_symlinks=False):
-                                        if depth < MAX_DEPTH:
-                                            stack.append((item_path, depth + 1))
-                                        else:
-                                            limited = True
-                                        continue
-                                    if not item.is_file(follow_symlinks=False):
-                                        continue
-                                    info = item.stat(follow_symlinks=False)
-                                    if info.st_mtime > cutoff:
-                                        continue
-                                    resolved = item_path.resolve(strict=True)
-                                    if not resolved.is_relative_to(resolved_root):
-                                        unsafe_count += 1
-                                        limited = True
-                                        continue
-                                    candidates.append({
-                                        "application": app, "cache_area": area,
-                                        "cache_root": str(resolved_root), "path": str(resolved),
-                                        "size_bytes": max(0, int(info.st_size)),
-                                        "modified_ns": int(info.st_mtime_ns),
-                                        "age_days": max(0, int((now_value - info.st_mtime) // 86400)),
-                                        "status": "preview_only",
-                                    })
-                                    if len(candidates) >= max_candidates:
+                                for item in iterator:
+                                    if time.monotonic() >= deadline or entries >= max_entries:
                                         limited = stop = True
                                         break
-                                except OSError:
-                                    errors += 1
-                        except OSError:
+                                    entries += 1
+                                    item_path = Path(item.path)
+                                    try:
+                                        if item.is_symlink() or _unsafe(item_path):
+                                            unsafe_count += 1
+                                            limited = True
+                                            continue
+                                        if item.is_dir(follow_symlinks=False):
+                                            if depth < MAX_DEPTH:
+                                                stack.append((item_path, depth + 1))
+                                            else:
+                                                limited = True
+                                            continue
+                                        if not item.is_file(follow_symlinks=False):
+                                            continue
+                                        info = item.stat(follow_symlinks=False)
+                                        if info.st_mtime > cutoff:
+                                            continue
+                                        resolved = item_path.resolve(strict=True)
+                                        if not resolved.is_relative_to(resolved_root):
+                                            unsafe_count += 1
+                                            limited = True
+                                            continue
+                                        candidates.append({
+                                            "application": app, "cache_area": area,
+                                            "cache_root": str(resolved_root), "path": str(resolved),
+                                            "size_bytes": max(0, int(info.st_size)),
+                                            "modified_ns": int(info.st_mtime_ns),
+                                            "age_days": max(0, int((now_value - info.st_mtime) // 86400)),
+                                            "status": "preview_only",
+                                        })
+                                        if len(candidates) >= max_candidates:
+                                            limited = stop = True
+                                            break
+                                    except (OSError, RuntimeError):
+                                        errors += 1
+                        except (OSError, RuntimeError):
                             errors += 1
-                except OSError:
-                    errors += 1
                 if stop:
                     break
-        except OSError:
+        except (OSError, RuntimeError):
             errors += 1
         if stop:
             break
