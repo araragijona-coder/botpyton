@@ -130,7 +130,7 @@ def run_project_check(
             allowed_root=base,
             approved_executables=[selected["executable"]],
             timeout_seconds=timeout_seconds,
-            output_limit_bytes=MAX_MANIFEST_BYTES // 3,
+            output_limit_bytes=64_000,
         )
     except ProcessRunnerError as exc:
         raise ProjectCheckError(str(exc)) from exc
