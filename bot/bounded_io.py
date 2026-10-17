@@ -13,14 +13,10 @@ class BoundedReadError(ValueError):
     """Raised when a local input is too large or changes during a bounded read."""
 
 
-def _signature(info: os.stat_result) -> tuple[int, int, int, int, int]:
-    return (
-        info.st_dev,
-        info.st_ino,
-        info.st_size,
-        getattr(info, "st_mtime_ns", int(info.st_mtime * 1_000_000_000)),
-        getattr(info, "st_ctime_ns", int(info.st_ctime * 1_000_000_000)),
-    )
+def _signature(info: os.stat_result) -> tuple[int, int, int]:
+    # Compare stable file identity and size only. Windows stat/fstat timestamp
+    # representations can differ despite referring to the same unchanged file.
+    return (info.st_dev, info.st_ino, info.st_size)
 
 
 def read_bounded_bytes(path: str | Path, *, limit_bytes: int, label: str = "Input file") -> bytes:
