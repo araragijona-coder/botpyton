@@ -124,9 +124,16 @@ def summarize_report(title: str, report: Any, exit_code: int = 0) -> str:
         ("items_count", "Elementos detectados", "count"),
         ("returned_count", "Elementos mostrados", "count"),
         ("access_errors", "Problemas de acceso", "count"),
+        ("system.available_memory_mb", "RAM disponible", "mb"),
+        ("system.disk.free_gib", "Espacio libre en disco", "gib"),
+        ("system.disk.free_percent", "Disco libre", "percent"),
+        ("cleanup_estimate.candidate_files", "Archivos temporales elegibles", "count"),
+        ("cleanup_estimate.candidate_bytes", "Tamaño de esos archivos", "bytes"),
     )
     for key, label, kind in labels:
-        value = report.get(key)
+        value: Any = report
+        for part in key.split("."):
+            value = value.get(part) if isinstance(value, dict) else None
         if isinstance(value, (int, float)) and not isinstance(value, bool):
             if kind == "mb":
                 shown = f"{value:,.0f} MB"
@@ -140,25 +147,36 @@ def summarize_report(title: str, report: Any, exit_code: int = 0) -> str:
                 shown = f"{int(value):,}"
             lines.append(f"  • {label}: {shown}")
 
-    # Use recommendations written by the underlying checks; do not invent an issue score.
-    for key in ("recommendation", "next_action", "message", "note"):
-        value = report.get(key)
-        if isinstance(value, str) and value.strip():
-            lines.append(f"  {value.strip()[:340]}")
-            break
+    if state == "Revisión parcial":
+        lines.append("  No se pudo revisar todo. Este resultado no debe tomarse como una revisión completa.")
+    elif state in {"Necesita revisión", "Acceso limitado"}:
+        lines.append("  Esta comprobación no terminó del todo. El detalle técnico está disponible por separado.")
 
+    # Translate known finding IDs instead of exposing English internals or raw command output.
+    finding_copy = {
+        "disk_space_low": ("Queda poco espacio libre en el disco", "Revisá archivos grandes y la estimación de limpieza antes de quitar nada."),
+        "available_memory_low": ("Hay poca memoria disponible en este momento", "Revisá qué programas consumen más memoria y cerrá solo aplicaciones que reconozcas."),
+        "available_memory_limited": ("La memoria disponible es limitada", "Cerrá las aplicaciones que no uses antes de abrir programas pesados."),
+        "old_temp_or_cache_files": ("Se encontraron archivos temporales o caché antiguos", "Es una estimación: estos archivos no fueron borrados ni movidos."),
+        "process_memory_snapshot": ("Se tomó una muestra del uso de memoria de los programas", "Es una foto del momento, no significa que un programa esté fallando."),
+        "startup_entries_present": ("Hay programas configurados para abrirse con Windows", "Que aparezcan en esta lista no significa que sean dañinos ni que debas desactivarlos."),
+        "driver_versions_not_verified": ("No se confirmó si los controladores están actualizados", "Una fecha o versión no basta para afirmar que un controlador sea viejo o incompatible."),
+        "installed_application_inventory": ("Se revisó el inventario de aplicaciones instaladas", "Tener un programa instalado no significa que necesite actualizarse."),
+        "application_updates_not_checked": ("No se consultaron actualizaciones de aplicaciones", "Esta revisión es local y no instaló ni actualizó programas."),
+    }
     findings = report.get("findings")
     if isinstance(findings, list):
         shown = 0
         for item in findings:
             if not isinstance(item, dict):
                 continue
-            name = item.get("title") or item.get("name") or item.get("label")
-            detail = item.get("detail") or item.get("recommendation")
-            if name:
-                lines.append("  • " + str(name)[:160] + (": " + str(detail)[:240] if detail else ""))
+            copy = finding_copy.get(str(item.get("id", "")))
+            if copy:
+                name, advice = copy
+                lines.append("  • " + name)
+                lines.append("    " + advice)
                 shown += 1
-                if shown >= 3:
+                if shown >= 4:
                     break
     return "\n".join(lines)
 
@@ -347,7 +365,12 @@ class SimpleBotPytonApp:
         self.progress.stop()
         self.scan_button.configure(state="normal")
         bad = sum(1 for _label, code, _raw, parsed in reports if report_status(parsed, code)[1] in {"warning", "error"})
-        good = len(reports) - bad
+        warning_findings = sum(
+            1 for _label, _code, _raw, parsed in reports
+            if isinstance(parsed, dict) and isinstance(parsed.get("findings"), list)
+            for finding in parsed["findings"]
+            if isinstance(finding, dict) and finding.get("severity") == "warning"
+        )
         all_raw = []
         summaries = []
         for label, code, raw, parsed in reports:
@@ -355,10 +378,11 @@ class SimpleBotPytonApp:
             all_raw.append(f"===== {label} (código {code}) =====\n{raw.strip()[:12000]}")
         self.last_technical = "\n\n".join(all_raw)[:50000]
         self.details_button.configure(state="normal")
-        if bad:
-            self.status_label.configure(text="● REVISAR RESULTADOS", fg="#FFD080")
-            self.result_badge.configure(text=f"{bad} comprobación(es) a revisar", bg=PALE_AMBER, fg=AMBER)
-            heading = f"Revisión terminada: {good} comprobación(es) sin aviso de ejecución y {bad} con resultado limitado o que requiere atención."
+        if bad or warning_findings:
+            self.status_label.configure(text="● HAY PUNTOS PARA REVISAR", fg="#FFD080")
+            count = bad + warning_findings
+            self.result_badge.configure(text=f"{count} punto(s) para revisar", bg=PALE_AMBER, fg=AMBER)
+            heading = f"Revisión terminada: {len(reports)} comprobación(es) recibieron respuesta y hay {warning_findings} aviso(s) importante(s) o {bad} resultado(s) parcial(es) para revisar."
         else:
             self.status_label.configure(text="● LISTO", fg="#72E0C9")
             self.result_badge.configure(text="Revisión finalizada", bg=PALE_TEAL, fg=TEAL_DARK)
