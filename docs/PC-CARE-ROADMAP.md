@@ -79,7 +79,12 @@ python -m bot.main --pc-cleanup-restore "C:\\path\\to\\BOTPYTON\\Quarantine\\ses
 
 
 
-Test supported Windows 10/11 configurations; measure idle/peak RAM, CPU and scan time on the actual Ryzen 5 5600G machine with only about 2 GB available; verify path/permission/locked-file edge cases; build a portable launcher and document Python/Windows minimums. The target remains on-demand, serial, bounded operation with no resident service.
+### Remaining release validation — requires the target PC
+
+- Measure actual idle/peak RAM, CPU and elapsed scan times on the Ryzen 5 5600G with around 2 GB free; compare the same tasks/settings against CCleaner if a performance claim is desired.
+- Verify supported Windows 10/11 versions beyond the current windows-latest runner; validate real permission-denied, locked-file, long-path and cross-volume behavior on that machine.
+- The current portable artifact is a source ZIP, not a bundled interpreter or standalone installer/EXE. A native packaged executable is a separate future decision and must be measured for size/startup/RAM before adoption.
+- Keep on-demand, serial, bounded operation. No resident service, scheduled task, API, telemetry, cleanup, or update check is enabled automatically.
 
 ## Safety and accuracy rules
 
