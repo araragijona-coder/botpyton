@@ -21,6 +21,7 @@ STATE_FILENAME = "state.json"
 MANIFEST_FILENAME = "manifest.json"
 MAX_CHECKPOINT_STATE_BYTES = 4 * 1024 * 1024
 MAX_CHECKPOINT_MANIFEST_BYTES = 32 * 1024
+MAX_CHECKPOINT_JSON_DEPTH = 64
 TASK_STATES = frozenset({"pending", "running", "succeeded", "failed", "blocked"})
 
 
@@ -64,6 +65,28 @@ def _read_bounded_checkpoint_file(path: Path, *, byte_limit: int, label: str) ->
         raise
     except (OSError, UnicodeError) as exc:
         raise CheckpointError(f"Cannot read complete checkpoint component {label}: {exc}") from exc
+
+
+def _enforce_json_nesting(value: Any, *, label: str) -> None:
+    """Reject deeply nested values without recursive traversal or a large work stack."""
+    stack: list[tuple[Any, int]] = [(iter((value,)), 0)]
+    while stack:
+        children, parent_depth = stack[-1]
+        try:
+            current = next(children)
+        except StopIteration:
+            stack.pop()
+            continue
+        depth = parent_depth + 1
+        if depth > MAX_CHECKPOINT_JSON_DEPTH:
+            raise CheckpointError(
+                f"Checkpoint {label} exceeds the JSON nesting depth limit "
+                f"({MAX_CHECKPOINT_JSON_DEPTH})"
+            )
+        if isinstance(current, dict):
+            stack.append((iter(current.values()), depth))
+        elif isinstance(current, list):
+            stack.append((iter(current), depth))
 
 
 def _canonical_json(value: Any) -> bytes:
@@ -185,6 +208,7 @@ def restore_checkpoint(checkpoint_dir: str | Path, memory_path: str | Path) -> d
         manifest = json.loads(manifest_text)
     except (json.JSONDecodeError, RecursionError) as exc:
         raise CheckpointError(f"Checkpoint manifest is invalid JSON: {exc}") from exc
+    _enforce_json_nesting(manifest, label=MANIFEST_FILENAME)
 
     if not isinstance(manifest, dict) or manifest.get("schema_version") != CHECKPOINT_SCHEMA_VERSION:
         raise CheckpointError("Unsupported checkpoint manifest")
@@ -201,6 +225,7 @@ def restore_checkpoint(checkpoint_dir: str | Path, memory_path: str | Path) -> d
         state = json.loads(state_text)
     except (json.JSONDecodeError, RecursionError) as exc:
         raise CheckpointError(f"Checkpoint state is invalid or too deeply nested JSON: {exc}") from exc
+    _enforce_json_nesting(state, label=STATE_FILENAME)
     try:
         validate_checkpoint_state(state)
     except RecursionError as exc:
