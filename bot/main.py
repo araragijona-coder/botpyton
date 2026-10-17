@@ -189,7 +189,6 @@ def main(argv: list[str] | None = None) -> int:
         if cache_action_count > 1:
             raise ValueError("Choose only one browser-cache quarantine or restore action per invocation.")
         if args.pc_app_cache_quarantine:
-            from .application_cache import preview_application_cache
             preview = preview_application_cache(max_candidates=100, timeout_seconds=5.0)
             if preview.get("status") != "preview_complete" or preview.get("scan_limited") or preview.get("access_errors", 0):
                 return print_pc_result(preview)
