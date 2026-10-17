@@ -15,6 +15,24 @@ MAX_TIMEOUT_SECONDS = 300
 MAX_OUTPUT_BYTES = 64_000
 SECRET_MARKERS = ("TOKEN", "SECRET", "PASSWORD", "CREDENTIAL", "API_KEY", "PRIVATE_KEY")
 
+# Remove variables that can inject code or native libraries before a tool even
+# processes its fixed arguments (for example NODE_OPTIONS=--require ...).
+# Compare names case-insensitively because Windows environment keys are too.
+CODE_LOADING_ENV_VARS = frozenset({
+    "PYTHONPATH", "PYTHONHOME", "PYTHONSTARTUP", "PYTHONUSERBASE", "PYTHONINSPECT",
+    "NODE_OPTIONS", "NODE_PATH",
+    "RUBYOPT", "RUBYLIB",
+    "PERL5OPT", "PERL5LIB", "PERLLIB",
+    "JAVA_TOOL_OPTIONS", "JDK_JAVA_OPTIONS", "_JAVA_OPTIONS",
+    "DOTNET_STARTUP_HOOKS",
+    "CORECLR_ENABLE_PROFILING", "CORECLR_PROFILER", "CORECLR_PROFILER_PATH",
+    "CORECLR_PROFILER_PATH_32", "CORECLR_PROFILER_PATH_64",
+    "COR_ENABLE_PROFILING", "COR_PROFILER", "COR_PROFILER_PATH",
+    "COR_PROFILER_PATH_32", "COR_PROFILER_PATH_64",
+    "LD_PRELOAD", "LD_LIBRARY_PATH",
+    "DYLD_INSERT_LIBRARIES", "DYLD_LIBRARY_PATH",
+})
+
 
 class ProcessRunnerError(ValueError):
     """Raised when a process request violates execution policy."""
@@ -24,6 +42,7 @@ def _safe_environment(extra: Mapping[str, str] | None = None) -> dict[str, str]:
     env = {
         key: value for key, value in os.environ.items()
         if not any(marker in key.upper() for marker in SECRET_MARKERS)
+        and key.upper() not in CODE_LOADING_ENV_VARS
     }
     env["PYTHONDONTWRITEBYTECODE"] = "1"
     if extra:
@@ -34,6 +53,8 @@ def _safe_environment(extra: Mapping[str, str] | None = None) -> dict[str, str]:
                 raise ProcessRunnerError("Invalid environment variable name")
             if any(marker in key.upper() for marker in SECRET_MARKERS):
                 raise ProcessRunnerError("Secret-like environment overrides are forbidden")
+            if key.upper() in CODE_LOADING_ENV_VARS:
+                raise ProcessRunnerError(f"Code-loading environment override is forbidden: {key}")
             if "\0" in value:
                 raise ProcessRunnerError("Environment values cannot contain NUL")
             env[key] = value
