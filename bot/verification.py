@@ -16,6 +16,14 @@ class VerificationError(ValueError):
     """Raised when a success check cannot be evaluated safely."""
 
 
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for chunk in iter(lambda: stream.read(64 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
 def _target(root: Path, raw_path: str) -> Path:
     relative = validate_relative_path(raw_path)
     if relative != raw_path or relative in {"", "."}:
@@ -65,7 +73,7 @@ def evaluate_verification_checks(
                 if not path.is_file():
                     result.update({"path": check["path"], "ok": False, "reason": "file does not exist"})
                 else:
-                    actual = hashlib.sha256(path.read_bytes()).hexdigest()
+                    actual = _sha256_file(path)
                     expected = check["sha256"]
                     result.update({"path": check["path"], "ok": actual == expected,
                                    "expected_sha256": expected, "actual_sha256": actual})
