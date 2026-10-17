@@ -1,5 +1,6 @@
 """Static fail-closed checks for privileged GitHub Actions workflows."""
 from pathlib import Path
+import re
 import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -16,8 +17,9 @@ class PrivilegedWorkflowSecurityTests(unittest.TestCase):
                 source = (ROOT / relative).read_text(encoding="utf-8")
                 self.assertIn(job_marker, source)
                 job_start = source.index(job_marker)
-                next_job = source.find("\n  ", job_start + len(job_marker))
-                job = source[job_start: next_job if next_job >= 0 else len(source)]
+                tail = source[job_start + len(job_marker):]
+                next_match = re.search(r"\n  [A-Za-z0-9_-]+:\n", tail)
+                job = source[job_start: job_start + len(job_marker) + next_match.start() if next_match else len(source)]
                 self.assertRegex(job, r"(?m)^\s+if: false\s*$")
                 self.assertNotIn("GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}", job)
 
