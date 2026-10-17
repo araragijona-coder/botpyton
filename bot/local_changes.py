@@ -166,9 +166,11 @@ def apply_local_change_plan(
     backup_base.mkdir(parents=True, exist_ok=True)
     try:
         backup_base.relative_to(base)
-        raise LocalChangeError("Backup directory must be outside the project root")
+        backup_is_inside_project = True
     except ValueError:
-        pass
+        backup_is_inside_project = False
+    if backup_is_inside_project:
+        raise LocalChangeError("Backup directory must be outside the project root")
 
     written: list[Path] = []
     backups: dict[Path, bytes | None] = {}
