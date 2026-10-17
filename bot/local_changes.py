@@ -163,7 +163,6 @@ def apply_local_change_plan(
     backup_base = Path(backup_root).expanduser().resolve() if backup_root else (
         Path.home() / ".botpyton" / "backups" / hashlib.sha256(str(base).encode("utf-8")).hexdigest()[:16]
     )
-    backup_base.mkdir(parents=True, exist_ok=True)
     try:
         backup_base.relative_to(base)
         backup_is_inside_project = True
@@ -171,6 +170,12 @@ def apply_local_change_plan(
         backup_is_inside_project = False
     if backup_is_inside_project:
         raise LocalChangeError("Backup directory must be outside the project root")
+    plan_fingerprint = _sha256(json.dumps(
+        [{"path": item["path"], "new_sha256": item["new_sha256"],
+          "expected_sha256": item["expected_sha256"]} for item in validated["changes"]],
+        sort_keys=True, separators=(",", ":"),
+    ).encode("utf-8"))
+    backup_base.mkdir(parents=True, exist_ok=True)
 
     written: list[Path] = []
     backups: dict[Path, bytes | None] = {}
@@ -179,9 +184,13 @@ def apply_local_change_plan(
         for item in validated["changes"]:
             target = _resolve_target(base, item["path"])
             original = target.read_bytes() if item["exists"] else None
+            if original is not None and _sha256(original) != item["expected_sha256"]:
+                raise LocalChangeError(f"File changed immediately before write: {item['path']}")
+            if original is None and target.exists():
+                raise LocalChangeError(f"File appeared immediately before write: {item['path']}")
             backups[target] = original
             if original is not None:
-                backup_path = backup_base / validated["task_id"] / item["path"]
+                backup_path = backup_base / validated["task_id"] / plan_fingerprint / item["path"]
                 _write_atomic(backup_path, original)
                 backup_records.append({
                     "path": item["path"],
@@ -211,6 +220,7 @@ def apply_local_change_plan(
         "mode": "executed",
         "writes_performed": True,
         "backups": backup_records,
+        "plan_fingerprint": plan_fingerprint,
         "written_files": [item["path"] for item in validated["changes"]],
         "rollback_performed": False,
     }
