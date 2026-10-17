@@ -8,6 +8,7 @@ ALLOWED_ACTIONS = frozenset({
     "inspect_repository",
     "validate_task",
     "run_tests",
+    "run_project_check",
     "apply_known_fix",
     "apply_local_plan",
     "prepare_report",
@@ -52,6 +53,12 @@ def validate_task(task: dict[str, Any]) -> None:
             raise PolicyError("local_change_plan schema_version must be 1")
         if local_plan.get("task_id") != task["id"]:
             raise PolicyError("local_change_plan task_id must match the queue task id")
+    if "run_project_check" in actions:
+        if task.get("allow_project_code_execution") is not True:
+            raise PolicyError("run_project_check requires allow_project_code_execution=true")
+        check_id = task.get("project_check_id")
+        if not isinstance(check_id, str) or not check_id.strip():
+            raise PolicyError("run_project_check requires a non-empty project_check_id")
 
 
 def validate_relative_path(path: str) -> str:
