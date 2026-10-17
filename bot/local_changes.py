@@ -15,7 +15,7 @@ MAX_TOTAL_BYTES = 500_000
 MAX_PLAN_BYTES = 600_000
 TASK_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$")
 PROTECTED_PREFIXES = (
-    ".git/", ".github/workflows/", ".cerebro/policies/", ".cerebro/memory/",
+    ".git/", ".github/", ".cerebro/policies/", ".cerebro/memory/",
     ".cerebro/reports/", ".cerebro/backups/", ".venv/", "node_modules/",
     "dist/", "build/",
 )
