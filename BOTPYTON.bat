@@ -22,10 +22,14 @@ echo  8. Ejecutar las pruebas del propio BOTPYTON
 echo  9. Agregar tarea JSON a la cola
 echo  A. Ejecutar una tarea pendiente
 echo  B. Ver cola de tareas
-echo  C. Salir
+echo  C. Detectar pruebas/builds del proyecto (sin ejecutarlos)
+echo  D. Ejecutar una prueba/build detectado (requiere aprobacion)
+echo  E. Salir
 echo.
-choice /c 123456789ABC /n /m "Selecciona una opcion: "
-if errorlevel 12 goto end
+choice /c 123456789ABCDE /n /m "Selecciona una opcion: "
+if errorlevel 14 goto end
+if errorlevel 13 goto runcheck
+if errorlevel 12 goto listchecks
 if errorlevel 11 goto queue
 if errorlevel 10 goto workonce
 if errorlevel 9 goto enqueue
@@ -119,6 +123,33 @@ goto menu
 
 :queue
 python -m bot.main --queue
+echo.
+pause
+goto menu
+
+:listchecks
+echo.
+set "PROJECT_PATH="
+set /p "PROJECT_PATH=Ruta completa del proyecto a analizar: "
+if not defined PROJECT_PATH goto menu
+python -m bot.main --list-project-checks --project-root "%PROJECT_PATH%"
+echo.
+pause
+goto menu
+
+:runcheck
+echo.
+set "PROJECT_PATH="
+set /p "PROJECT_PATH=Ruta completa del proyecto: "
+if not defined PROJECT_PATH goto menu
+set "CHECK_ID="
+set /p "CHECK_ID=ID exacto detectado (por ejemplo python-unittest o npm-test): "
+if not defined CHECK_ID goto menu
+echo ATENCION: el test/build puede ejecutar codigo del proyecto.
+set "CONFIRM_CODE="
+set /p "CONFIRM_CODE=Escribe EJECUTAR para autorizar: "
+if /i not "%CONFIRM_CODE%"=="EJECUTAR" goto menu
+python -m bot.main --run-project-check "%CHECK_ID%" --project-root "%PROJECT_PATH%" --execute-project-code
 echo.
 pause
 goto menu
