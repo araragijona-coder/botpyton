@@ -31,6 +31,7 @@ class QueuedLocalPlanTests(unittest.TestCase):
             result = TaskExecutor(root).execute({"payload": task, "attempts": 1})
             target = root / "src" / "hello.py"
             self.assertTrue(result["ok"])
+            self.assertTrue(result["verification"]["all_passed"])
             self.assertTrue(target.is_file())
             self.assertEqual(target.read_text(encoding="utf-8"), "def hello():\n    return 'hello'\n")
             self.assertEqual(result["actions"][0]["action"], "apply_local_plan")
@@ -74,6 +75,7 @@ class QueuedLocalPlanTests(unittest.TestCase):
             validate_task(task)
             result = TaskExecutor(root).execute({"payload": task, "attempts": 1})
             self.assertTrue(result["ok"])
+            self.assertTrue(result["verification"]["all_passed"])
             details = result["actions"][0]["details"]
             self.assertTrue(details["ok"])
             self.assertTrue(details["project_code_execution_approved"])
