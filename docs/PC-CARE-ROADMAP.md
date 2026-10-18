@@ -258,3 +258,14 @@ python -m bot.main --pc-cleanup-restore "C:\\path\\to\\BOTPYTON\\Quarantine\\ses
 - Track the SHA-256 of the last successfully persisted manifest so an error report never presents an in-memory digest as though it were durable.
 - Catch final persistence errors and preserve accurate moved counters in the outer exceptional path.
 - Regression injects two `ValueError` failures after one move and verifies the stale on-disk manifest remains valid, one verified cache file is safely restorable, and the second selection was never moved.
+
+
+## Phase 37 — Temporary quarantine restore recovery
+
+- Fixed an unhandled manifest-write failure after a temporary file had already moved back to its original path; report actual moves separately from metadata-only reconciliation.
+- Read-only restore preview can detect a stale `restoring` item only when the quarantine path is absent and the allowlisted original matches recorded size and SHA-256.
+- Explicit restore confirmation can reconcile manifest state without moving or overwriting a file; recovery remains bounded by the existing hash budget.
+- Manifest staging files are removed best-effort after failed publication.
+- Added regression tests for post-move/final manifest write failures, subsequent reconciliation, and temporary staging cleanup.
+- External references: BleachBit 6.0.6 maintenance notes; CCleaner v7.12/v7.11 release notes; Microsoft `MoveFileEx` error semantics. These are reliability analogues, not claims of identical defects.
+- Required gate: Linux foundation tests and Windows low-memory smoke pass before merge and post-merge.

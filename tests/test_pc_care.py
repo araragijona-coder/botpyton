@@ -208,6 +208,94 @@ class PcCareTests(unittest.TestCase):
             self.assertEqual(old_file.read_bytes(), original_bytes)
             self.assertFalse((manifest_path.parent / "0001-old.tmp").exists())
 
+    def test_restore_manifest_failure_after_move_is_reported_and_reconciled(self):
+        from bot.pc_care import (
+            QUARANTINE_CONFIRMATION, RESTORE_CONFIRMATION,
+            _write_quarantine_manifest, quarantine_cleanup_candidates,
+            preview_quarantined_restore, restore_quarantined_files,
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            temp_root = base / "temporary"
+            temp_root.mkdir()
+            quarantine_root = base / "Quarantine"
+            old_file = temp_root / "old.tmp"
+            old_file.write_bytes(b"recover me after manifest failure")
+            now = 1_700_000_000.0
+            os.utime(old_file, (now - 12 * 86400, now - 12 * 86400))
+            preview = get_cleanup_preview(scan_roots=[("temporary files", temp_root)], now=now)
+            moved = quarantine_cleanup_candidates(
+                preview, confirmation=QUARANTINE_CONFIRMATION,
+                scan_roots=[("temporary files", temp_root)],
+                quarantine_root=quarantine_root, now=now, audit_dir=base / "audit",
+            )
+            self.assertEqual(moved["status"], "completed")
+            manifest_path = Path(moved["manifest_path"])
+            manifest = __import__("json").loads(manifest_path.read_text(encoding="utf-8"))
+            quarantined = manifest_path.parent / manifest["items"][0]["quarantine_name"]
+            self.assertTrue(quarantined.is_file())
+
+            calls = 0
+            real_write = _write_quarantine_manifest
+
+            def fail_after_move(path, data):
+                nonlocal calls
+                calls += 1
+                # Save "restoring" before the move, then fail the post-move
+                # update and final status update, simulating a full/unavailable disk.
+                if calls >= 2:
+                    raise OSError("injected manifest disk failure")
+                return real_write(path, data)
+
+            with patch("bot.pc_care._write_quarantine_manifest", side_effect=fail_after_move):
+                failed = restore_quarantined_files(
+                    manifest_path, confirmation=RESTORE_CONFIRMATION,
+                    scan_roots=[("temporary files", temp_root)], audit_dir=base / "audit",
+                )
+
+            self.assertEqual(calls, 3)
+            self.assertEqual(failed["status"], "manifest_write_failed", failed)
+            self.assertEqual(failed["files_restored"], 1)
+            self.assertEqual(failed["files_reconciled"], 0)
+            self.assertTrue(old_file.is_file())
+            self.assertEqual(old_file.read_bytes(), b"recover me after manifest failure")
+            self.assertFalse(quarantined.exists())
+
+            durable = __import__("json").loads(manifest_path.read_text(encoding="utf-8"))
+            self.assertEqual(durable["items"][0]["status"], "restoring")
+            restore_preview = preview_quarantined_restore(
+                manifest_path, scan_roots=[("temporary files", temp_root)]
+            )
+            self.assertEqual(restore_preview["status"], "preview_complete")
+            self.assertEqual(restore_preview["ready_count"], 0)
+            self.assertEqual(restore_preview["reconcile_count"], 1)
+            self.assertEqual(restore_preview["items"][0]["status"], "reconcile_manifest_state")
+
+            reconciled = restore_quarantined_files(
+                manifest_path, confirmation=RESTORE_CONFIRMATION,
+                scan_roots=[("temporary files", temp_root)], audit_dir=base / "audit",
+            )
+            self.assertEqual(reconciled["status"], "reconciled", reconciled)
+            self.assertEqual(reconciled["files_restored"], 0)
+            self.assertEqual(reconciled["files_reconciled"], 1)
+            self.assertEqual(old_file.read_bytes(), b"recover me after manifest failure")
+            self.assertFalse(quarantined.exists())
+            final_manifest = __import__("json").loads(manifest_path.read_text(encoding="utf-8"))
+            self.assertEqual(final_manifest["items"][0]["status"], "restored")
+            self.assertEqual(final_manifest["status"], "restored")
+
+    def test_manifest_temporary_file_is_cleaned_when_atomic_publication_fails(self):
+        from bot.pc_care import _write_quarantine_manifest
+        with tempfile.TemporaryDirectory() as tmp:
+            directory = Path(tmp)
+            manifest_path = directory / "manifest.json"
+            manifest_path.write_text('{"previous": true}\n', encoding="utf-8")
+            with patch("bot.pc_care.os.replace", side_effect=OSError("injected replace failure")):
+                with self.assertRaises(OSError):
+                    _write_quarantine_manifest(manifest_path, {"status": "new"})
+            self.assertEqual(manifest_path.read_text(encoding="utf-8"), '{"previous": true}\n')
+            self.assertEqual([path.name for path in directory.iterdir()], ["manifest.json"])
+
     def test_quarantine_rejects_partial_preview(self):
         from bot.pc_care import quarantine_cleanup_candidates, QUARANTINE_CONFIRMATION
         with tempfile.TemporaryDirectory() as tmp:
