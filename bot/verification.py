@@ -6,6 +6,7 @@ import json
 from pathlib import Path, PurePosixPath
 from typing import Any
 
+from .application_cache import _is_link_or_reparse
 from .bounded_io import BoundedReadError, enforce_json_depth, read_bounded_bytes
 from .policy import PolicyError, validate_relative_path
 from .verifier import verify_python_files
@@ -32,8 +33,20 @@ def _target(root: Path, raw_path: str) -> Path:
     current = root
     for part in PurePosixPath(relative).parts:
         current = current / part
-        if current.is_symlink():
-            raise VerificationError(f"Symlink paths are not allowed in verification checks: {relative}")
+        # Missing path components must remain eligible for ordinary "not found"
+        # results; existing components are inspected without following links.
+        try:
+            current.lstat()
+        except FileNotFoundError:
+            continue
+        except OSError as exc:
+            raise VerificationError(
+                f"Could not safely inspect verification path: {relative}"
+            ) from exc
+        if _is_link_or_reparse(current):
+            raise VerificationError(
+                f"Symlink or reparse-point paths are not allowed in verification checks: {relative}"
+            )
     resolved = current.resolve()
     try:
         resolved.relative_to(root)

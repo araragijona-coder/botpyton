@@ -82,6 +82,53 @@ class VerificationTests(unittest.TestCase):
             self.assertFalse(result["checks"][0]["ok"])
             self.assertIn("RecursionError", result["checks"][0]["reason"])
 
+    def test_verification_rejects_a_reparse_point_component(self):
+        with tempfile.TemporaryDirectory() as temp:
+            # Match the canonical root used by evaluate_verification_checks(),
+            # including Windows runner paths that may resolve through aliases.
+            root = Path(temp).resolve()
+            real_directory = root / "real"
+            real_directory.mkdir()
+            (real_directory / "settings.json").write_text('{"safe":true}', encoding="utf-8")
+            junction_like_directory = root / "alias"
+            junction_like_directory.mkdir()
+            # This file stands in for the contents a junction could expose. The
+            # detector is patched to classify the alias directory as a reparse
+            # point, so the test runs the same on Linux and Windows CI.
+            (junction_like_directory / "settings.json").write_text('{"safe":true}', encoding="utf-8")
+
+            from bot import verification
+
+            real_detector = verification._is_link_or_reparse
+
+            def detect_alias(path: Path) -> bool:
+                if path == junction_like_directory:
+                    return True
+                return real_detector(path)
+
+            with patch("bot.verification._is_link_or_reparse", side_effect=detect_alias):
+                result = evaluate_verification_checks(
+                    [{"type": "file_exists", "path": "alias/settings.json"}],
+                    root,
+                    action_results=[],
+                )
+
+            self.assertEqual(result["status"], "failed")
+            self.assertFalse(result["checks"][0]["ok"])
+            self.assertIn("reparse-point", result["checks"][0]["reason"])
+
+    def test_missing_files_remain_normal_failed_checks_not_link_errors(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            result = evaluate_verification_checks(
+                [{"type": "file_exists", "path": "not-here.json"}],
+                root,
+                action_results=[],
+            )
+            self.assertEqual(result["status"], "failed")
+            self.assertFalse(result["checks"][0]["ok"])
+            self.assertEqual(result["checks"][0]["reason"], "file does not exist")
+
 
 if __name__ == "__main__":
     unittest.main()

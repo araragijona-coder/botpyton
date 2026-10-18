@@ -13,6 +13,8 @@ Tipos admitidos:
 - `{"type":"local_plan_applied"}` — requiere una aplicación local de plan con escrituras verificadas.
 - `{"type":"report_exists"}` — comprueba el informe final de la tarea.
 
+La resolución de rutas de las verificaciones rechaza componentes existentes que sean enlaces simbólicos o puntos de reanálisis de Windows (incluidas junctions). Los componentes inexistentes siguen devolviendo un resultado normal de archivo ausente, y las rutas que escapan del directorio base siguen fallando. La validación reduce riesgos de alias de rutas pero no pretende eliminar todas las carreras TOCTOU frente a procesos concurrentes.
+
 Las tareas que contienen `apply_local_plan` deben incluir `local_plan_applied` y al menos una comprobación de archivo/sintaxis/JSON. Las tareas que contienen `run_project_check` deben incluir `project_check_pass` o `tests_pass`.
 
 El ejecutor escribe primero un informe provisional para poder verificar que existe un artefacto real; después incorpora los resultados de verificación y vuelve a escribir el informe final. Si alguna comprobación falla, la tarea no se marca como correcta. Las verificaciones no ejecutan código de proyecto; la ejecución de tests/builds sigue requiriendo autorización independiente.
