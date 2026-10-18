@@ -553,6 +553,7 @@ def restore_application_cache_quarantine(
         restored = 0
         skipped = 0
         hash_bytes = 0
+        persistence_failed = False
         for index, item in enumerate(manifest["items"]):
             result = item_results.get(index, {})
             if result.get("status") != "ready_to_restore":
@@ -586,20 +587,41 @@ def restore_application_cache_quarantine(
                 _move_without_overwriting(quarantined, original)
                 item["state"] = "restored"
                 restored += 1
-                _atomic_write_manifest(path, manifest)
+                try:
+                    _atomic_write_manifest(path, manifest)
+                except OSError:
+                    # Do not perform any more moves when the durable recovery record
+                    # cannot be updated. The final write below retries once after the
+                    # loop has stopped; if it also fails, the older manifest remains
+                    # sufficient to reconcile paths during a later preview.
+                    persistence_failed = True
+                    # Count all remaining items as skipped because the recovery
+                    # record is no longer reliable enough to authorize more moves.
+                    skipped += len(manifest["items"]) - index - 1
+                    break
             except (OSError, ValueError):
                 skipped += 1
-        manifest["status"] = "complete" if restored and not skipped else "partial"
+        manifest["status"] = "complete" if restored and not skipped and not persistence_failed else "partial"
         try:
             _atomic_write_manifest(path, manifest)
         except OSError:
-            skipped += 1
-        status = "cache_restored" if restored and not skipped else ("cache_restore_partial" if restored or skipped else "cache_restore_blocked")
+            persistence_failed = True
+        status = (
+            "cache_restore_partial" if persistence_failed or restored or skipped
+            else "cache_restore_blocked"
+        )
+        if restored and not skipped and not persistence_failed:
+            status = "cache_restored"
+        note = (
+            "Manifest persistence failed during restore. Further moves were stopped; inspect the durable manifest and both original/quarantine paths before retrying."
+            if persistence_failed else
+            "Verified files were restored only to missing paths under recognized cache roots. No existing file was overwritten."
+        )
         return {
             **base, "status": status, "manifest_path": str(path), "session_id": session.name,
             "files_restored": restored, "files_skipped": skipped,
             "manifest_sha256": manifest.get("manifest_sha256"),
-            "note": "Verified files were restored only to missing paths under recognized cache roots. No existing file was overwritten.",
+            "note": note,
             "limitations": [
                 "If the browser recreated a destination or still holds a file open, restore skips that item.",
                 "Only files verified against the quarantine manifest can be restored.",
