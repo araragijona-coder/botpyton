@@ -78,6 +78,35 @@ python -m bot.main --architect-ai .cerebro/examples/architect-design-brief.json 
 Each selected file is capped at 16 KB, all selected source at 40 KB, and the complete serialized request at 70 KB. The loader rejects traversal, symbolic/reparse links, unsupported extensions, generated/private folders, binary/non-UTF-8 content, and common secret patterns. This filter cannot guarantee every secret is detected; review the selected files yourself. When source context is provided, the adviser can also propose a unified diff marked `BORRADOR DE PARCHE (NO APLICADO)`, limited to selected paths. The draft is never applied or executed automatically and must be reviewed and tested separately. The bot is still not a general-purpose autonomous programmer. See [Phase 26 research and constraints](docs/research/PHASE-26-EXPLICIT-SOURCE-CONTEXT.md).
 Sources: [OpenRouter free model router](https://openrouter.ai/openrouter/free) · [official pricing and limits](https://openrouter.ai/pricing).
 
+## Phase 27: isolated reviewed-patch cycle
+
+The deterministic architecture planner, diagnostic registry and project-check discovery now connect to a bounded patch-validation step. This does not run a free-form programming agent: a human must inspect and save a plain unified Git diff before it can be applied. The patch is applied only to a new local Git worktree; BOTPYTON does not commit, push, merge, create new files, delete files, change file modes, or install dependencies.
+
+Static-only mode (project code is not executed):
+
+```powershell
+python -m bot.main --apply-reviewed-patch "C:\proposals\fix.patch" --patch-task-id fix-parser-001 --project-root "C:\projects\my-app" --workspace-parent "C:\BOTPYTON\workspaces"
+```
+
+To compare the current behavior with the candidate, list the project checks first, then select a known `check_id` and explicitly authorize execution:
+
+```powershell
+python -m bot.main --list-project-checks --project-root "C:\projects\my-app"
+python -m bot.main --apply-reviewed-patch "C:\proposals\fix.patch" --patch-task-id fix-parser-001 --project-root "C:\projects\my-app" --workspace-parent "C:\BOTPYTON\workspaces" --patch-check python-unittest --execute-project-code --check-timeout 120
+```
+
+The check executes once on a baseline worktree and once on the patched candidate. If static verification fails, the candidate is not executed. If candidate checks fail, BOTPYTON emits a bounded log summary and a diagnostic hint; it does not repeat the same patch without new evidence. Worktrees/branches remain available for inspection and are not automatically deleted. See [the full guide](docs/ARCHITECT-PATCH-CYCLE.md).
+
+Only existing, regular, allowed files can be changed. The patch must fit 250 KB, 20 files and 20,000 lines; each target is limited to 200 KB. Protected paths, symbolic links, reparse points, submodules, binary patches, renames, copies and create/delete/mode changes are rejected. This first cycle supports syntax parsing for Python, JSON and TOML; other languages/formats need a project-specific check and human review. A passing syntax parse or test suite is evidence, not proof of universal correctness.
+
+Sources: [Git apply](https://git-scm.com/docs/git-apply) · [Python subprocess](https://docs.python.org/3/library/subprocess.html) · [Python AST limitations](https://docs.python.org/3/library/ast.html).
+
+## Next limitations to address
+
+- The planner still uses deterministic heuristics; a general natural-language architecture brain requires the separately consented remote adviser or an independently supplied patch proposal.
+- The patch cycle does not extract or apply a diff straight from an AI response. Review the proposal and save the diff explicitly.
+- A failed candidate produces diagnostic guidance but does not autonomously ask the model for another patch. The next safe step is an evidence-aware, bounded repair iteration with explicit external-AI consent, preserved baseline/candidate logs, and a hard stop after a small number of attempts.
+
 ## Quick start
 
 Requires Python 3.11+.

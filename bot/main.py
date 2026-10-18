@@ -138,6 +138,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--create-workspace", metavar="TASK_ID", help="create a Git worktree on a dedicated local branch from a clean project")
     parser.add_argument("--workspace-status", metavar="PATH", help="inspect a worktree's current status and diff summary")
     parser.add_argument("--workspace-parent", metavar="PATH", help="directory outside the source repository for --create-workspace")
+    parser.add_argument("--apply-reviewed-patch", metavar="PATCH_PATH", help="validate and apply a reviewed unified diff only inside an isolated Git worktree; never merges or pushes")
+    parser.add_argument("--patch-task-id", metavar="TASK_ID", help="safe task identifier required by --apply-reviewed-patch")
+    parser.add_argument("--patch-check", metavar="CHECK_ID", help="run one discovered check on baseline and candidate worktrees; requires --execute-project-code")
     parser.add_argument("--validate-task", metavar="PATH", help="validate a JSON task record")
     parser.add_argument("--validate-task-batch", metavar="PATH",
                         help="validate a bounded JSON task object/array without queue mutation")
@@ -180,6 +183,13 @@ def main(argv: list[str] | None = None) -> int:
         # should not pay the import/memory cost of an optional remote API.
         from .architect_ai import ArchitectAIError, request_architecture_advice
     try:
+        if args.apply_reviewed_patch and (
+            args.architect_ai or args.architect_plan or args.create_workspace or args.workspace_status
+            or args.local_plan or args.autonomous_cycle or args.run_project_check
+        ):
+            raise ValueError("--apply-reviewed-patch must be used as a separate operation")
+        if (args.patch_task_id or args.patch_check) and not args.apply_reviewed_patch:
+            raise ValueError("--patch-task-id and --patch-check require --apply-reviewed-patch")
         if args.allow_external_ai and not args.architect_ai:
             raise ValueError("--allow-external-ai requires --architect-ai")
         if args.architect_ai_context and not args.architect_ai:
@@ -251,6 +261,25 @@ def main(argv: list[str] | None = None) -> int:
             result = build_architecture_plan(brief)
             _print_json(result)
             return 0 if result["decision"] == "ready_to_plan" else 2
+        if args.apply_reviewed_patch:
+            # Keep the optional patch engine unloaded during normal BOTPYTON startup.
+            from .patch_cycle import PatchCycleError, apply_reviewed_patch
+            if not args.patch_task_id:
+                raise PatchCycleError("--apply-reviewed-patch requires --patch-task-id TASK_ID")
+            if args.execute_project_code and not args.patch_check:
+                raise PatchCycleError("--execute-project-code with --apply-reviewed-patch requires --patch-check CHECK_ID")
+            if args.patch_check and not args.execute_project_code:
+                raise PatchCycleError("--patch-check executes project code; add --execute-project-code only after reviewing the discovered command")
+            result = apply_reviewed_patch(
+                args.apply_reviewed_patch, args.project_root, args.patch_task_id,
+                workspace_parent=args.workspace_parent,
+                project_check_id=args.patch_check,
+                execute_project_code=args.execute_project_code,
+                timeout_seconds=args.check_timeout,
+                memory_limit_mb=args.child_memory_limit_mb,
+            )
+            _print_json(result)
+            return 0 if result["status"] in {"candidate_tests_passed", "candidate_ready_for_review"} else 1
         if args.create_workspace and args.workspace_status:
             raise WorkspaceError("Use either --create-workspace or --workspace-status, not both")
         if args.workspace_parent and not args.create_workspace:
