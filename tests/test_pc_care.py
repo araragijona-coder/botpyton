@@ -296,6 +296,139 @@ class PcCareTests(unittest.TestCase):
             self.assertEqual(manifest_path.read_text(encoding="utf-8"), '{"previous": true}\n')
             self.assertEqual([path.name for path in directory.iterdir()], ["manifest.json"])
 
+    def test_quarantine_initial_manifest_failure_does_not_move_files_or_leave_empty_session(self):
+        from bot.pc_care import QUARANTINE_CONFIRMATION, quarantine_cleanup_candidates
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            temp_root = base / "temporary"
+            temp_root.mkdir()
+            quarantine_root = base / "Quarantine"
+            first = temp_root / "first.tmp"
+            first.write_bytes(b"keep first")
+            now = 1_700_000_000.0
+            os.utime(first, (now - 12 * 86400, now - 12 * 86400))
+            preview = get_cleanup_preview(scan_roots=[("temporary files", temp_root)], now=now)
+
+            with patch("bot.pc_care._write_quarantine_manifest", side_effect=OSError("injected disk full")):
+                result = quarantine_cleanup_candidates(
+                    preview, confirmation=QUARANTINE_CONFIRMATION,
+                    scan_roots=[("temporary files", temp_root)],
+                    quarantine_root=quarantine_root, now=now, audit_dir=base / "audit",
+                )
+
+            self.assertEqual(result["status"], "manifest_write_failed")
+            self.assertEqual(result["files_quarantined"], 0)
+            self.assertEqual(result["files_skipped"], 1)
+            self.assertIsNone(result["manifest_path"])
+            self.assertTrue(first.is_file())
+            self.assertEqual(first.read_bytes(), b"keep first")
+            self.assertEqual(list(quarantine_root.iterdir()), [])
+
+    def test_quarantine_post_move_manifest_value_error_stops_later_moves_and_reports_counts(self):
+        import json
+        from bot.pc_care import (
+            QUARANTINE_CONFIRMATION, _write_quarantine_manifest,
+            quarantine_cleanup_candidates, preview_quarantined_restore,
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            temp_root = base / "temporary"
+            temp_root.mkdir()
+            quarantine_root = base / "Quarantine"
+            first = temp_root / "first.tmp"
+            second = temp_root / "second.tmp"
+            for path, payload in ((first, b"first original"), (second, b"second original")):
+                path.write_bytes(payload)
+                old = 1_700_000_000.0 - 12 * 86400
+                os.utime(path, (old, old))
+            preview = get_cleanup_preview(scan_roots=[("temporary files", temp_root)], now=1_700_000_000.0)
+            preview["candidates"] = sorted(preview["candidates"], key=lambda item: item["path"])
+            real_write = _write_quarantine_manifest
+            calls = 0
+
+            def fail_post_move(path, manifest):
+                nonlocal calls
+                calls += 1
+                if calls == 2:
+                    raise ValueError("injected manifest validation failure")
+                return real_write(path, manifest)
+
+            with patch("bot.pc_care._write_quarantine_manifest", side_effect=fail_post_move):
+                result = quarantine_cleanup_candidates(
+                    preview, confirmation=QUARANTINE_CONFIRMATION,
+                    scan_roots=[("temporary files", temp_root)],
+                    quarantine_root=quarantine_root, now=1_700_000_000.0,
+                    audit_dir=base / "audit",
+                )
+
+            self.assertEqual(calls, 3, "stop after the failing item, then save one final partial manifest")
+            self.assertEqual(result["status"], "manifest_write_failed", result)
+            self.assertEqual(result["files_quarantined"], 1)
+            self.assertEqual(result["manifest_status"], "partial")
+            self.assertEqual(result["manifest_error_type"], "ValueError")
+            self.assertFalse(first.exists())
+            self.assertTrue(second.is_file(), "later candidates must not be moved after persistence fails")
+            self.assertEqual(second.read_bytes(), b"second original")
+
+            manifest_path = Path(result["manifest_path"])
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            self.assertEqual(manifest["status"], "partial")
+            self.assertEqual(
+                sorted(item["status"] for item in manifest["items"]),
+                ["pending", "quarantined"],
+            )
+            restore_preview = preview_quarantined_restore(
+                manifest_path, scan_roots=[("temporary files", temp_root)]
+            )
+            self.assertEqual(restore_preview["ready_count"], 1)
+            self.assertGreaterEqual(restore_preview["files_skipped"], 1)
+            quarantined = manifest_path.parent / next(
+                item["quarantine_name"] for item in manifest["items"]
+                if item["original_path"] == str(first)
+            )
+            self.assertTrue(quarantined.is_file())
+            self.assertEqual(quarantined.read_bytes(), b"first original")
+
+    def test_quarantine_stops_after_skip_state_manifest_failure_before_any_move(self):
+        from bot.pc_care import QUARANTINE_CONFIRMATION, _write_quarantine_manifest, quarantine_cleanup_candidates
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            temp_root = base / "temporary"
+            temp_root.mkdir()
+            quarantine_root = base / "Quarantine"
+            changed = temp_root / "a-changed.tmp"
+            untouched = temp_root / "b-untouched.tmp"
+            now = 1_700_000_000.0
+            for path in (changed, untouched):
+                path.write_bytes(b"old bytes")
+                os.utime(path, (now - 12 * 86400, now - 12 * 86400))
+            preview = get_cleanup_preview(scan_roots=[("temporary files", temp_root)], now=now)
+            preview["candidates"] = sorted(preview["candidates"], key=lambda item: item["path"])
+            changed.write_bytes(b"content changed after preview")
+            real_write = _write_quarantine_manifest
+            calls = 0
+
+            def fail_skip_transition(path, manifest):
+                nonlocal calls
+                calls += 1
+                if calls == 2:
+                    raise OSError("injected access denied")
+                return real_write(path, manifest)
+
+            with patch("bot.pc_care._write_quarantine_manifest", side_effect=fail_skip_transition):
+                result = quarantine_cleanup_candidates(
+                    preview, confirmation=QUARANTINE_CONFIRMATION,
+                    scan_roots=[("temporary files", temp_root)],
+                    quarantine_root=quarantine_root, now=now, audit_dir=base / "audit",
+                )
+
+            self.assertEqual(result["status"], "manifest_write_failed")
+            self.assertEqual(result["files_quarantined"], 0)
+            self.assertEqual(result["files_skipped"], 1)
+            self.assertTrue(changed.is_file())
+            self.assertTrue(untouched.is_file(), "no later candidate should move after state persistence fails")
+            self.assertEqual(untouched.read_bytes(), b"old bytes")
+
     def test_quarantine_rejects_partial_preview(self):
         from bot.pc_care import quarantine_cleanup_candidates, QUARANTINE_CONFIRMATION
         with tempfile.TemporaryDirectory() as tmp:
