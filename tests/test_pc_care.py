@@ -450,6 +450,48 @@ class PcCareTests(unittest.TestCase):
             self.assertTrue(untouched.is_file(), "no later candidate should move after state persistence fails")
             self.assertEqual(untouched.read_bytes(), b"old bytes")
 
+    def test_restore_preview_rejects_embedded_nul_in_quarantine_name(self):
+        import json
+        from bot.pc_care import (
+            QUARANTINE_CONFIRMATION, _quarantine_manifest_digest,
+            quarantine_cleanup_candidates, preview_quarantined_restore,
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            temp_root = base / "temporary"
+            temp_root.mkdir()
+            original = temp_root / "old.tmp"
+            original.write_bytes(b"preserve during malformed-manifest check")
+            now = 1_700_000_000.0
+            os.utime(original, (now - 12 * 86400, now - 12 * 86400))
+            preview = get_cleanup_preview(scan_roots=[("temporary files", temp_root)], now=now)
+            moved = quarantine_cleanup_candidates(
+                preview, confirmation=QUARANTINE_CONFIRMATION,
+                scan_roots=[("temporary files", temp_root)],
+                quarantine_root=base / "Quarantine", now=now, audit_dir=base / "audit",
+            )
+            self.assertEqual(moved["status"], "completed")
+            manifest_path = Path(moved["manifest_path"])
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            real_quarantine_name = manifest["items"][0]["quarantine_name"]
+            self.assertTrue((manifest_path.parent / real_quarantine_name).is_file())
+
+            # A valid checksummed manifest may still contain an impossible path.
+            # Preview must skip that entry rather than crash or touch file data.
+            manifest["items"][0]["quarantine_name"] = "invalid" + chr(0) + "-name.tmp"
+            manifest["manifest_sha256"] = _quarantine_manifest_digest(manifest)
+            manifest_path.write_text(json.dumps(manifest, ensure_ascii=False), encoding="utf-8")
+
+            result = preview_quarantined_restore(
+                manifest_path, scan_roots=[("temporary files", temp_root)]
+            )
+
+            self.assertEqual(result["status"], "preview_partial")
+            self.assertEqual(result["ready_count"], 0)
+            self.assertEqual(result["items"][0]["status"], "skipped_unapproved_manifest_path")
+            self.assertFalse(original.exists())
+            self.assertTrue((manifest_path.parent / real_quarantine_name).is_file())
+
     def test_quarantine_rejects_partial_preview(self):
         from bot.pc_care import quarantine_cleanup_candidates, QUARANTINE_CONFIRMATION
         with tempfile.TemporaryDirectory() as tmp:
