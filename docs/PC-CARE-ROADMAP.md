@@ -338,3 +338,12 @@ python -m bot.main --pc-cleanup-restore "C:\\path\\to\\BOTPYTON\\Quarantine\\ses
 - Regression launches a short-lived parent plus a child that tries to create a delayed marker; assert the child never writes after the runner's timeout.
 - Research analogue: GitHub Actions Runner documents an orphan-process cleanup gap where descendants can outlive the supervising process; its release notes also record work to wait for workers during cancellation. These are analogous lessons, not claims of the same upstream defect.
 - Required gate: Linux foundation tests and Windows low-memory smoke pass on the PR and post-merge `main`. CI does not replace testing on the user's PC.
+
+
+## Phase 45 — Windows Job Object close-failure fallback
+
+- Check the Win32 `CloseHandle` result instead of treating every call as a successful process-tree termination.
+- If closing the Job Object fails, try `TerminateJobObject` to stop all assigned processes; kill the direct process only as a last-resort fallback if the job-level operation also fails.
+- Add simulated regressions for both API-failure paths without touching real processes or files.
+- Scope is limited to execution cleanup; task permissions, shell policy, and PC-care behavior remain unchanged.
+- Windows low-memory smoke and Linux foundation tests must pass on the candidate and again on the resulting `main` SHA. Automated smoke tests do not establish the user's own PC was tested.

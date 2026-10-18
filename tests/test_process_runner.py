@@ -9,6 +9,7 @@ from bot.process_runner import (
     ProcessRunnerError,
     _find_executable_in_path,
     _safe_search_path,
+    _terminate_process_tree,
     run_process,
 )
 
@@ -223,6 +224,52 @@ class ProcessRunnerTests(unittest.TestCase):
             # killed if timeout cleanup only terminated the direct process.
             time.sleep(0.8)
             self.assertFalse(marker.exists(), "a descendant survived the process timeout")
+
+
+    def test_windows_job_close_failure_uses_terminate_job_fallback(self):
+        class FakeProcess:
+            killed = False
+
+            def poll(self):
+                return -9 if self.killed else None
+
+            def kill(self):
+                self.killed = True
+
+        process = FakeProcess()
+        kernel32 = mock.Mock()
+        kernel32.CloseHandle.return_value = 0
+        kernel32.TerminateJobObject.return_value = 1
+
+        with mock.patch("bot.process_runner.os.name", "nt"):
+            handle_closed = _terminate_process_tree(process, (123, kernel32))
+
+        self.assertFalse(handle_closed, "a failed CloseHandle must leave final cleanup ownership intact")
+        kernel32.CloseHandle.assert_called_once_with(123)
+        kernel32.TerminateJobObject.assert_called_once_with(123, 1)
+        self.assertFalse(process.killed, "the full Job Object should be terminated before leader fallback")
+
+    def test_windows_job_close_and_terminate_failure_falls_back_to_leader(self):
+        class FakeProcess:
+            killed = False
+
+            def poll(self):
+                return -9 if self.killed else None
+
+            def kill(self):
+                self.killed = True
+
+        process = FakeProcess()
+        kernel32 = mock.Mock()
+        kernel32.CloseHandle.return_value = 0
+        kernel32.TerminateJobObject.return_value = 0
+
+        with mock.patch("bot.process_runner.os.name", "nt"):
+            handle_closed = _terminate_process_tree(process, (123, kernel32))
+
+        self.assertFalse(handle_closed)
+        kernel32.TerminateJobObject.assert_called_once_with(123, 1)
+        self.assertTrue(process.killed, "the direct process must be killed if both Job Object operations fail")
 
 
 if __name__ == "__main__":

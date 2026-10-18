@@ -586,3 +586,8 @@ Executor reports are now staged through uniquely created temporary files in the 
 ## Phase 44 — terminate timed-out process trees
 
 BOTPYTON now isolates each POSIX subprocess in its own session and terminates the whole process group on timeout or execution cleanup, rather than killing only the leader. On Windows, when the memory Job Object is available, timeout closes that job before waiting on output collectors so descendants cannot keep stdout/stderr pipes open or outlive the task. Regression coverage launches a child that would write a marker after the parent timeout and confirms it never survives. See [Phase 44 research](docs/research/PHASE-44-PROCESS-TREE-TIMEOUT-CLEANUP.md).
+
+
+## Phase 45 — Windows Job Object close-failure fallback
+
+The process runner now checks the native result of closing its Windows Job Object. If close fails, it explicitly calls `TerminateJobObject` before falling back to terminating the direct process, rather than assuming that closing the job already killed descendants. Regression tests simulate both the successful job-termination fallback and the last-resort direct-process fallback. See [Phase 45 research](docs/research/PHASE-45-WINDOWS-JOB-CLOSE-FAILURE.md).
