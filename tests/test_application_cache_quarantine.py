@@ -201,6 +201,65 @@ class ApplicationCacheQuarantineTests(unittest.TestCase):
             self.assertEqual(restored["status"], "cache_restore_blocked")
             self.assertEqual(chosen.read_bytes(), b"new browser cache")
 
+    def test_quarantine_manifest_value_error_after_move_keeps_recovery_available(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            _local, chosen, untouched, env = self._fixture(tmp, 1_700_000_000.0)
+            selected = [str(chosen.resolve()), str(untouched.resolve())]
+            real_write = __import__("bot.application_cache_quarantine", fromlist=["_atomic_write_manifest"])._atomic_write_manifest
+            calls = 0
+
+            def fail_manifest_publication_after_move(path, manifest):
+                nonlocal calls
+                calls += 1
+                # Call 1 publishes the initial pending manifest. Calls 2 and 3
+                # fail: the move has happened, then both attempted state writes fail.
+                if calls in {2, 3}:
+                    raise ValueError("injected manifest serialization/persistence failure")
+                return real_write(path, manifest)
+
+            with mock.patch(
+                "bot.application_cache_quarantine._atomic_write_manifest",
+                side_effect=fail_manifest_publication_after_move,
+            ):
+                result = quarantine_application_cache_candidates(
+                    selected, confirmation=CACHE_QUARANTINE_CONFIRMATION,
+                    env=env, windows=True,
+                )
+
+            self.assertEqual(calls, 3)
+            self.assertEqual(result["status"], "cache_quarantine_partial")
+            self.assertEqual(result["moved_count"], 1)
+            self.assertEqual(result["files_moved"], 1)
+            self.assertEqual(result["files_skipped"], 1)
+            self.assertTrue(result["manifest_path"])
+
+            durable = json.loads(Path(result["manifest_path"]).read_text(encoding="utf-8"))
+            self.assertEqual(durable["items"][0]["state"], "pending")
+            self.assertEqual(durable["items"][1]["state"], "pending")
+            quarantine_path = Path(durable["items"][0]["quarantine_path"])
+            self.assertTrue(quarantine_path.is_file())
+            self.assertEqual(quarantine_path.read_bytes(), b"selected cache")
+            self.assertFalse(chosen.exists())
+            self.assertTrue(untouched.is_file())
+            self.assertEqual(untouched.read_bytes(), b"keep me")
+
+            preview = preview_application_cache_restore(result["manifest_path"], env=env, windows=True)
+            self.assertIn(preview["status"], {"restore_preview_complete", "restore_preview_partial"})
+            self.assertEqual(preview["ready_count"], 1)
+            # The second item was never moved; reconciliation makes its durable
+            # state accurate without altering that original file.
+            self.assertEqual(preview["reconcile_count"], 1)
+
+            restored = restore_application_cache_quarantine(
+                result["manifest_path"], confirmation=CACHE_RESTORE_CONFIRMATION,
+                env=env, windows=True,
+            )
+            self.assertEqual(restored["files_restored"], 1)
+            self.assertEqual(restored["files_reconciled"], 1)
+            self.assertEqual(chosen.read_bytes(), b"selected cache")
+            self.assertEqual(untouched.read_bytes(), b"keep me")
+            self.assertFalse(quarantine_path.exists())
+
     def test_restore_manifest_write_failure_can_be_reconciled_without_moving_again(self):
         for failure_type in (OSError, ValueError):
             with self.subTest(failure_type=failure_type.__name__), tempfile.TemporaryDirectory() as tmp:
