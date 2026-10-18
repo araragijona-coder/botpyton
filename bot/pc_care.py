@@ -1713,11 +1713,19 @@ def _write_quarantine_manifest(manifest_path: Path, manifest: dict) -> None:
     manifest["manifest_sha256"] = _quarantine_manifest_digest(manifest)
     temporary_path = manifest_path.with_name(f".manifest-{time.time_ns()}.tmp")
     payload = json.dumps(manifest, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
-    with temporary_path.open("x", encoding="utf-8", newline="\n") as stream:
-        stream.write(payload)
-        stream.flush()
-        os.fsync(stream.fileno())
-    os.replace(temporary_path, manifest_path)
+    try:
+        with temporary_path.open("x", encoding="utf-8", newline="\n") as stream:
+            stream.write(payload)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary_path, manifest_path)
+    finally:
+        # A failed disk write or replace must not leave stray manifest staging files.
+        # Cleanup is best-effort and never hides the original publication exception.
+        try:
+            temporary_path.unlink(missing_ok=True)
+        except OSError:
+            pass
 
 
 def _default_quarantine_root() -> Path:
@@ -1991,31 +1999,70 @@ def _inspect_quarantine_item(
     *,
     hash_budget_remaining: int,
 ) -> tuple[dict, int]:
-    """Read-only integrity and restore-destination check for one manifest item."""
+    """Read-only integrity check; reconcile a move whose final manifest write failed."""
     original_value = item.get("original_path")
     label = item.get("root_label")
     name = item.get("quarantine_name")
-    if item.get("status") == "restored":
+    state = item.get("status")
+    if state == "restored":
         return ({"path": original_value, "status": "already_restored", "ready": False}, 0)
     if (not isinstance(original_value, str) or not isinstance(label, str) or label not in roots
             or not isinstance(name, str) or Path(name).name != name or name in {"", ".", ".."}):
         return ({"path": original_value, "status": "skipped_unapproved_manifest_path", "ready": False}, 0)
+
     quarantine_file = session_dir / name
     if _is_link_or_reparse(quarantine_file) or not _no_link_components(quarantine_file, stop_at=session_dir):
         return ({"path": original_value, "status": "skipped_unsafe_quarantine_file", "ready": False}, 0)
-    try:
-        info = quarantine_file.stat(follow_symlinks=False)
-        import stat as stat_module
-        if not stat_module.S_ISREG(info.st_mode):
-            return ({"path": original_value, "status": "skipped_non_regular_quarantine_file", "ready": False}, 0)
-    except OSError:
-        return ({"path": original_value, "status": "skipped_quarantine_file_missing", "ready": False}, 0)
+
     expected_size = item.get("size_bytes")
     expected_hash = item.get("sha256")
-    if not isinstance(expected_size, int) or isinstance(expected_size, bool) or info.st_size != expected_size:
-        return ({"path": original_value, "status": "skipped_quarantine_file_changed", "ready": False}, 0)
-    if not isinstance(expected_hash, str) or not re.fullmatch(r"[0-9a-f]{64}", expected_hash):
+    if (not isinstance(expected_size, int) or isinstance(expected_size, bool)
+            or expected_size < 0
+            or not isinstance(expected_hash, str)
+            or not re.fullmatch(r"[0-9a-f]{64}", expected_hash)):
         return ({"path": original_value, "status": "skipped_invalid_integrity_metadata", "ready": False}, 0)
+
+    try:
+        info = quarantine_file.stat(follow_symlinks=False)
+    except OSError:
+        # restore_quarantined_files records "restoring" before the move. If the move
+        # succeeds but the following manifest write fails, the durable manifest keeps
+        # that state while the quarantine entry is now absent. Offer reconciliation
+        # only when no quarantine entry exists and the approved original matches the
+        # recorded size/hash; matching bytes prove integrity, not provenance.
+        if state == "restoring" and not os.path.lexists(quarantine_file):
+            original_info = _safe_regular_file_info(original_value, roots[label])
+            if original_info is None or original_info.st_size != expected_size:
+                return ({"path": original_value, "status": "skipped_restore_state_unverified", "ready": False}, 0)
+            if original_info.st_size > hash_budget_remaining:
+                return ({"path": original_value, "status": "skipped_hash_budget", "ready": False}, 0)
+            try:
+                original_hash = _sha256_file(original_value, byte_limit=hash_budget_remaining)
+                after_info = _safe_regular_file_info(original_value, roots[label])
+            except (OSError, ValueError):
+                return ({"path": original_value, "status": "skipped_restore_state_unverified", "ready": False}, 0)
+            if (
+                after_info is not None
+                and after_info.st_size == original_info.st_size == expected_size
+                and after_info.st_mtime_ns == original_info.st_mtime_ns
+                and after_info.st_dev == original_info.st_dev
+                and after_info.st_ino == original_info.st_ino
+                and original_hash == expected_hash
+            ):
+                return ({
+                    "path": original_value,
+                    "status": "reconcile_manifest_state",
+                    "ready": False,
+                    "reconcile": True,
+                    "size_bytes": expected_size,
+                }, expected_size)
+        return ({"path": original_value, "status": "skipped_quarantine_file_missing", "ready": False}, 0)
+
+    import stat as stat_module
+    if not stat_module.S_ISREG(info.st_mode):
+        return ({"path": original_value, "status": "skipped_non_regular_quarantine_file", "ready": False}, 0)
+    if info.st_size != expected_size:
+        return ({"path": original_value, "status": "skipped_quarantine_file_changed", "ready": False}, 0)
     if info.st_size > hash_budget_remaining:
         return ({"path": original_value, "status": "skipped_hash_budget", "ready": False}, 0)
     try:
@@ -2029,7 +2076,6 @@ def _inspect_quarantine_item(
     if destination is None:
         return ({"path": original_value, "status": "skipped_destination_exists_or_unsafe", "ready": False}, bytes_used)
     return ({"path": original_value, "status": "ready_to_restore", "ready": True}, bytes_used)
-
 
 def preview_quarantined_restore(
     manifest_path: str | Path,
@@ -2318,7 +2364,7 @@ def restore_quarantined_files(
     scan_roots: list[tuple[str, Path]] | None = None,
     audit_dir: str | Path | None = None,
 ) -> dict:
-    """Restore verified quarantined files to their original approved temp locations; never overwrite."""
+    """Restore verified quarantined files without overwriting; recover stale move metadata."""
     if confirmation != RESTORE_CONFIRMATION:
         raise ValueError("Restore cancelled: the exact confirmation phrase was not supplied.")
     path, session_dir, manifest = _load_valid_quarantine_manifest(manifest_path)
@@ -2332,15 +2378,19 @@ def restore_quarantined_files(
         return {
             "product": "BOTPYTON PC Care", "schema_version": 1,
             "status": "audit_unavailable", "read_only": False, "network_used": False,
-            "files_restored": 0, "files_skipped": len(manifest["items"]),
+            "files_restored": 0, "files_reconciled": 0, "files_skipped": len(manifest["items"]),
             "files_deleted": 0, "settings_changed": False, "manifest_path": str(path),
             "items": [], "audit_status": "write_failed",
             "limitations": ["Restore was not started because its audit start record could not be persisted."],
         }
 
     restored: list[dict] = []
+    reconciled: list[dict] = []
+    reconciliation_pending: list[dict] = []
     skipped: list[dict] = []
     total_hashed = 0
+    persistence_failed = False
+
     for item in manifest["items"]:
         if not isinstance(item, dict):
             skipped.append({"status": "skipped_invalid_manifest_entry"})
@@ -2353,22 +2403,68 @@ def restore_quarantined_files(
         if inspected["status"] == "already_restored":
             skipped.append({"path": inspected.get("path"), "status": "already_restored"})
             continue
+        if inspected.get("status") == "reconcile_manifest_state":
+            original_value = item["original_path"]
+            original_info = _safe_regular_file_info(original_value, roots[item["root_label"]])
+            quarantine_file = session_dir / item["quarantine_name"]
+            if (
+                item.get("status") != "restoring"
+                or original_info is None
+                or original_info.st_size != item.get("size_bytes")
+                or os.path.lexists(quarantine_file)
+            ):
+                skipped.append({"path": original_value, "status": "skipped_restore_state_changed"})
+                continue
+            remaining_budget = MAX_QUARANTINE_HASH_BYTES - total_hashed
+            if original_info.st_size > remaining_budget:
+                skipped.append({"path": original_value, "status": "skipped_hash_budget"})
+                continue
+            try:
+                digest = _sha256_file(original_value, byte_limit=remaining_budget)
+                final_info = _safe_regular_file_info(original_value, roots[item["root_label"]])
+            except (OSError, ValueError):
+                skipped.append({"path": original_value, "status": "skipped_restore_state_unverified"})
+                continue
+            total_hashed += original_info.st_size
+            if (
+                final_info is None
+                or final_info.st_size != item["size_bytes"]
+                or final_info.st_mtime_ns != original_info.st_mtime_ns
+                or final_info.st_dev != original_info.st_dev
+                or final_info.st_ino != original_info.st_ino
+                or digest != item["sha256"]
+                or os.path.lexists(quarantine_file)
+            ):
+                skipped.append({"path": original_value, "status": "skipped_restore_state_changed"})
+                continue
+            # This is metadata-only: no file content or path is moved here.
+            item["status"] = "restored"
+            reconciliation_pending.append({"path": original_value, "status": "reconciled_manifest_state"})
+            try:
+                _write_quarantine_manifest(path, manifest)
+            except (OSError, ValueError):
+                persistence_failed = True
+                break
+            reconciled.extend(reconciliation_pending)
+            reconciliation_pending.clear()
+            continue
         if not inspected.get("ready"):
             skipped.append({"path": inspected.get("path"), "status": inspected["status"]})
             continue
+
         original_value = item["original_path"]
-        name = item["quarantine_name"]
-        quarantine_file = session_dir / name
+        quarantine_file = session_dir / item["quarantine_name"]
         destination = _safe_restore_destination(original_value, roots[item["root_label"]])
         if destination is None:
             skipped.append({"path": original_value, "status": "skipped_destination_exists_or_unsafe"})
             continue
-        # The SHA-256 check above is already complete. Recheck metadata and destination
-        # immediately before the atomic no-overwrite move without hashing the bytes twice.
+        # The bounded hash completed in _inspect_quarantine_item. Recheck the
+        # source identity and missing destination immediately before moving.
         try:
             final_info = quarantine_file.stat(follow_symlinks=False)
             expected_mtime_ns = item.get("modified_ns")
-            if (not quarantine_file.is_file() or final_info.st_size != item["size_bytes"]
+            if (not quarantine_file.is_file() or _is_link_or_reparse(quarantine_file)
+                    or final_info.st_size != item["size_bytes"]
                     or not isinstance(expected_mtime_ns, int)
                     or final_info.st_mtime_ns != expected_mtime_ns):
                 skipped.append({"path": original_value, "status": "skipped_quarantine_file_changed"})
@@ -2380,36 +2476,83 @@ def restore_quarantined_files(
         if destination is None:
             skipped.append({"path": original_value, "status": "skipped_destination_exists_or_unsafe"})
             continue
+
         item["status"] = "restoring"
-        _write_quarantine_manifest(path, manifest)
+        try:
+            _write_quarantine_manifest(path, manifest)
+        except (OSError, ValueError):
+            # Do not move when the pre-move recovery state could not be saved.
+            item["status"] = "quarantined"
+            persistence_failed = True
+            skipped.append({"path": original_value, "status": "manifest_write_failed_before_move"})
+            break
         try:
             _move_no_replace(quarantine_file, destination)
         except OSError as exc:
             item["status"] = "quarantined"
             item["failure_type"] = type(exc).__name__
-            _write_quarantine_manifest(path, manifest)
+            try:
+                _write_quarantine_manifest(path, manifest)
+            except (OSError, ValueError):
+                persistence_failed = True
             skipped.append({"path": original_value, "status": "restore_failed", "failure_type": type(exc).__name__})
+            if persistence_failed:
+                break
             continue
-        item["status"] = "restored"
-        _write_quarantine_manifest(path, manifest)
-        restored.append({"path": str(destination), "status": "restored"})
 
-    manifest["status"] = "restored" if not any(
-        isinstance(item, dict) and item.get("status") in {"quarantined", "pending", "restoring"}
-        for item in manifest["items"]
-    ) else "partial"
-    _write_quarantine_manifest(path, manifest)
-    final_status = "restored" if not skipped else ("partial" if restored else "no_files_restored")
+        # The move itself is complete regardless of whether the next manifest
+        # replacement succeeds; reflect that real-world outcome in the report.
+        item["status"] = "restored"
+        restored.append({"path": str(destination), "status": "restored"})
+        try:
+            _write_quarantine_manifest(path, manifest)
+        except (OSError, ValueError):
+            restored[-1]["status"] = "restored_manifest_write_failed"
+            persistence_failed = True
+            break
+
+    # If a metadata-reconciliation write failed, a final successful publication
+    # can still make that state durable. Otherwise leave "restoring" for a later
+    # read-only preview to verify and reconcile again.
+    active_states = {"quarantined", "pending", "restoring"}
+    manifest["status"] = (
+        "restored"
+        if not persistence_failed and not skipped and not any(
+            isinstance(item, dict) and item.get("status") in active_states
+            for item in manifest["items"]
+        )
+        else "partial"
+    )
+    try:
+        _write_quarantine_manifest(path, manifest)
+    except (OSError, ValueError):
+        persistence_failed = True
+    else:
+        if reconciliation_pending:
+            reconciled.extend(reconciliation_pending)
+            reconciliation_pending.clear()
+
+    if persistence_failed:
+        final_status = "manifest_write_failed"
+    elif skipped:
+        final_status = "partial" if restored or reconciled else "no_files_restored"
+    elif restored:
+        final_status = "restored"
+    elif reconciled:
+        final_status = "reconciled"
+    else:
+        final_status = "no_files_restored"
+
     audit_status = "written"
     try:
         _persist_pc_care_audit_event(
             "restore", "completed", final_status,
-            item_count=len(manifest["items"]), succeeded_count=len(restored),
+            item_count=len(manifest["items"]), succeeded_count=len(restored) + len(reconciled),
             skipped_count=len(skipped), session_id=session_dir.name, audit_dir=audit_dir,
         )
     except (OSError, ValueError):
         audit_status = "final_write_failed"
-        if final_status == "restored":
+        if final_status in {"restored", "reconciled"}:
             final_status = "audit_write_failed"
     return {
         "product": "BOTPYTON PC Care",
@@ -2418,22 +2561,30 @@ def restore_quarantined_files(
         "read_only": False,
         "network_used": False,
         "files_restored": len(restored),
+        "files_reconciled": len(reconciled),
         "files_skipped": len(skipped),
         "manifest_path": str(path),
         "hash_bytes_examined": total_hashed,
         "audit_status": audit_status,
-        "items": restored + skipped,
+        "items": restored + reconciled + skipped,
         "files_deleted": 0,
         "settings_changed": False,
+        "note": (
+            "A manifest write failed during restore; the movement count reflects completed moves. "
+            "The remaining manifest state is available for a read-only integrity check and explicit reconciliation."
+            if persistence_failed else
+            "Verified files were restored only to missing paths under approved temporary roots. "
+            "Metadata-only reconciliation changed no file contents or paths. Existing files were never overwritten."
+        ),
         "limitations": [
-            "SHA-256 integrity must match the quarantine manifest before a file is restored.",
+            "SHA-256 integrity must match the quarantine manifest before a file is restored or reconciled.",
             "Existing original paths are never overwritten.",
             "Restoration is restricted to approved temporary roots recorded in the manifest.",
             "Cross-volume moves may be rejected; a failed restore leaves the file in quarantine.",
-            "At most 512 MiB of file contents are hashed per run.",
+            "A matching destination hash supports metadata reconciliation, but does not prove which process placed the bytes there.",
+            "At most 512 MiB of file contents are hashed per operation, including reconciliation checks.",
         ],
     }
-
 
 def get_pc_care_report(
     *,
