@@ -82,6 +82,50 @@ class VerificationTests(unittest.TestCase):
             self.assertFalse(result["checks"][0]["ok"])
             self.assertIn("RecursionError", result["checks"][0]["reason"])
 
+    def test_verification_rejects_a_reparse_point_component(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            actual_directory = root / "real"
+            actual_directory.mkdir()
+            (actual_directory / "settings.json").write_text('{"safe":true}', encoding="utf-8")
+            junction_like_directory = root / "alias"
+            # A real Windows junction is not required to make this regression
+            # cross-platform: patch the shared platform detector as if "alias"
+            # were an NTFS reparse-point directory pointing inside the project.
+            junction_like_directory.mkdir()
+
+            from bot import verification
+
+            real_detector = verification._is_link_or_reparse
+
+            def detect_alias(path: Path) -> bool:
+                if path == junction_like_directory:
+                    return True
+                return real_detector(path)
+
+            with patch("bot.verification._is_link_or_reparse", side_effect=detect_alias):
+                result = evaluate_verification_checks(
+                    [{"type": "file_exists", "path": "alias/settings.json"}],
+                    root,
+                    action_results=[],
+                )
+
+            self.assertEqual(result["status"], "failed")
+            self.assertFalse(result["checks"][0]["ok"])
+            self.assertIn("reparse-point", result["checks"][0]["reason"])
+
+    def test_missing_files_remain_normal_failed_checks_not_link_errors(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            result = evaluate_verification_checks(
+                [{"type": "file_exists", "path": "not-here.json"}],
+                root,
+                action_results=[],
+            )
+            self.assertEqual(result["status"], "failed")
+            self.assertFalse(result["checks"][0]["ok"])
+            self.assertEqual(result["checks"][0]["reason"], "file does not exist")
+
 
 if __name__ == "__main__":
     unittest.main()
