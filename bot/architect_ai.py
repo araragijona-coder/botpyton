@@ -1,7 +1,8 @@
 """Opt-in second-opinion architecture advice through OpenRouter's free router.
 
-Only a structured task brief and the deterministic local plan are sent. Project files
-are never opened or uploaded by this module; the router endpoint and model are fixed.
+Only selected structured brief fields and the deterministic local plan are sent. The
+local architecture kernel may inspect names/manifests, but its repository inventory is
+not sent. Source files are not uploaded by this module; endpoint and model are fixed.
 """
 from __future__ import annotations
 
@@ -212,8 +213,8 @@ def request_architecture_advice(
             "ai_enabled": True,
             "network_used": True,
             "provider_free_router_requested": True,
-            "source_code_uploaded": False,
             "project_files_uploaded": False,
+            "repository_inventory_uploaded": False,
             "project_code_executed": False,
             "commands_executed": False,
             "files_written": False,
@@ -222,7 +223,8 @@ def request_architecture_advice(
             "note": (
                 "Only selected brief fields and the local plan were sent. Values you put in "
                 "observed_error or available_evidence may still contain sensitive text; review "
-                "the brief before opting in. The model output is untrusted advice and is never executed."
+                "the brief before opting in. If you paste code or secrets into a brief field, those values "
+                "can be sent too. The model output is untrusted advice and is never executed."
             ),
         },
     }
