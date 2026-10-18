@@ -2281,8 +2281,32 @@ def quarantine_cleanup_candidates(
         "status": "in_progress",
         "items": manifest_items,
     }
-    _write_quarantine_manifest(manifest_path, manifest)
     report["manifest_path"] = str(manifest_path)
+    try:
+        _write_quarantine_manifest(manifest_path, manifest)
+    except (OSError, ValueError) as exc:
+        # No source file has moved yet. Return an explicit report and remove only
+        # the empty session directory; never recursively delete recovery material.
+        report["status"] = "manifest_write_failed"
+        report["files_skipped"] = len(manifest_items)
+        report["items"] = [
+            {
+                "path": item["original_path"],
+                "status": "manifest_write_failed_before_move",
+                "failure_type": type(exc).__name__,
+            }
+            for item in manifest_items
+        ]
+        report["manifest_error_type"] = type(exc).__name__
+        report["note"] = "The initial recovery manifest could not be saved; no files were moved."
+        if not manifest_path.exists():
+            try:
+                session_dir.rmdir()
+            except OSError:
+                pass
+            report["manifest_path"] = None
+        return report
+
     report["status"] = "in_progress"
     report["audit_status"] = "unavailable"
     try:
@@ -2290,12 +2314,42 @@ def quarantine_cleanup_candidates(
             "quarantine", "started", "in_progress",
             item_count=len(manifest_items), session_id=session_name, audit_dir=audit_dir,
         )
-    except (OSError, ValueError):
+    except (OSError, ValueError) as exc:
+        # The audit start event is a gate before any mutation. Mark that the run
+        # never started rather than leaving a misleading in_progress manifest.
+        manifest["status"] = "not_started"
+        try:
+            _write_quarantine_manifest(manifest_path, manifest)
+            report["manifest_status"] = "not_started"
+        except (OSError, ValueError):
+            report["manifest_status"] = "in_progress"
         report["status"] = "audit_unavailable"
         report["files_quarantined"] = 0
+        report["files_skipped"] = len(manifest_items)
         report["audit_status"] = "write_failed"
+        report["items"] = [
+            {"path": item["original_path"], "status": "not_started_audit_unavailable"}
+            for item in manifest_items
+        ]
+        report["note"] = (
+            f"The audit start event could not be saved ({type(exc).__name__}); "
+            "no files were moved."
+        )
         return report
     report["audit_status"] = "written"
+
+    manifest_write_failed = False
+    manifest_error_type = None
+
+    def persist_transition() -> bool:
+        nonlocal manifest_write_failed, manifest_error_type
+        try:
+            _write_quarantine_manifest(manifest_path, manifest)
+            return True
+        except (OSError, ValueError) as exc:
+            manifest_write_failed = True
+            manifest_error_type = type(exc).__name__
+            return False
 
     for item in manifest_items:
         source = Path(item["original_path"])
@@ -2307,14 +2361,18 @@ def quarantine_cleanup_candidates(
                 or fresh_info.st_mtime > cutoff):
             item["status"] = "skipped_changed_before_move"
             report["items"].append({"path": item["original_path"], "status": item["status"]})
-            _write_quarantine_manifest(manifest_path, manifest)
+            if not persist_transition():
+                break
             continue
+
         destination = session_dir / item["quarantine_name"]
         if destination.exists() or destination.is_symlink() or not _no_link_components(session_dir):
             item["status"] = "skipped_quarantine_path_unsafe"
             report["items"].append({"path": item["original_path"], "status": item["status"]})
-            _write_quarantine_manifest(manifest_path, manifest)
+            if not persist_transition():
+                break
             continue
+
         try:
             _move_no_replace(source, destination)
         except OSError as exc:
@@ -2325,17 +2383,19 @@ def quarantine_cleanup_candidates(
                 "status": item["status"],
                 "failure_type": type(exc).__name__,
             })
-            _write_quarantine_manifest(manifest_path, manifest)
+            if not persist_transition():
+                break
             continue
+
+        # The movement is real even if persisting the next state fails.
         item["status"] = "quarantined"
-        try:
-            _write_quarantine_manifest(manifest_path, manifest)
-        except OSError:
+        if not persist_transition():
             report["items"].append({
                 "path": item["original_path"],
+                "quarantine_path": str(destination),
                 "status": "moved_manifest_update_failed",
+                "failure_type": manifest_error_type,
             })
-            report["status"] = "manifest_write_failed"
             break
         report["items"].append({
             "path": item["original_path"],
@@ -2352,9 +2412,38 @@ def quarantine_cleanup_candidates(
             and not Path(item["original_path"]).exists()
         )
     )
-    report["files_skipped"] = sum(1 for item in report["items"] if str(item.get("status", "")).startswith("skipped") or item.get("status") == "move_failed")
-    if report["status"] != "manifest_write_failed":
-        report["status"] = "completed" if report["files_skipped"] == 0 else "partial"
+    report["files_skipped"] = sum(
+        1 for item in report["items"]
+        if str(item.get("status", "")).startswith("skipped")
+        or item.get("status") in {
+            "move_failed", "manifest_write_failed_before_move",
+            "not_started_audit_unavailable",
+        }
+    )
+
+    intended_status = (
+        "completed"
+        if report["files_skipped"] == 0 and not manifest_write_failed
+        else "partial"
+    )
+    manifest["status"] = intended_status
+    final_persisted = persist_transition()
+    if manifest_write_failed:
+        report["status"] = "manifest_write_failed"
+        report["manifest_error_type"] = manifest_error_type
+        report["note"] = (
+            "A quarantine manifest update failed. No further files were moved; "
+            "the report counts completed moves and identifies the failure. "
+            "Inspect the listed manifest before attempting recovery."
+        )
+    elif not final_persisted:
+        report["status"] = "manifest_write_failed"
+        report["manifest_error_type"] = manifest_error_type
+        report["note"] = "Final manifest publication failed; inspect the last durable manifest before recovery."
+    else:
+        report["status"] = intended_status
+
+    report["manifest_status"] = intended_status if final_persisted else "last_durable_state"
     try:
         _persist_pc_care_audit_event(
             "quarantine", "completed", report["status"],
@@ -2366,7 +2455,6 @@ def quarantine_cleanup_candidates(
         if report["status"] == "completed":
             report["status"] = "audit_write_failed"
     return report
-
 
 def restore_quarantined_files(
     manifest_path: str | Path,
