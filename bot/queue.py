@@ -33,7 +33,71 @@ class TaskQueue:
         self.memory = memory
 
     def _load(self) -> dict[str, Any]:
-        return self.memory.load()
+        state = self.memory.load()
+        self._validate_persisted_state(state)
+        return state
+
+    @staticmethod
+    def _validate_persisted_state(state: dict[str, Any]) -> None:
+        """Reject malformed durable queue records before operations index into them."""
+        records = state.get("tasks")
+        if not isinstance(records, dict):
+            raise QueueError("Persisted task queue has an invalid tasks mapping")
+
+        required_record_fields = {
+            "payload", "idempotency_key", "status", "attempts", "created_at",
+            "updated_at", "started_at", "finished_at", "last_error", "result",
+        }
+        payloads: list[dict[str, Any]] = []
+        for task_id, record in records.items():
+            if not isinstance(task_id, str) or not task_id.strip():
+                raise QueueError("Persisted task queue contains an invalid task ID")
+            if not isinstance(record, dict):
+                raise QueueError(f"Persisted task {task_id!r} is not an object")
+            missing = required_record_fields - record.keys()
+            if missing:
+                raise QueueError(
+                    f"Persisted task {task_id!r} is missing fields: {', '.join(sorted(missing))}"
+                )
+
+            payload = record["payload"]
+            if not isinstance(payload, dict):
+                raise QueueError(f"Persisted task {task_id!r} has an invalid payload object")
+            try:
+                validate_task(payload)
+                expected_fingerprint = _fingerprint(payload)
+            except (PolicyError, TypeError, ValueError, RecursionError) as exc:
+                raise QueueError(
+                    f"Persisted task {task_id!r} has an invalid payload: {exc}"
+                ) from exc
+            if payload["id"] != task_id:
+                raise QueueError(f"Persisted task key does not match payload ID for {task_id!r}")
+            if record["idempotency_key"] != expected_fingerprint:
+                raise QueueError(f"Persisted task {task_id!r} has an invalid idempotency fingerprint")
+
+            status = record["status"]
+            if not isinstance(status, str) or status not in TASK_STATES:
+                raise QueueError(f"Persisted task {task_id!r} has an unknown status")
+            attempts = record["attempts"]
+            maximum = payload.get("max_attempts", 3)
+            if (
+                isinstance(attempts, bool) or not isinstance(attempts, int)
+                or attempts < 0 or attempts > maximum
+            ):
+                raise QueueError(f"Persisted task {task_id!r} has an invalid attempt count")
+            if not isinstance(record["created_at"], str) or not isinstance(record["updated_at"], str):
+                raise QueueError(f"Persisted task {task_id!r} has invalid timestamps")
+            for field in ("started_at", "finished_at", "last_error"):
+                value = record[field]
+                if value is not None and not isinstance(value, str):
+                    raise QueueError(f"Persisted task {task_id!r} has invalid {field} metadata")
+            payloads.append(payload)
+
+        try:
+            order_tasks(payloads)
+        except (TypeError, ValueError, RecursionError) as exc:
+            # In particular, do not let a missing dependency escape later as KeyError.
+            raise QueueError(f"Persisted task dependency graph is invalid: {exc}") from exc
 
     def _save(self, state: dict[str, Any]) -> None:
         self.memory.save(state)

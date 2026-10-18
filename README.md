@@ -564,3 +564,10 @@ External maintenance context (analogue, not a claim of an identical upstream def
 - [BleachBit 6.0.4 release notes](https://www.bleachbit.org/news/bleachbit-604) describe a maintenance release with security, bug-fix, performance, and cleanup reliability work.
 
 The regression is isolated to temporary test directories. Merge requires the Linux foundation suite and Windows low-memory smoke to pass before and after merge.
+
+
+## Phase 41 — validate persisted queue records before scheduling
+
+BOTPYTON now validates the durable task queue's per-record schema and complete dependency graph before listing, claiming, completing, failing, resuming or enqueueing work. Missing fields, mismatched task IDs/fingerprints, invalid states/attempt counts, unknown dependencies and dependency cycles stop with a controlled `QueueError` instead of leaking internal key lookup exceptions. Invalid state is not auto-repaired or rewritten. Regression tests prove the original bytes remain unchanged when validation fails. See [Phase 41 research](docs/research/PHASE-41-QUEUE-STATE-VALIDATION.md).
+
+External maintenance analogues: [CCleaner Version History](https://www.ccleaner.com/ccleaner/version-history/) and [Python 3.9.20 security bug-fix release](https://www.python.org/downloads/release/python-3920/). These do not claim identical upstream bugs.

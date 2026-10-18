@@ -299,3 +299,13 @@ python -m bot.main --pc-cleanup-restore "C:\\path\\to\\BOTPYTON\\Quarantine\\ses
 - Regression removes each field and recomputes the checksum to ensure malformed-but-checksummed records are still rejected.
 - References: official CCleaner version history (file-write security and more precise per-file error reporting) and BleachBit 6.0.4 maintenance notes. These are design analogues, not evidence that those projects had the same missing-field bug.
 - Required gate: Linux foundation tests and Windows low-memory smoke pass before merge and post-merge.
+
+
+## Phase 41 — durable task queue schema validation
+
+- Validate every persisted queue record before queue operations index into it: required record fields, task payload policy, task ID, idempotency fingerprint, status, attempt bounds and metadata types.
+- Validate the complete persisted dependency graph before scheduling; reject unknown task IDs and cycles with a controlled `QueueError` rather than leaking `KeyError`.
+- Fail closed and preserve malformed state exactly as found; do not auto-correct or discard tasks.
+- Regression tests cover missing record fields, unknown dependencies and changed payload/fingerprint mismatches in temporary directories, asserting the stored bytes remain unchanged.
+- External references: official CCleaner version history (documented file-write/startup/shutdown bugs and clearer per-item failures), Python 3.9.20 security bug-fix notes involving malformed inputs, and Python JSON documentation. These are reliability analogues, not identical upstream defects.
+- Required gate: Linux foundation tests and Windows low-memory smoke pass on the PR and on post-merge `main`.
