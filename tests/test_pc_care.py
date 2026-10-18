@@ -390,7 +390,10 @@ class PcCareTests(unittest.TestCase):
             self.assertEqual(quarantined.read_bytes(), b"first original")
 
     def test_quarantine_stops_after_skip_state_manifest_failure_before_any_move(self):
-        from bot.pc_care import QUARANTINE_CONFIRMATION, _write_quarantine_manifest, quarantine_cleanup_candidates
+        from bot.pc_care import (
+            QUARANTINE_CONFIRMATION, _safe_regular_file_info,
+            _write_quarantine_manifest, quarantine_cleanup_candidates,
+        )
         with tempfile.TemporaryDirectory() as tmp:
             base = Path(tmp)
             temp_root = base / "temporary"
@@ -404,28 +407,46 @@ class PcCareTests(unittest.TestCase):
                 os.utime(path, (now - 12 * 86400, now - 12 * 86400))
             preview = get_cleanup_preview(scan_roots=[("temporary files", temp_root)], now=now)
             preview["candidates"] = sorted(preview["candidates"], key=lambda item: item["path"])
-            changed.write_bytes(b"content changed after preview")
+            real_info = _safe_regular_file_info
+            info_calls = 0
+
+            def change_after_prevalidation(path, root):
+                nonlocal info_calls
+                info_calls += 1
+                # Each candidate is checked once before hashing and once after.
+                # The first loop-time check is call 5; mutate the first file then,
+                # so the source changes after selection but before the atomic move.
+                if info_calls == 5:
+                    changed.write_bytes(b"changed after validation")
+                    os.utime(changed, (now, now))
+                return real_info(path, root)
+
             real_write = _write_quarantine_manifest
-            calls = 0
+            writes = 0
 
             def fail_skip_transition(path, manifest):
-                nonlocal calls
-                calls += 1
-                if calls == 2:
+                nonlocal writes
+                writes += 1
+                if writes == 2:
                     raise OSError("injected access denied")
                 return real_write(path, manifest)
 
-            with patch("bot.pc_care._write_quarantine_manifest", side_effect=fail_skip_transition):
+            with (
+                patch("bot.pc_care._safe_regular_file_info", side_effect=change_after_prevalidation),
+                patch("bot.pc_care._write_quarantine_manifest", side_effect=fail_skip_transition),
+            ):
                 result = quarantine_cleanup_candidates(
                     preview, confirmation=QUARANTINE_CONFIRMATION,
                     scan_roots=[("temporary files", temp_root)],
                     quarantine_root=quarantine_root, now=now, audit_dir=base / "audit",
                 )
 
-            self.assertEqual(result["status"], "manifest_write_failed")
+            self.assertEqual(result["status"], "manifest_write_failed", result)
             self.assertEqual(result["files_quarantined"], 0)
             self.assertEqual(result["files_skipped"], 1)
+            self.assertEqual(writes, 3, "initial manifest, failed skip transition, final partial manifest")
             self.assertTrue(changed.is_file())
+            self.assertEqual(changed.read_bytes(), b"changed after validation")
             self.assertTrue(untouched.is_file(), "no later candidate should move after state persistence fails")
             self.assertEqual(untouched.read_bytes(), b"old bytes")
 
