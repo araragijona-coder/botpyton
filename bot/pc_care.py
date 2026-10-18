@@ -2011,7 +2011,10 @@ def _inspect_quarantine_item(
         return ({"path": original_value, "status": "skipped_unapproved_manifest_path", "ready": False}, 0)
 
     quarantine_file = session_dir / name
-    if _is_link_or_reparse(quarantine_file) or not _no_link_components(quarantine_file, stop_at=session_dir):
+    if (
+        (os.path.lexists(quarantine_file) and _is_link_or_reparse(quarantine_file))
+        or not _no_link_components(quarantine_file, stop_at=session_dir)
+    ):
         return ({"path": original_value, "status": "skipped_unsafe_quarantine_file", "ready": False}, 0)
 
     expected_size = item.get("size_bytes")
