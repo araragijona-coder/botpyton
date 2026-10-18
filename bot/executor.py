@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import os
 import sys
+import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -253,11 +254,28 @@ class TaskExecutor:
         import hashlib
         safe_id = hashlib.sha256(str(report["task_id"]).encode("utf-8")).hexdigest()[:16]
         path = report_dir / f"{safe_id}.json"
-        temporary = path.with_suffix(".json.tmp")
-        with temporary.open("w", encoding="utf-8") as stream:
-            json.dump(report, stream, ensure_ascii=False, indent=2, sort_keys=True)
-            stream.write("\n")
-            stream.flush()
-            os.fsync(stream.fileno())
-        os.replace(temporary, path)
+        # A fixed sibling name lets concurrent/retried executions clobber each
+        # other's staging file. Create a unique file in the same directory so
+        # os.replace stays on-volume and each writer publishes only its own bytes.
+        descriptor, temporary_name = tempfile.mkstemp(
+            prefix=f".{path.name}.", suffix=".tmp", dir=report_dir
+        )
+        temporary = Path(temporary_name)
+        try:
+            with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
+                json.dump(report, stream, ensure_ascii=False, indent=2, sort_keys=True)
+                stream.write("\n")
+                stream.flush()
+                os.fsync(stream.fileno())
+            os.replace(temporary, path)
+        finally:
+            # Failed serialization, flush, or replacement must not leave stale
+            # staging files. Do not mask the original publication exception if
+            # the filesystem also refuses best-effort cleanup.
+            try:
+                temporary.unlink()
+            except FileNotFoundError:
+                pass
+            except OSError:
+                pass
         return path.relative_to(self.root).as_posix()
