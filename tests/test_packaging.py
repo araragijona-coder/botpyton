@@ -150,3 +150,50 @@ class PortablePackageTests(unittest.TestCase):
                         target.writestr(info, content)
             with self.assertRaisesRegex(ValueError, "SHA-256 mismatch"):
                 verify_portable_archive(corrupt_path)
+
+
+    def test_checksum_publish_failure_restores_previous_archive_and_sidecar(self):
+        import os
+        from unittest import mock
+
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp) / "source"
+            root.mkdir()
+            self._minimal_package_source(root)
+            output = Path(temp) / "dist"
+            first = build_portable_package(root, output)
+            archive_path = Path(first["archive_path"])
+            checksum_path = Path(first["checksum_path"])
+            previous_archive = archive_path.read_bytes()
+            previous_checksum = checksum_path.read_bytes()
+
+            # Make the next archive different so a partial publication is visible.
+            (root / "README.md").write_text("changed readme content", encoding="utf-8")
+            real_replace = os.replace
+            fail_once = True
+
+            def fail_checksum_publication(source, destination):
+                nonlocal fail_once
+                if (
+                    fail_once
+                    and Path(destination) == checksum_path
+                    and Path(source).name.startswith(f".{checksum_path.name}.")
+                    and Path(source).suffix == ".tmp"
+                ):
+                    fail_once = False
+                    raise OSError("simulated checksum sidecar publication failure")
+                return real_replace(source, destination)
+
+            with mock.patch("bot.packaging.os.replace", side_effect=fail_checksum_publication):
+                with self.assertRaisesRegex(OSError, "simulated checksum sidecar publication failure"):
+                    build_portable_package(root, output)
+
+            self.assertFalse(fail_once, "the failure must occur at the second publication")
+            self.assertEqual(archive_path.read_bytes(), previous_archive)
+            self.assertEqual(checksum_path.read_bytes(), previous_checksum)
+            self.assertEqual(
+                verify_portable_archive(archive_path)["archive_sha256"],
+                previous_checksum.decode("ascii").split()[0],
+            )
+            self.assertFalse(list(output.glob(".BOTPYTON-portable-*.tmp")))
+            self.assertFalse(list(output.glob(".*.sha256.*.tmp")))
