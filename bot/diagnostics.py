@@ -220,8 +220,9 @@ def diagnose_failure(
     if decision.category == "unknown":
         details["recommendation"] = (
             "No exact known-error rule matched. Preserve the complete log, inspect the bounded "
-            "traceback context, form one testable hypothesis, and ask for missing evidence if "
-            "the hypothesis cannot be tested. No source edit or automatic retry was performed."
+            "traceback context, form one testable hypothesis, and run a small reversible experiment "
+            "only when evidence can distinguish the cause; ask for missing evidence otherwise. "
+            "No source edit or automatic retry was performed."
         )
     details.update({
         "knowledge_rule_id": decision.rule_id,
