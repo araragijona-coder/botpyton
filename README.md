@@ -540,3 +540,14 @@ External maintenance context (related patterns, not a claim of identical upstrea
 - [Python `os.replace` / `os.rename` documentation](https://docs.python.org/3/library/os.html#os.replace) explains that atomicity applies to the individual rename/replace operation; it does not make a separate file movement and manifest update a single transaction.
 
 The relevant acceptance gate is green Linux foundation tests and Windows low-memory smoke before merge, followed by both checks on `main`. Tests use isolated temporary files only; no personal PC files are moved.
+
+
+## Phase 39 — reject malformed quarantine filenames safely
+
+The restore preview now rejects a manifest entry whose quarantine filename contains an embedded NUL before it reaches a filesystem operation. Low-level path-safety checks also treat invalid path strings as unsafe, rather than allowing an uncaught `ValueError` to escape. This is a defensive input-validation fix, not a claim that an upstream cleaner had this exact defect.
+
+The regression constructs a valid checksummed manifest with an impossible quarantine name. It verifies that the preview reports `skipped_unapproved_manifest_path`, reports no restore candidate, does not crash, and leaves both the original path and quarantined bytes untouched.
+
+External context: [BleachBit 6.0.6 release notes](https://www.bleachbit.org/news/bleachbit-606) describe continuing work on failure-tolerant path processing and skipping unreadable folders; [CCleaner Version History](https://www.ccleaner.com/ccleaner/version-history/) records clearer per-file outcomes when duplicate-file operations fail. These are analogous reliability practices, not evidence of the same malformed-manifest issue.
+
+Validation target: Linux foundation tests and Windows low-memory smoke must pass on the PR and then on `main`. The regression uses a disposable temporary directory; it does not inspect or modify the user's PC.

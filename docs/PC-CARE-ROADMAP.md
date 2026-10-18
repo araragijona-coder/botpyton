@@ -281,3 +281,12 @@ python -m bot.main --pc-cleanup-restore "C:\\path\\to\\BOTPYTON\\Quarantine\\ses
 - Add regressions for initial disk-full, post-move validation failure, and access-denied state persistence failures.
 - Reference notes: official CCleaner v7.12/v7.11 release notes, BleachBit 6.0.6 notes, and Python `os.replace` documentation. These provide analogous reliability practices, not evidence of identical upstream bugs.
 - Required gate: Linux foundation tests and Windows low-memory smoke pass before merge and post-merge.
+
+
+## Phase 39 — malformed quarantine-path rejection
+
+- Reject quarantine manifest filenames containing embedded NULs before any file metadata or content operation.
+- Treat `ValueError` from low-level filesystem path checks as an unsafe path, alongside `OSError`.
+- Add an isolated regression with a valid checksummed but impossible filename; preview must report a skipped entry without crashing and preserve the quarantined file.
+- External references: BleachBit 6.0.6 maintenance notes and CCleaner version history discuss failure-tolerant path processing and clear per-file error outcomes. They are reliability analogues, not reports of this exact BOTPYTON bug.
+- Required gate: Linux foundation tests and Windows low-memory smoke pass before merge and post-merge.

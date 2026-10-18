@@ -28,7 +28,8 @@ def _is_link_or_reparse(path: Path) -> bool:
     try:
         info = path.stat(follow_symlinks=False)
         return path.is_symlink() or bool(getattr(info, "st_file_attributes", 0) & REPARSE_POINT_ATTRIBUTE)
-    except OSError:
+    except (OSError, ValueError):
+        # Invalid path strings (for example, embedded NULs) are unsafe too.
         return True
 
 
@@ -1650,7 +1651,7 @@ def _no_link_components(path: Path, *, stop_at: Path | None = None) -> bool:
                 }:
                     return False
             current = parent
-    except OSError:
+    except (OSError, ValueError):
         return False
 
 
@@ -2007,7 +2008,8 @@ def _inspect_quarantine_item(
     if state == "restored":
         return ({"path": original_value, "status": "already_restored", "ready": False}, 0)
     if (not isinstance(original_value, str) or not isinstance(label, str) or label not in roots
-            or not isinstance(name, str) or Path(name).name != name or name in {"", ".", ".."}):
+            or not isinstance(name, str) or Path(name).name != name or name in {"", ".", ".."}
+            or "\x00" in name):
         return ({"path": original_value, "status": "skipped_unapproved_manifest_path", "ready": False}, 0)
 
     quarantine_file = session_dir / name
