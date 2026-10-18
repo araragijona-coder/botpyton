@@ -422,3 +422,24 @@ La regresión automatizada simula un error al publicar el sidecar y comprueba qu
 ### Limitación
 
 Dos nombres de archivo separados no pueden cambiarse como una sola operación atómica con `os.replace()`. La solución prepara todo antes de tocar los outputs finales y aplica rollback ante fallos, pero no promete una transacción invisible para otros procesos lectores durante la breve publicación ni una recuperación garantizada si el sistema de archivos también bloquea la operación de rollback. Estos casos se informan explícitamente.
+
+## Auditoría adicional — 2026-10-18: manifiesto de restauración con lectura acotada
+
+### Referencias oficiales consultadas
+
+- Python documenta que Path.read_text() devuelve el contenido completo del archivo, mientras que Path.open() permite lectura incremental y acotada: https://docs.python.org/3/library/pathlib.html
+- La documentación oficial de Python json advierte que datos JSON maliciosos pueden consumir CPU y memoria considerables y recomienda limitar el tamaño de entrada: https://docs.python.org/3/library/json.html
+- BleachBit 6.0.6 documenta varias correcciones recientes de robustez en borrado/wiping y manejo de fallos en operaciones con múltiples rutas. No es la misma causa raíz; es una referencia de mantenimiento sobre límites y fallos explícitos: https://www.bleachbit.org/news/bleachbit-606
+
+### Hallazgo en BOTPYTON
+
+bot/application_cache_quarantine.py::_manifest_location() verificaba un máximo de 256 KiB con stat(), pero después usaba read_text(), que lee todo el archivo. Si el manifiesto crecía entre esas operaciones, el tamaño comprobado ya no limitaba los bytes realmente leídos. La misma ruta tampoco imponía una profundidad máxima al JSON.
+
+### Corrección y pruebas
+
+- Se introdujo una lectura binaria con límite de MAX_CACHE_MANIFEST_BYTES + 1, comprobaciones del tipo regular/no enlazado y comparación de identidad/tamaño antes, durante y después de la lectura.
+- Se rechaza un cambio de tamaño o de fecha de modificación durante la lectura.
+- El decodificador rechaza anidamiento de más de 64 niveles y normaliza JSON inválido/recursión a un manifiesto bloqueado.
+- Se añadieron regresiones para crecimiento concurrente tras la comprobación inicial y JSON excesivamente anidado. Las pruebas verifican que el contenido permanece en cuarentena y no se restaura.
+
+La fase reduce la exposición a crecimiento concurrente y datos JSON patológicos; no elimina todas las carreras TOCTOU del sistema de archivos. El checksum es de integridad, no una firma digital.
