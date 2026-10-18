@@ -402,3 +402,23 @@ La Fase 28 filtraba una lista controlada de campos del JSON y no incluía direct
 - La redacción no puede demostrar que toda ruta o dato privado imaginable sea detectado. Las credenciales conocidas siguen siendo bloqueadas y el consentimiento explícito sigue siendo obligatorio.
 
 La verificación de esta fase requiere que pasen las suites existentes en Linux y Windows, ya que la expresión de rutas Windows debe probarse también en el runner Windows. No se añaden dependencias ni llamadas de red al runtime local; la consulta al asesor sigue siendo opcional y explícitamente consentida.
+
+
+## Auditoría adicional — 2026-10-18: ZIP y checksum publicados como un conjunto coherente
+
+### Referencias oficiales
+
+- Python documenta que `os.replace()` reemplaza un destino de ruta y puede ser atómico para esa operación individual; no ofrece una transacción entre el ZIP y su archivo lateral de checksum: https://docs.python.org/3/library/os.html#os.replace
+- BleachBit 6.0.6 corrigió el despliegue de Windows para que fallara si fallaba cualquiera de las cargas de artefactos, y no solamente cuando fallaba la última: https://www.bleachbit.org/news/bleachbit-606. Es una lección de manejo consistente de fallos de artefactos, no la misma causa raíz de BOTPYTON.
+
+### Hallazgo y corrección
+
+En `bot/packaging.py`, BOTPYTON publicaba primero el ZIP y después el checksum. Si la publicación del checksum fallaba, el comando podía fallar tras haber sustituido el ZIP, dejando el archivo de checksum anterior junto al paquete nuevo.
+
+La fase 32 ahora valida y calcula el hash del ZIP temporal, prepara y sincroniza el checksum temporal, y conserva los outputs anteriores como backups del mismo directorio hasta que ambos nuevos outputs se publican. Si una sustitución falla, retira solo outputs cuya identidad de archivo sigue correspondiendo a esta operación e intenta restaurar los backups únicamente cuando el destino sigue libre. Si un proceso concurrente ocupa o cambia el destino, la rutina preserva ese archivo y declara que el rollback quedó incompleto, reteniendo el backup en vez de sobrescribir el cambio concurrente.
+
+La regresión automatizada simula un error al publicar el sidecar y comprueba que el ZIP y el checksum previos permanecen byte por byte iguales, siguen verificando entre sí y que se limpian los archivos temporales.
+
+### Limitación
+
+Dos nombres de archivo separados no pueden cambiarse como una sola operación atómica con `os.replace()`. La solución prepara todo antes de tocar los outputs finales y aplica rollback ante fallos, pero no promete una transacción invisible para otros procesos lectores durante la breve publicación ni una recuperación garantizada si el sistema de archivos también bloquea la operación de rollback. Estos casos se informan explícitamente.
