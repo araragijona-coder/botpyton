@@ -8,7 +8,6 @@ from pathlib import Path
 
 from .autonomy import AutonomousCycleError, run_autonomous_cycle
 from .architect import ArchitectPlanError, build_architecture_plan
-from .architect_ai import ArchitectAIError, request_architecture_advice
 from .bounded_io import BoundedReadError, enforce_json_depth, read_bounded_bytes
 from .checkpoint import CheckpointError, export_checkpoint, restore_checkpoint
 from .diagnostics import diagnose_failure
@@ -172,11 +171,15 @@ def main(argv: list[str] | None = None) -> int:
                         help="seconds per fixed test attempt for --autonomous-cycle (hard maximum: 120)")
     parser.add_argument("--memory", default=".cerebro/memory/state.json", help="memory file path")
     args = parser.parse_args(argv)
+    if args.architect_ai or args.allow_external_ai:
+        # Load urllib/TLS only for this explicit feature; normal local BOTPYTON startup
+        # should not pay the import/memory cost of an optional remote API.
+        from .architect_ai import ArchitectAIError, request_architecture_advice
     try:
         if args.allow_external_ai and not args.architect_ai:
-            raise ArchitectAIError("--allow-external-ai requires --architect-ai")
+            raise ValueError("--allow-external-ai requires --architect-ai")
         if args.architect_ai and args.architect_plan:
-            raise ArchitectAIError("Choose either --architect-ai or --architect-plan, not both")
+            raise ValueError("Choose either --architect-ai or --architect-plan, not both")
         if args.architect_ai:
             if not args.allow_external_ai:
                 _print_json({
@@ -533,13 +536,6 @@ def main(argv: list[str] | None = None) -> int:
             return 1 if terminal_bad or pending_after_limit else 0
         parser.print_help()
         return 0
-    except ArchitectAIError as exc:
-        _print_json({
-            "status": "error",
-            "error": str(exc),
-            "safety": {"network_used": exc.network_used, "project_code_executed": False, "files_written": False},
-        })
-        return 2
     except (OSError, UnicodeError, json.JSONDecodeError, PolicyError, MemoryError,
             QueueError, CheckpointError, GitHubOpsError, AutonomousCycleError, ProcessRunnerError, LocalChangeError, ProjectCheckError, ValueError, EOFError) as exc:
         print(f"CHECK FAIL: {exc}", file=sys.stderr)
