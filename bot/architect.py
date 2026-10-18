@@ -221,7 +221,7 @@ def build_architecture_plan(brief: object) -> dict[str, Any]:
     if unknown_keys:
         raise ArchitectPlanError(f"Unknown brief fields: {', '.join(sorted(str(key) for key in unknown_keys))}")
     version = brief.get("schema_version", SCHEMA_VERSION)
-    if version != SCHEMA_VERSION or isinstance(version, bool):
+    if not isinstance(version, int) or isinstance(version, bool) or version != SCHEMA_VERSION:
         raise ArchitectPlanError(f"schema_version must be {SCHEMA_VERSION}")
     goal = _text(brief.get("goal"), "goal", MAX_GOAL_CHARS, required=True)
     assert goal is not None
