@@ -19,7 +19,9 @@ class UnknownDiagnosticsTests(unittest.TestCase):
                 "NameError: name 'missing' is not defined\n"
             )
             result = diagnose_failure(log, root)
-            self.assertEqual(result["category"], "unknown")
+            self.assertEqual(result["category"], "name_resolution")
+            self.assertEqual(result["strategy"], "inspect_identifier_scope")
+            self.assertFalse(result["retryable"])
             self.assertFalse(result["automatic_source_edit_applied"])
             self.assertEqual(result["details"]["error_type_guess"], "NameError")
             frame = result["details"]["traceback_frames"][0]
