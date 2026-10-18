@@ -85,14 +85,15 @@ class VerificationTests(unittest.TestCase):
     def test_verification_rejects_a_reparse_point_component(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
-            actual_directory = root / "real"
-            actual_directory.mkdir()
-            (actual_directory / "settings.json").write_text('{"safe":true}', encoding="utf-8")
+            real_directory = root / "real"
+            real_directory.mkdir()
+            (real_directory / "settings.json").write_text('{"safe":true}', encoding="utf-8")
             junction_like_directory = root / "alias"
-            # A real Windows junction is not required to make this regression
-            # cross-platform: patch the shared platform detector as if "alias"
-            # were an NTFS reparse-point directory pointing inside the project.
             junction_like_directory.mkdir()
+            # This file stands in for the contents a junction could expose. The
+            # detector is patched to classify the alias directory as a reparse
+            # point, so the test runs the same on Linux and Windows CI.
+            (junction_like_directory / "settings.json").write_text('{"safe":true}', encoding="utf-8")
 
             from bot import verification
 
