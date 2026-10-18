@@ -70,7 +70,8 @@ class ExecutorTests(unittest.TestCase):
         })
         self.assertFalse(outcome["ok"])
         self.assertEqual(outcome["diagnostic"]["category"], "source_syntax")
-        self.assertTrue(outcome["diagnostic"]["retryable"])
+        self.assertFalse(outcome["diagnostic"]["retryable"])
+        self.assertTrue(outcome["diagnostic"]["details"]["automatic_retry_permitted"] is False)
         self.assertTrue(outcome["diagnostic"]["details"]["python_syntax_errors"])
         self.assertFalse(outcome["diagnostic"]["automatic_source_edit_applied"])
 
@@ -80,7 +81,9 @@ class ExecutorTests(unittest.TestCase):
         self.assertEqual(result["strategy"], "validate_json_schema")
         self.assertEqual(result["details"]["invalid_json"][0]["path"], "broken.json")
         self.assertEqual(result["details"]["invalid_json"][0]["line"], 1)
-        self.assertTrue(result["retryable"])
+        self.assertFalse(result["retryable"])
+        self.assertEqual(result["details"]["knowledge_rule_id"], "DATA-JSON")
+        self.assertFalse(result["details"]["root_cause_confirmed"])
 
     def test_dependency_diagnostic_does_not_install_packages(self):
         (self.root / "pyproject.toml").write_text(
