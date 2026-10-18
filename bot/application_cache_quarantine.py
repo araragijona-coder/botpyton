@@ -595,7 +595,9 @@ def restore_application_cache_quarantine(
                     # loop has stopped; if it also fails, the older manifest remains
                     # sufficient to reconcile paths during a later preview.
                     persistence_failed = True
-                    skipped += 1
+                    # Count all remaining items as skipped because the recovery
+                    # record is no longer reliable enough to authorize more moves.
+                    skipped += len(manifest["items"]) - index - 1
                     break
             except (OSError, ValueError):
                 skipped += 1
@@ -604,7 +606,6 @@ def restore_application_cache_quarantine(
             _atomic_write_manifest(path, manifest)
         except OSError:
             persistence_failed = True
-            skipped += 1
         status = (
             "cache_restore_partial" if persistence_failed or restored or skipped
             else "cache_restore_blocked"
