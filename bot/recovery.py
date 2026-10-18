@@ -287,6 +287,22 @@ KNOWN_RULES = (
 )
 
 
+_RULE_PRIORITY = {
+    # Specific compiler/type codes should beat generic wrapper text in build logs.
+    "TYPESCRIPT-MODULE": 5,
+    "TYPESCRIPT-TYPE": 5,
+    "CS-SYMBOL": 5,
+    "RUST-COMPILE": 5,
+    "JAVA-SYMBOL": 7,
+    "GO-MODULE": 7,
+    "PY-INDENTATION": 8,
+    "PY-SYNTAX": 10,
+    "DATA-JSON": 10,
+    # Unittest may wrap an underlying syntax error in an ImportError summary.
+    "PY-IMPORT-CONTRACT": 40,
+}
+
+
 def classify_failure(
     log_text: str, *, attempt: int = 1, max_attempts: int = 3
 ) -> RecoveryDecision:
@@ -307,20 +323,26 @@ def classify_failure(
             stop_condition="Do not claim or execute further attempts after the configured limit.",
         )
     lowered = log_text.casefold()
-    for rule in KNOWN_RULES:
+    matches: list[tuple[int, int, int, FailureRule, str]] = []
+    for order, rule in enumerate(KNOWN_RULES):
         matched = next((signature for signature in rule.signatures if signature.casefold() in lowered), None)
         if matched:
-            return RecoveryDecision(
-                category=rule.category,
-                strategy=rule.strategy,
-                retryable=rule.automatic_retry and attempt < max_attempts,
-                reason=f"Diagnostic signature matched ({matched}); root cause is not yet confirmed.",
-                rule_id=rule.rule_id,
-                diagnostic_steps=rule.diagnostic_steps,
-                safe_experiment=rule.safe_experiment,
-                stop_condition=rule.stop_condition,
-                reference_url=rule.reference_url,
-            )
+            matches.append((
+                _RULE_PRIORITY.get(rule.rule_id, 25), -len(matched), order, rule, matched
+            ))
+    if matches:
+        _, _, _, rule, matched = min(matches, key=lambda item: item[:3])
+        return RecoveryDecision(
+            category=rule.category,
+            strategy=rule.strategy,
+            retryable=rule.automatic_retry and attempt < max_attempts,
+            reason=f"Diagnostic signature matched ({matched}); root cause is not yet confirmed.",
+            rule_id=rule.rule_id,
+            diagnostic_steps=rule.diagnostic_steps,
+            safe_experiment=rule.safe_experiment,
+            stop_condition=rule.stop_condition,
+            reference_url=rule.reference_url,
+        )
     return RecoveryDecision(
         "unknown", None, False,
         "No known failure signature matched; preserve evidence and ask for help rather than retrying blindly.",
