@@ -551,3 +551,16 @@ The regression constructs a valid checksummed manifest with an impossible quaran
 External context: [BleachBit 6.0.6 release notes](https://www.bleachbit.org/news/bleachbit-606) describe continuing work on failure-tolerant path processing and skipping unreadable folders; [CCleaner Version History](https://www.ccleaner.com/ccleaner/version-history/) records clearer per-file outcomes when duplicate-file operations fail. These are analogous reliability practices, not evidence of the same malformed-manifest issue.
 
 Validation target: Linux foundation tests and Windows low-memory smoke must pass on the PR and then on `main`. The regression uses a disposable temporary directory; it does not inspect or modify the user's PC.
+
+
+## Phase 40 — validate required application-cache manifest fields
+
+The application-cache restore preview uses each manifest item's `browser`, `profile`, and `cache_area` fields when generating item results. The manifest reader already validated path, size, digest, and state, but did not require these display fields. A malformed but correctly checksummed manifest missing one of them could therefore raise an uncaught `KeyError` instead of returning a blocked/invalid-manifest result.
+
+Validation now requires those fields to be non-empty strings within the existing bounded-manifest contract. A regression removes each required field in turn, recomputes the manifest checksum, and verifies restore preview returns `cache_manifest_invalid` without moving or restoring anything.
+
+External maintenance context (analogue, not a claim of an identical upstream defect):
+- [CCleaner Version History](https://www.ccleaner.com/ccleaner/version-history/): v7.12.1526 documents a file-write security fix and a startup crash fix; v7.11.1504 reports clearer per-file outcomes when duplicate-file deletion cannot complete.
+- [BleachBit 6.0.4 release notes](https://www.bleachbit.org/news/bleachbit-604) describe a maintenance release with security, bug-fix, performance, and cleanup reliability work.
+
+The regression is isolated to temporary test directories. Merge requires the Linux foundation suite and Windows low-memory smoke to pass before and after merge.

@@ -311,6 +311,45 @@ class ApplicationCacheQuarantineTests(unittest.TestCase):
                 self.assertEqual(durable["items"][0]["state"], "restored")
                 self.assertEqual(durable["status"], "complete")
 
+    def test_manifest_rejects_missing_display_metadata_without_crashing(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            _local, chosen, _untouched, env = self._fixture(tmp, 1_700_000_000.0)
+            result = quarantine_application_cache_candidates(
+                [str(chosen.resolve())],
+                confirmation=CACHE_QUARANTINE_CONFIRMATION,
+                env=env,
+                windows=True,
+            )
+            self.assertEqual(result["status"], "cache_quarantined", result)
+            manifest_path = Path(result["manifest_path"])
+            original_manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            quarantined = Path(original_manifest["items"][0]["quarantine_path"])
+            self.assertTrue(quarantined.is_file())
+            self.assertFalse(chosen.exists())
+
+            # Each missing field was used by preview as item["field"]. Before
+            # manifest validation covered them, a correctly checksummed record
+            # with a missing key could raise KeyError outside the preview handler.
+            for required_field in ("browser", "profile", "cache_area"):
+                with self.subTest(required_field=required_field):
+                    malformed = json.loads(json.dumps(original_manifest))
+                    malformed["items"][0].pop(required_field)
+                    malformed["manifest_sha256"] = _canonical_digest(malformed)
+                    manifest_path.write_text(
+                        json.dumps(malformed, ensure_ascii=False, sort_keys=True) + "\n",
+                        encoding="utf-8",
+                    )
+
+                    preview = preview_application_cache_restore(
+                        manifest_path, env=env, windows=True
+                    )
+
+                    self.assertEqual(preview["status"], "cache_manifest_invalid")
+                    self.assertEqual(preview["ready_count"], 0)
+                    self.assertEqual(preview["items"], [])
+                    self.assertTrue(quarantined.is_file())
+                    self.assertFalse(chosen.exists())
+
     def test_manifest_tampering_fails_closed(self):
         with tempfile.TemporaryDirectory() as tmp:
             _local, chosen, _untouched, env = self._fixture(tmp, 1_700_000_000.0)
