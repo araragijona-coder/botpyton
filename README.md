@@ -491,3 +491,10 @@ BOTPYTON does not apply the suggested revision automatically. Review and save th
 Antes de compartir el informe de una reparación con el asesor remoto, BOTPYTON ahora sustituye patrones comunes de rutas absolutas locales que aparezcan dentro de los logs, tracebacks y textos de diagnóstico. La fase anterior ya omitía campos enteros de ubicación, pero una ruta también podía venir incrustada en el texto de un error. Se cubren rutas Windows citadas y sin comillas, y raíces Unix frecuentes como `/home`, `/Users`, `/tmp`, `/runner` y `/workspace`. Las URL web no se deben confundir con rutas locales.
 
 La redacción es una defensa por capas, no un detector universal de datos privados: otras rutas, nombres de usuario, secretos con formatos desconocidos y datos incluidos en el brief o en los archivos fuente seleccionados pueden seguir siendo sensibles. Inspeccioná el informe antes de usar `--send-failure-report`. No cambia el consentimiento externo ni el ciclo aislado de parches.
+
+
+## Phase 32 — portable package publication safety
+
+BOTPYTON now validates the staged ZIP and prepares its SHA-256 sidecar before replacing the published outputs. It keeps prior outputs as temporary backups until both new files are published. If the second publication fails, it attempts to restore the previous ZIP/checksum pair; if another process has changed or occupied a target, it preserves that file and reports that rollback was incomplete instead of overwriting it. This protects the integrity relationship between the portable archive and its checksum. It does not make two separate filenames one indivisible filesystem transaction.
+
+See [the Phase 32 regression and upstream references](docs/research/PHASE-32-ATOMIC-PACKAGE-PUBLISH.md). Python documents per-path atomic replacement at [`os.replace()`](https://docs.python.org/3/library/os.html#os.replace); BleachBit's [6.0.6 notes](https://www.bleachbit.org/news/bleachbit-606) provide a separate upstream example of making deployment fail when any artifact upload fails.
