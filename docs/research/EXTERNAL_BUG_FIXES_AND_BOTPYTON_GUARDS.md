@@ -443,3 +443,16 @@ bot/application_cache_quarantine.py::_manifest_location() verificaba un máximo 
 - Se añadieron regresiones para crecimiento concurrente tras la comprobación inicial y JSON excesivamente anidado. Las pruebas verifican que el contenido permanece en cuarentena y no se restaura.
 
 La fase reduce la exposición a crecimiento concurrente y datos JSON patológicos; no elimina todas las carreras TOCTOU del sistema de archivos. El checksum es de integridad, no una firma digital.
+
+
+## Phase 35 — reconcile restore state after manifest persistence failure
+
+**Failure mode found:** `restore_application_cache_quarantine()` could move a verified file back to its original location and then fail while writing the manifest. The durable manifest would still say `moved` or `pending`; the next preview classified the absent quarantine file as simply `not_quarantined`, with no safe recovery route. A `ValueError` from manifest serialization could also escape the inner persistence handler and reach an outer handler that returned `files_restored: 0` despite a completed move.
+
+**Correction:** restoration now catches both `OSError` and `ValueError` around durable writes, tracks the digest of the last successfully persisted manifest, and preserves accurate movement/reconciliation counters on exceptional exits. A read-only preview may offer reconciliation only when the quarantine entry is absent and the already-existing, currently allowlisted original file is regular, non-linked, under the resource budget, and exactly matches the manifest size and SHA-256. Explicit restore confirmation rechecks the conditions and persists `state=restored` without moving or overwriting any file. When content mismatches or paths are unsafe, the operation remains blocked/skipped.
+
+**Regression tests:** inject both `OSError` and `ValueError` after the move; assert that the operation reports one actual move, the file bytes remain intact, the stale manifest can be previewed as reconcilable, and a second explicitly confirmed operation reconciles only metadata.
+
+**Upstream references:** Python documents that on Windows `os.rename()` raises `FileExistsError` when a destination exists, supporting the no-overwrite move contract ([official docs](https://docs.python.org/3/library/os.html#os.rename)). The current [BleachBit 6.0.6 maintenance notes](https://www.bleachbit.org/news/bleachbit-606) provide a separate real-world lesson: maintainers fix concrete cleanup/configuration regressions and adjust failure handling so one failing path does not accidentally suppress unrelated operations. Those notes are context, not evidence that BleachBit has this same bug.
+
+**Limitations:** SHA-256 and size establish content equality, not provenance or authenticity. The reconciliation path only repairs the manifest's durable state and intentionally does not claim to prove which process restored the file. Target-PC testing remains required.
