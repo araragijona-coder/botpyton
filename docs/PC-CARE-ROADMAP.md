@@ -319,3 +319,13 @@ python -m bot.main --pc-cleanup-restore "C:\\path\\to\\BOTPYTON\\Quarantine\\ses
 - Regression fixtures recompute the manifest digest after removing a required field or making a payload non-object, proving schema checks are independent of digest checks and existing destination memory is preserved.
 - Official maintenance analogues: [CCleaner v7.12.1526 version notes](https://www.ccleaner.com/ccleaner/version-history/) document a security file-write fix and crash corrections; [BleachBit 6.0.6 notes](https://www.bleachbit.org/news/bleachbit-606) document maintenance fixes for saving preferences and Windows configuration repair. These are analogous reliability lessons, not the same defect.
 - Required gate: Linux foundation tests and Windows low-memory smoke pass on the PR and post-merge `main`.
+
+
+## Phase 43 — isolate executor report publication
+
+- Replace the predictable shared `.json.tmp` staging pathname with a unique temporary file created securely in the final report directory.
+- Preserve same-directory staging and atomic `os.replace`; concurrent/retried writes for the same task ID no longer open the same staging path.
+- Clean the staging file best-effort after serialization, flush, or replacement failures without masking the publication exception.
+- Regressions verify two report writes use distinct source paths and that an injected serialization failure cleans staging state while the previous durable report remains byte-for-byte unchanged.
+- Official reliability context: Python `tempfile.mkstemp` documentation describes exclusive, race-free temporary-file creation under supported OS semantics; CCleaner's v7.12.1526 notes document a file-write security fix and shutdown timing crash, while BleachBit 6.0.2 reports a Windows arbitrary-file-deletion security issue in elevated cleaning. These are lessons/analogues, not identical defects.
+- Required gate: Linux foundation tests and Windows low-memory smoke pass on the PR and on post-merge `main`.

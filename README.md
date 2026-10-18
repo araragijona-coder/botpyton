@@ -576,3 +576,8 @@ External maintenance analogues: [CCleaner Version History](https://www.ccleaner.
 ## Phase 42 — validate checkpoint records before restoring
 
 Checkpoint import now enforces the complete durable task-record schema before touching local memory, including required metadata timestamps, string status, bounded attempt counts, and a JSON-object task payload. A valid SHA-256 manifest no longer lets incomplete state pass into the queue. Regressions recompute the manifest digest after corrupting the schema and prove that restore raises `CheckpointError` while pre-existing memory remains unchanged. See [Phase 42 research](docs/research/PHASE-42-CHECKPOINT-RECORD-VALIDATION.md).
+
+
+## Phase 43 — isolate and clean report staging files
+
+Executor reports are now staged through uniquely created temporary files in the reports directory before atomic replacement. Concurrent executions of the same task ID no longer share a predictable `.json.tmp` pathname. Failed serialization or publication performs best-effort staging-file cleanup, while a previous complete report remains intact until replacement succeeds. Regression tests cover unique staging paths and injected serialization failure. See [Phase 43 research](docs/research/PHASE-43-REPORT-TEMPFILE-ATOMICITY.md).

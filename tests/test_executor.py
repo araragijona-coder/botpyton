@@ -1,6 +1,7 @@
 import json
 import tempfile
 import unittest
+from unittest.mock import patch
 from pathlib import Path
 
 from bot.diagnostics import diagnose_failure
@@ -47,6 +48,36 @@ class ExecutorTests(unittest.TestCase):
         self.assertEqual(persisted["task_id"], task()["id"])
         self.assertFalse(persisted["ai_enabled"])
         self.assertTrue(all(item["ok"] for item in outcome["actions"]))
+
+    def test_report_publication_uses_distinct_temporary_files(self):
+        report = self.root / ".cerebro" / "reports"
+        first = {"task_id": "same-task", "message": "first"}
+        second = {"task_id": "same-task", "message": "second"}
+        import os
+
+        with patch("bot.executor.os.replace", wraps=os.replace) as replace:
+            self.executor._write_report(first)
+            self.executor._write_report(second)
+
+        staged_names = [Path(call.args[0]).name for call in replace.call_args_list]
+        self.assertEqual(len(staged_names), 2)
+        self.assertEqual(len(set(staged_names)), 2)
+        final_path = next(report.glob("*.json"))
+        self.assertEqual(json.loads(final_path.read_text(encoding="utf-8"))["message"], "second")
+        self.assertFalse(any(path.name.endswith(".tmp") for path in report.iterdir()))
+
+    def test_report_serialization_failure_cleans_staging_file_and_preserves_old_report(self):
+        report = self.root / ".cerebro" / "reports"
+        self.executor._write_report({"task_id": "same-task", "message": "previous durable report"})
+        final_path = next(report.glob("*.json"))
+        previous_bytes = final_path.read_bytes()
+
+        with patch("bot.executor.json.dump", side_effect=TypeError("simulated serialization failure")):
+            with self.assertRaisesRegex(TypeError, "simulated serialization failure"):
+                self.executor._write_report({"task_id": "same-task", "message": object()})
+
+        self.assertEqual(final_path.read_bytes(), previous_bytes)
+        self.assertFalse(any(path.name.endswith(".tmp") for path in report.iterdir()))
 
     def test_task_text_is_not_an_executable_action(self):
         unsafe = task(actions=["run_shell_from_task_text"])
