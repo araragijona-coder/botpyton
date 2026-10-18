@@ -71,7 +71,7 @@ def _text_list(value: object, field: str) -> list[str]:
 def _infer_task_type(goal: str) -> str:
     text = goal.casefold()
     if any(term in text for term in (
-        "debug", "diagnos", "arregl", "corrig", "repar", "bug", "error",
+        "debug", "diagnos", "arregl", "corrig", "repar", "fix", "bug", "error",
         "exception", "crash", "traceback", "falla", "fallo", "no funciona",
         "no arranca", "failing test",
     )):
