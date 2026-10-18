@@ -571,3 +571,8 @@ The regression is isolated to temporary test directories. Merge requires the Lin
 BOTPYTON now validates the durable task queue's per-record schema and complete dependency graph before listing, claiming, completing, failing, resuming or enqueueing work. Missing fields, mismatched task IDs/fingerprints, invalid states/attempt counts, unknown dependencies and dependency cycles stop with a controlled `QueueError` instead of leaking internal key lookup exceptions. Invalid state is not auto-repaired or rewritten. Regression tests prove the original bytes remain unchanged when validation fails. See [Phase 41 research](docs/research/PHASE-41-QUEUE-STATE-VALIDATION.md).
 
 External maintenance analogues: [CCleaner Version History](https://www.ccleaner.com/ccleaner/version-history/) and [Python 3.9.20 security bug-fix release](https://www.python.org/downloads/release/python-3920/). These do not claim identical upstream bugs.
+
+
+## Phase 42 — validate checkpoint records before restoring
+
+Checkpoint import now enforces the complete durable task-record schema before touching local memory, including required metadata timestamps, string status, bounded attempt counts, and a JSON-object task payload. A valid SHA-256 manifest no longer lets incomplete state pass into the queue. Regressions recompute the manifest digest after corrupting the schema and prove that restore raises `CheckpointError` while pre-existing memory remains unchanged. See [Phase 42 research](docs/research/PHASE-42-CHECKPOINT-RECORD-VALIDATION.md).

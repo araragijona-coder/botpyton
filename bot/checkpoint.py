@@ -125,36 +125,57 @@ def validate_checkpoint_state(state: dict[str, Any]) -> None:
     if not isinstance(state.get("incidents"), list) or not isinstance(state.get("solutions"), list):
         raise CheckpointError("Checkpoint incidents and solutions must be JSON arrays")
 
+    required_record_fields = {
+        "payload", "idempotency_key", "status", "attempts", "created_at",
+        "updated_at", "started_at", "finished_at", "last_error", "result",
+    }
     payloads: list[dict[str, Any]] = []
     for task_id, record in records.items():
-        if not isinstance(task_id, str) or not task_id or not isinstance(record, dict):
+        if not isinstance(task_id, str) or not task_id.strip() or not isinstance(record, dict):
             raise CheckpointError("Checkpoint has an invalid task record key")
-        payload = record.get("payload")
+        missing = required_record_fields - record.keys()
+        if missing:
+            raise CheckpointError(
+                f"Checkpoint task {task_id!r} is missing record fields: {', '.join(sorted(missing))}"
+            )
+
+        payload = record["payload"]
+        if not isinstance(payload, dict):
+            raise CheckpointError(f"Checkpoint task payload for {task_id!r} must be a JSON object")
         try:
             validate_task(payload)
-        except (PolicyError, TypeError) as exc:
+        except (PolicyError, TypeError, ValueError, AttributeError, RecursionError) as exc:
             raise CheckpointError(f"Invalid task payload for {task_id}: {exc}") from exc
         if payload.get("id") != task_id:
             raise CheckpointError(f"Task payload ID mismatch for {task_id}")
-        if record.get("status") not in TASK_STATES:
+        status = record["status"]
+        if not isinstance(status, str) or status not in TASK_STATES:
             raise CheckpointError(f"Invalid task status for {task_id}")
-        attempts = record.get("attempts")
-        if not isinstance(attempts, int) or isinstance(attempts, bool) or attempts < 0:
+        attempts = record["attempts"]
+        maximum = payload.get("max_attempts", 3)
+        if (
+            not isinstance(attempts, int) or isinstance(attempts, bool)
+            or attempts < 0 or attempts > maximum
+        ):
             raise CheckpointError(f"Invalid attempt counter for {task_id}")
-        if attempts > payload.get("max_attempts", 3):
-            raise CheckpointError(f"Attempt counter exceeds task policy for {task_id}")
-        if record.get("idempotency_key") != _task_fingerprint(payload):
+        if record["idempotency_key"] != _task_fingerprint(payload):
             raise CheckpointError(f"Idempotency key mismatch for {task_id}")
-        # Confirm results can round-trip through JSON before checkpointing.
+        if not isinstance(record["created_at"], str) or not isinstance(record["updated_at"], str):
+            raise CheckpointError(f"Invalid task timestamps for {task_id}")
+        for field in ("started_at", "finished_at", "last_error"):
+            value = record[field]
+            if value is not None and not isinstance(value, str):
+                raise CheckpointError(f"Invalid task {field} metadata for {task_id}")
+        # Confirm results and all metadata can round-trip through strict JSON.
         try:
             json.dumps(record, ensure_ascii=False, allow_nan=False)
-        except (TypeError, ValueError) as exc:
+        except (TypeError, ValueError, RecursionError) as exc:
             raise CheckpointError(f"Task record for {task_id} is not JSON serializable") from exc
         payloads.append(payload)
 
     try:
         order_tasks(payloads)
-    except PolicyError as exc:
+    except (PolicyError, TypeError, ValueError, RecursionError) as exc:
         raise CheckpointError(f"Checkpoint dependency graph is invalid: {exc}") from exc
 
 
