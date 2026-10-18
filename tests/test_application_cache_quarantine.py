@@ -326,7 +326,7 @@ class ApplicationCacheQuarantineTests(unittest.TestCase):
             manifest["test_depth_probe"] = nested
             manifest["manifest_sha256"] = _canonical_digest(manifest)
             manifest_path.write_text(
-                json.dumps(manifest, ensure_ascii=False, sort_keys=True) + "\\n",
+                json.dumps(manifest, ensure_ascii=False, sort_keys=True) + "\n",
                 encoding="utf-8",
             )
 
