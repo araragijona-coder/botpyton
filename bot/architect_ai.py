@@ -45,7 +45,7 @@ _SENSITIVE_CONTEXT_NAMES = frozenset({
 })
 _SECRET_PATTERNS = (
     re.compile(r"-----BEGIN (?:[A-Z0-9 ]+ )?PRIVATE KEY-----"),
-    re.compile(r"(?i)\b(?:api[_-]?key|access[_-]?token|refresh[_-]?token|client[_-]?secret|password|passwd|secret)\b\s*[:=]\s*['\\"]?[A-Za-z0-9_./+=-]{16,}"),
+    re.compile(r"""(?i)\b(?:api[_-]?key|access[_-]?token|refresh[_-]?token|client[_-]?secret|password|passwd|secret)\b\s*[:=]\s*['"]?[A-Za-z0-9_./+=-]{16,}"""),
     re.compile(r"\bsk-(?:or-v1-)?[A-Za-z0-9_-]{20,}\b"),
     re.compile(r"\bgh[pousr]_[A-Za-z0-9]{30,}\b"),
     re.compile(r"\bAIza[0-9A-Za-z_-]{30,}\b"),
@@ -146,6 +146,8 @@ def _read_selected_source_context(brief: object, context_paths: list[str]) -> li
             raise
         raise ArchitectAIError("The project root cannot be opened for selected source context.") from None
 
+    if not isinstance(context_paths, list) or not all(isinstance(path, str) for path in context_paths):
+        raise ArchitectAIError("Source-context paths must be a list of strings.")
     if len(context_paths) > MAX_CONTEXT_FILES:
         raise ArchitectAIError(
             f"At most {MAX_CONTEXT_FILES} source files can be included in one request. No API request was sent."
@@ -163,7 +165,7 @@ def _read_selected_source_context(brief: object, context_paths: list[str]) -> li
             )
         relative = PurePosixPath(raw_path)
         if (relative.is_absolute() or any(part in {"", ".", ".."} for part in relative.parts)
-                or not relative.parts):
+                or not relative.parts or relative.as_posix() != raw_path):
             raise ArchitectAIError("A source-context path is not canonical or attempts path traversal.")
         lowered_parts = [part.casefold() for part in relative.parts]
         if any(
