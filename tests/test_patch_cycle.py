@@ -1,5 +1,4 @@
 """Tests for the isolated reviewed-patch cycle."""
-import json
 import shutil
 import subprocess
 import tempfile
@@ -75,7 +74,7 @@ class ReviewedPatchCycleTests(unittest.TestCase):
         self.assertEqual(target.read_text(encoding="utf-8"), "VALUE = 1\n")
         candidate = Path(result["candidate_workspace"])
         self.assertEqual((candidate / "app.py").read_text(encoding="utf-8"), "VALUE = 2\n")
-        self.assertIn("app.py", self._git("status", "--short").stdout)
+        self.assertEqual(self._git("status", "--porcelain").stdout.strip(), "")
 
     def test_rejects_path_traversal_before_creating_worktree(self):
         (self.root / "app.py").write_text("VALUE = 1\n", encoding="utf-8")
