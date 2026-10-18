@@ -522,14 +522,69 @@ def preview_application_cache_restore(
         path, session, manifest = _manifest_location(manifest_path, env)
         checked: list[dict[str, Any]] = []
         ready_count = 0
+        reconcile_count = 0
         hash_bytes = 0
         partial = False
         for index, item in enumerate(manifest["items"]):
             original = Path(item["original_path"])
             quarantined = Path(item["quarantine_path"])
             state = item["state"]
-            if state not in {"moved", "pending"} or not quarantined.is_file() or _is_link_or_reparse(quarantined):
+            if state not in {"moved", "pending"}:
                 checked.append({"index": index + 1, "browser": item["browser"], "profile": item["profile"], "path": str(original), "status": "not_quarantined"})
+                partial = True
+                continue
+            if quarantined.is_symlink() or _is_link_or_reparse(quarantined):
+                checked.append({"index": index + 1, "browser": item["browser"], "profile": item["profile"], "path": str(original), "status": "quarantine_item_linked"})
+                partial = True
+                continue
+            if not quarantined.is_file():
+                # A previous restore can move the file successfully, then fail to
+                # persist item["state"] = "restored". Offer an explicit, read-only
+                # reconciliation only when the quarantine entry is truly absent and
+                # the existing allowlisted destination exactly matches the manifest.
+                if quarantined.exists():
+                    checked.append({"index": index + 1, "browser": item["browser"], "profile": item["profile"], "path": str(original), "status": "quarantine_item_unavailable"})
+                    partial = True
+                    continue
+                if not (original.exists() or original.is_symlink()):
+                    checked.append({"index": index + 1, "browser": item["browser"], "profile": item["profile"], "path": str(original), "status": "not_quarantined"})
+                    partial = True
+                    continue
+                recognized_root = _known_cache_root_for_path(original, env)
+                if (
+                    recognized_root is None
+                    or not original.parent.is_dir()
+                    or original.is_symlink()
+                    or _is_link_or_reparse(original)
+                    or _path_has_link_from(original.parent, recognized_root)
+                ):
+                    checked.append({"index": index + 1, "browser": item["browser"], "profile": item["profile"], "path": str(original), "status": "reconciliation_destination_unavailable"})
+                    partial = True
+                    continue
+                if hash_bytes + item["size_bytes"] > MAX_CACHE_BATCH_BYTES:
+                    checked.append({"index": index + 1, "browser": item["browser"], "profile": item["profile"], "path": str(original), "status": "hash_budget_exceeded"})
+                    partial = True
+                    continue
+                hash_bytes += item["size_bytes"]
+                try:
+                    destination_digest, destination_stat = _sha256_checked(original, byte_limit=MAX_CACHE_FILE_BYTES)
+                except (OSError, RuntimeError, ValueError):
+                    checked.append({"index": index + 1, "browser": item["browser"], "profile": item["profile"], "path": str(original), "status": "reconciliation_destination_unverified"})
+                    partial = True
+                    continue
+                if (
+                    destination_stat.st_size == item["size_bytes"]
+                    and secrets.compare_digest(destination_digest, item["sha256"])
+                ):
+                    checked.append({
+                        "index": index + 1, "browser": item["browser"], "profile": item["profile"],
+                        "cache_area": item["cache_area"], "path": str(original),
+                        "size_bytes": item["size_bytes"], "sha256_verified": True,
+                        "status": "reconcile_manifest_state",
+                    })
+                    reconcile_count += 1
+                    continue
+                checked.append({"index": index + 1, "browser": item["browser"], "profile": item["profile"], "path": str(original), "status": "destination_exists_no_overwrite"})
                 partial = True
                 continue
             if original.exists() or original.is_symlink():
@@ -557,12 +612,18 @@ def preview_application_cache_restore(
                 continue
             checked.append({"index": index + 1, "browser": item["browser"], "profile": item["profile"], "cache_area": item["cache_area"], "path": str(original), "size_bytes": item["size_bytes"], "sha256_verified": True, "status": "ready_to_restore"})
             ready_count += 1
-        status = "restore_preview_complete" if not partial and ready_count else ("restore_preview_partial" if ready_count else "restore_preview_blocked")
+        if partial:
+            status = "restore_preview_partial" if ready_count or reconcile_count else "restore_preview_blocked"
+        elif reconcile_count and not ready_count:
+            status = "restore_preview_reconcile_available"
+        else:
+            status = "restore_preview_complete" if ready_count else "restore_preview_blocked"
         return {
             **base, "status": status, "manifest_path": str(path), "session_id": session.name,
             "manifest_sha256": manifest.get("manifest_sha256"), "items_count": len(checked),
-            "ready_count": ready_count, "items": checked, "files_skipped": len(checked) - ready_count,
-            "note": "Restore preview only. No file was moved. Existing destination files are never overwritten.",
+            "ready_count": ready_count, "reconcile_count": reconcile_count,
+            "items": checked, "files_skipped": len(checked) - ready_count - reconcile_count,
+            "note": "Restore preview only. No file was moved. Existing destination files are never overwritten. A matching destination may be offered for explicit manifest-state reconciliation; this checks content, not provenance.",
             "limitations": [
                 "Restore is allowed only beneath currently recognized browser cache roots.",
                 "Parent directories must already exist and must not contain links/reparse points.",
@@ -581,7 +642,7 @@ def restore_application_cache_quarantine(
     env: dict[str, str] | None = None,
     windows: bool | None = None,
 ) -> dict[str, Any]:
-    """Restore only verified files; preserve conflicts and never overwrite."""
+    """Restore verified files and safely reconcile a stale durable manifest."""
     base: dict[str, Any] = {
         "product": "BOTPYTON PC Care",
         "schema_version": 1,
@@ -592,28 +653,96 @@ def restore_application_cache_quarantine(
         "files_deleted": 0,
         "settings_changed": False,
     }
+    restored = 0
+    reconciled = 0
+    skipped = 0
+    persistence_failed = False
+    durable_manifest_sha256: str | None = None
     is_windows = os.name == "nt" if windows is None else windows
     if not is_windows:
-        return {**base, "status": "unsupported_platform", "files_restored": 0}
+        return {**base, "status": "unsupported_platform", "files_restored": 0, "files_reconciled": 0}
     if confirmation != CACHE_RESTORE_CONFIRMATION:
-        return {**base, "status": "confirmation_mismatch", "files_restored": 0, "note": "Confirmation did not match; no files were restored."}
+        return {**base, "status": "confirmation_mismatch", "files_restored": 0, "files_reconciled": 0, "note": "Confirmation did not match; no files were restored or reconciled."}
     preview = preview_application_cache_restore(manifest_path, env=env, windows=True)
-    if preview.get("status") in {"cache_manifest_invalid", "restore_preview_blocked"} or preview.get("ready_count", 0) < 1:
-        return {**base, "status": "cache_restore_blocked", "files_restored": 0, "preview": preview, "note": "No verified restore target is ready. No files were moved."}
+    if (
+        preview.get("status") in {"cache_manifest_invalid", "restore_preview_blocked"}
+        or (preview.get("ready_count", 0) < 1 and preview.get("reconcile_count", 0) < 1)
+    ):
+        return {
+            **base, "status": "cache_restore_blocked", "files_restored": 0,
+            "files_reconciled": 0, "preview": preview,
+            "note": "No verified restore target or manifest-state reconciliation is ready. No files were moved.",
+        }
     try:
         path, session, manifest = _manifest_location(manifest_path, env)
         item_results = {entry["index"] - 1: entry for entry in preview["items"]}
-        restored = 0
-        skipped = 0
         hash_bytes = 0
-        persistence_failed = False
+
+        def persist_manifest() -> None:
+            nonlocal durable_manifest_sha256
+            try:
+                _atomic_write_manifest(path, manifest)
+            except (OSError, ValueError):
+                # _atomic_write_manifest computes the next checksum before it opens
+                # its temporary file; restore the checksum of the last durable version
+                # for an honest report and a safe retry/final write.
+                if durable_manifest_sha256 is not None:
+                    manifest["manifest_sha256"] = durable_manifest_sha256
+                raise
+            durable_manifest_sha256 = manifest["manifest_sha256"]
+
+        durable_manifest_sha256 = manifest.get("manifest_sha256")
         for index, item in enumerate(manifest["items"]):
             result = item_results.get(index, {})
-            if result.get("status") != "ready_to_restore":
-                skipped += 1
-                continue
+            result_status = result.get("status")
             original = Path(item["original_path"])
             quarantined = Path(item["quarantine_path"])
+
+            if result_status == "reconcile_manifest_state":
+                try:
+                    root = _known_cache_root_for_path(original, env)
+                    if (
+                        root is None
+                        or not original.parent.is_dir()
+                        or original.is_symlink()
+                        or _is_link_or_reparse(original)
+                        or _path_has_link_from(original.parent, root)
+                        or quarantined.exists()
+                        or quarantined.is_symlink()
+                        or _is_link_or_reparse(quarantined)
+                    ):
+                        skipped += 1
+                        continue
+                    if hash_bytes + item["size_bytes"] > MAX_CACHE_BATCH_BYTES:
+                        skipped += 1
+                        continue
+                    hash_bytes += item["size_bytes"]
+                    digest, current = _sha256_checked(original, byte_limit=MAX_CACHE_FILE_BYTES)
+                    if (
+                        current.st_size != item["size_bytes"]
+                        or not secrets.compare_digest(digest, item["sha256"])
+                    ):
+                        skipped += 1
+                        continue
+                    # No file movement occurs here. The explicit restore confirmation
+                    # authorizes only recording the already-matching destination as
+                    # restored; matching bytes do not prove how that file arrived.
+                    item["state"] = "restored"
+                    try:
+                        persist_manifest()
+                    except (OSError, ValueError):
+                        persistence_failed = True
+                        skipped += len(manifest["items"]) - index - 1
+                        break
+                    reconciled += 1
+                    continue
+                except (OSError, RuntimeError, ValueError):
+                    skipped += 1
+                    continue
+
+            if result_status != "ready_to_restore":
+                skipped += 1
+                continue
             try:
                 root = _known_cache_root_for_path(original, env)
                 if root is None or not original.parent.is_dir() or _path_has_link_from(original.parent, root):
@@ -630,56 +759,63 @@ def restore_application_cache_quarantine(
                 if current.st_size != item["size_bytes"] or not secrets.compare_digest(digest, item["sha256"]):
                     skipped += 1
                     continue
-                # Same-volume atomic move; no replacement of an existing destination.
                 if original.exists() or original.is_symlink():
                     skipped += 1
                     continue
-                # Use the same single-operation Windows rename as quarantine: if
-                # another process recreates the original path, rename fails without
-                # overwriting it and the verified quarantine copy remains untouched.
+                # On Windows, rename fails if another process creates the destination
+                # first. Never replace a concurrently recreated browser cache file.
                 _move_without_overwriting(quarantined, original)
                 item["state"] = "restored"
                 restored += 1
                 try:
-                    _atomic_write_manifest(path, manifest)
-                except OSError:
-                    # Do not perform any more moves when the durable recovery record
-                    # cannot be updated. The final write below retries once after the
-                    # loop has stopped; if it also fails, the older manifest remains
-                    # sufficient to reconcile paths during a later preview.
+                    persist_manifest()
+                except (OSError, ValueError):
+                    # Stop after a movement whose recovery record could not be saved.
+                    # A later preview can compare the destination with the saved hash
+                    # and offer metadata-only reconciliation after explicit consent.
                     persistence_failed = True
-                    # Count all remaining items as skipped because the recovery
-                    # record is no longer reliable enough to authorize more moves.
                     skipped += len(manifest["items"]) - index - 1
                     break
             except (OSError, ValueError):
                 skipped += 1
-        manifest["status"] = "complete" if restored and not skipped and not persistence_failed else "partial"
+
+        manifest["status"] = "complete" if (restored or reconciled) and not skipped and not persistence_failed else "partial"
         try:
-            _atomic_write_manifest(path, manifest)
-        except OSError:
+            persist_manifest()
+        except (OSError, ValueError):
             persistence_failed = True
-        status = (
-            "cache_restore_partial" if persistence_failed or restored or skipped
-            else "cache_restore_blocked"
-        )
-        if restored and not skipped and not persistence_failed:
+        if persistence_failed or skipped:
+            status = "cache_restore_partial"
+        elif restored:
             status = "cache_restored"
+        elif reconciled:
+            status = "cache_restore_reconciled"
+        else:
+            status = "cache_restore_blocked"
         note = (
-            "Manifest persistence failed during restore. Further moves were stopped; inspect the durable manifest and both original/quarantine paths before retrying."
+            "Manifest persistence failed during restore. Further actions were stopped; the file-movement count is reported separately from metadata reconciliation. Run the restore preview again; a destination that matches the durable size and SHA-256 may be reconciled only after explicit confirmation."
             if persistence_failed else
-            "Verified files were restored only to missing paths under recognized cache roots. No existing file was overwritten."
+            "Verified files were restored only to missing paths under recognized cache roots. Any metadata-only reconciliation changed no file contents or paths. No existing file was overwritten."
         )
         return {
             **base, "status": status, "manifest_path": str(path), "session_id": session.name,
-            "files_restored": restored, "files_skipped": skipped,
-            "manifest_sha256": manifest.get("manifest_sha256"),
+            "files_restored": restored, "files_reconciled": reconciled,
+            "files_skipped": skipped, "manifest_sha256": durable_manifest_sha256,
             "note": note,
             "limitations": [
                 "If the browser recreated a destination or still holds a file open, restore skips that item.",
-                "Only files verified against the quarantine manifest can be restored.",
+                "Only files verified against the quarantine manifest can be restored or reconciled.",
+                "Reconciliation proves matching size and SHA-256, not which process placed the bytes at the destination.",
                 "The manifest remains available for review. SHA-256 is an integrity check, not a digital signature.",
             ],
         }
     except (OSError, RuntimeError, ValueError) as exc:
-        return {**base, "status": "cache_restore_blocked", "files_restored": 0, "note": f"Restore stopped safely ({type(exc).__name__}); inspect the manifest and existing files."}
+        return {
+            **base,
+            "status": "cache_restore_partial" if restored or reconciled else "cache_restore_blocked",
+            "files_restored": restored,
+            "files_reconciled": reconciled,
+            "files_skipped": skipped,
+            "manifest_sha256": durable_manifest_sha256,
+            "note": f"Restore stopped safely ({type(exc).__name__}); {restored} file(s) may already have moved and {reconciled} manifest item(s) may have been reconciled. Inspect the manifest plus original/quarantine paths before retrying.",
+        }
