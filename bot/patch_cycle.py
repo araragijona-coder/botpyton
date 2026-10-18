@@ -188,6 +188,7 @@ def apply_reviewed_patch(
     workspace_parent: str | Path | None = None,
     project_check_id: str | None = None,
     execute_project_code: bool = False,
+    allowed_paths: list[str] | None = None,
     timeout_seconds: int = 120,
     memory_limit_mb: int | None = None,
 ) -> dict[str, Any]:
@@ -229,6 +230,22 @@ def apply_reviewed_patch(
     if b"\x00" in patch_bytes:
         raise PatchCycleError("Binary patch data is not supported")
     paths = _diff_paths(patch_text)
+    if allowed_paths is not None:
+        if not isinstance(allowed_paths, list) or not allowed_paths or not all(isinstance(item, str) for item in allowed_paths):
+            raise PatchCycleError("allowed_paths must be a non-empty list of explicitly selected relative paths")
+        if len(set(allowed_paths)) != len(allowed_paths):
+            raise PatchCycleError("allowed_paths cannot contain duplicate entries")
+        try:
+            normalized_allowed = [_safe_relative_path(item) for item in allowed_paths]
+        except LocalChangeError as exc:
+            raise PatchCycleError(f"An explicitly allowed path is invalid: {exc}") from exc
+        if normalized_allowed != allowed_paths:
+            raise PatchCycleError("allowed_paths must use canonical relative paths")
+        unselected = sorted(set(paths) - set(normalized_allowed))
+        if unselected:
+            raise PatchCycleError(
+                "Patch modifies paths that were not explicitly selected and uploaded: " + ", ".join(unselected)
+            )
     _check_existing_targets(root, paths)
 
     available_check = None
