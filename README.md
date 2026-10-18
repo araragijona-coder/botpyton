@@ -586,3 +586,19 @@ Executor reports are now staged through uniquely created temporary files in the 
 ## Phase 44 — terminate timed-out process trees
 
 BOTPYTON now isolates each POSIX subprocess in its own session and terminates the whole process group on timeout or execution cleanup, rather than killing only the leader. On Windows, when the memory Job Object is available, timeout closes that job before waiting on output collectors so descendants cannot keep stdout/stderr pipes open or outlive the task. Regression coverage launches a child that would write a marker after the parent timeout and confirms it never survives. See [Phase 44 research](docs/research/PHASE-44-PROCESS-TREE-TIMEOUT-CLEANUP.md).
+
+
+## Phase 46 — permisos del agente local y auditoría
+
+BOTPYTON incorpora una CLI local, bajo demanda, para listar un nivel de una carpeta autorizada, leer archivos UTF-8 acotados y crear/reemplazar archivos bajo un permiso explícito por raíz. Los reemplazos requieren permiso de lectura, permiso de escritura y el SHA-256 exacto del archivo actual. No crea carpetas, no elimina archivos, no ejecuta comandos y no instala dependencias.
+
+Las operaciones se registran en JSONL con una cadena de SHA-256; si la auditoría está dañada o no puede guardarse, la operación se bloquea. La configuración y el registro deben vivir fuera de las raíces autorizadas. Consulta la [guía del agente local](docs/LOCAL-AGENT.md), el [ejemplo de configuración](docs/examples/local-agent-config.example.json) y la [auditoría técnica de la fase](docs/research/PHASE-46-LOCAL-AGENT-PERMISSIONS.md).
+
+Validación de configuración y auditoría:
+
+~~~powershell
+python -m bot.main --local-agent-config "C:\BOTPYTON\agent.json"
+python -m bot.main --local-agent-config "C:\BOTPYTON\agent.json" --local-agent-audit
+~~~
+
+Este agente es una base local de archivos, no un servicio remoto ni un programador autónomo universal. La revisión de CI no reemplaza probar la configuración y los permisos en el PC del usuario.

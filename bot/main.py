@@ -133,6 +133,15 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--probe-tool", metavar="TOOL_ID", help="run the fixed version probe for one registered tool")
     parser.add_argument("--local-plan", metavar="PATH", help="validate a declarative local file-change plan (dry-run by default)")
     parser.add_argument("--execute-local-plan", action="store_true", help="apply --local-plan after hash checks and create backups")
+    parser.add_argument("--local-agent-config", metavar="PATH", help="validate or use a local-agent JSON config with explicit folder permissions")
+    parser.add_argument("--local-agent-validate", action="store_true", help="validate the local-agent config without performing file access")
+    parser.add_argument("--local-agent-list", metavar="ROOT_ID", help="list one directory in the configured root; requires --local-agent-config")
+    parser.add_argument("--local-agent-read", metavar="ROOT_ID", help="read one bounded UTF-8 file in the configured root")
+    parser.add_argument("--local-agent-write", metavar="ROOT_ID", help="write one UTF-8 file; new files are exclusive and replacements require expected SHA-256")
+    parser.add_argument("--local-agent-audit", action="store_true", help="verify the local-agent audit hash chain without changing files")
+    parser.add_argument("--local-agent-path", default=".", metavar="RELATIVE_PATH", help="canonical path relative to the selected local-agent root (default: . for listing)")
+    parser.add_argument("--local-agent-content-stdin", action="store_true", help="read bounded UTF-8 write content from stdin; required with --local-agent-write")
+    parser.add_argument("--local-agent-expected-sha256", metavar="SHA256", help="required exact current file hash when replacing an existing target")
     parser.add_argument("--project-root", default=".", help="project directory for local plans and project checks (default: current directory)")
     parser.add_argument("--list-project-checks", action="store_true", help="detect fixed test/build profiles without executing project code")
     parser.add_argument("--run-project-check", metavar="CHECK_ID", help="run one detected check; requires --execute-project-code")
@@ -495,6 +504,62 @@ def main(argv: list[str] | None = None) -> int:
             return 0 if result["ok"] else 1
         if args.probe_tool:
             _print_json(run_tool_probe(args.probe_tool, root=Path.cwd()))
+            return 0
+        local_agent_operations = [
+            bool(args.local_agent_validate), args.local_agent_list is not None,
+            args.local_agent_read is not None, args.local_agent_write is not None,
+            bool(args.local_agent_audit),
+        ]
+        local_agent_flags_used = (
+            args.local_agent_config is not None or any(local_agent_operations)
+            or args.local_agent_path != "." or args.local_agent_content_stdin
+            or args.local_agent_expected_sha256 is not None
+        )
+        if local_agent_flags_used:
+            from .local_agent import LocalAgent, LocalAgentError, MAX_FILE_BYTES as LOCAL_AGENT_MAX_FILE_BYTES
+            if not args.local_agent_config:
+                raise LocalAgentError("Local-agent options require --local-agent-config PATH")
+            selected_count = sum(local_agent_operations)
+            if selected_count > 1:
+                raise LocalAgentError("Choose exactly one local-agent operation per invocation")
+            if args.local_agent_content_stdin and args.local_agent_write is None:
+                raise LocalAgentError("--local-agent-content-stdin requires --local-agent-write")
+            if args.local_agent_expected_sha256 is not None and args.local_agent_write is None:
+                raise LocalAgentError("--local-agent-expected-sha256 requires --local-agent-write")
+            is_path_operation = args.local_agent_list is not None or args.local_agent_read is not None or args.local_agent_write is not None
+            if args.local_agent_path != "." and not is_path_operation:
+                raise LocalAgentError("--local-agent-path requires --local-agent-list, --local-agent-read, or --local-agent-write")
+            agent = LocalAgent(args.local_agent_config)
+            if selected_count == 0 or args.local_agent_validate:
+                result = {**agent.config_summary(), "audit_integrity": agent.verify_audit()}
+            elif args.local_agent_audit:
+                result = agent.verify_audit()
+            elif args.local_agent_list is not None:
+                result = agent.list_directory(args.local_agent_list, args.local_agent_path)
+            elif args.local_agent_read is not None:
+                if args.local_agent_path == ".":
+                    raise LocalAgentError("--local-agent-read requires --local-agent-path RELATIVE_PATH")
+                result = agent.read_file(args.local_agent_read, args.local_agent_path)
+            else:
+                if args.local_agent_path == ".":
+                    raise LocalAgentError("--local-agent-write requires --local-agent-path RELATIVE_PATH")
+                if not args.local_agent_content_stdin:
+                    raise LocalAgentError("--local-agent-write requires --local-agent-content-stdin")
+                if hasattr(sys.stdin, "buffer"):
+                    raw_content = sys.stdin.buffer.read(LOCAL_AGENT_MAX_FILE_BYTES + 1)
+                else:
+                    raw_content = sys.stdin.read(LOCAL_AGENT_MAX_FILE_BYTES + 1).encode("utf-8")
+                if len(raw_content) > LOCAL_AGENT_MAX_FILE_BYTES:
+                    raise LocalAgentError(f"Stdin content exceeds {LOCAL_AGENT_MAX_FILE_BYTES} bytes")
+                try:
+                    content = raw_content.decode("utf-8")
+                except UnicodeDecodeError as exc:
+                    raise LocalAgentError("Stdin content must be valid UTF-8") from exc
+                result = agent.write_file(
+                    args.local_agent_write, args.local_agent_path, content,
+                    expected_sha256=args.local_agent_expected_sha256,
+                )
+            _print_json(result)
             return 0
         if args.execute_local_plan and not args.local_plan:
             raise LocalChangeError("--execute-local-plan requires --local-plan")

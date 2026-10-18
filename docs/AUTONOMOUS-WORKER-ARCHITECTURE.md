@@ -134,7 +134,7 @@ Este apartado distingue capacidades presentes de objetivos futuros; no declara B
 ### Pendiente antes de declarar el trabajador listo para uso cotidiano
 
 - Prueba de instalación y ejecución en el PC Windows del usuario, incluyendo consumo real de RAM y Job Objects.
-- Agente de acceso local con permisos configurables por carpeta y registro de auditoría más completo. El lanzador actual ejecuta el núcleo local directamente; no es un servicio remoto ni un instalador independiente.
+- Núcleo de agente local seguro disponible bajo demanda (Fase 46): raíces disjuntas y configuradas explícitamente, permisos list/read/write por raíz, límites por archivo, rechazo de rutas simbólicas/reparse y registro JSONL encadenado por SHA-256. Sigue pendiente validar el uso real en el PC del usuario y decidir si se necesita un instalador separado; no es un servicio remoto.
 - Mayor cobertura de herramientas, lenguajes, formatos y entornos de compilación.
 - Más estrategias de reparación experimental. El sistema ya extrae traceback acotado, redacta valores que parecen credenciales y propone experimentos para tipos de error comunes; todavía no repara de forma autónoma cualquier error desconocido.
 - Estrategias de experimentación para errores desconocidos. Hoy el sistema recopila evidencia y detiene la reparación automática cuando no hay una regla segura; no promete resolver cualquier error.
@@ -144,3 +144,10 @@ Este apartado distingue capacidades presentes de objetivos futuros; no declara B
 ### Límite de órdenes sin IA
 
 Sin un modelo de IA, el núcleo no convierte cualquier frase libre en una solución de código arbitraria. Ejecuta órdenes estructuradas, perfiles conocidos y planes explícitos; puede investigar errores no registrados mediante evidencia y experimentos acotados, pero debe pedir instrucciones o detenerse cuando no haya una hipótesis verificable. No se debe presentar esta limitación como una función ya resuelta.
+
+
+### Fase 46 — límite actual del agente local
+
+El agente local de archivos está implementado en bot/local_agent.py y se invoca mediante las opciones --local-agent-* de la CLI. Permite listar un directorio a un nivel, leer UTF-8 acotado y crear/reemplazar un archivo con permisos por raíz; no habilita shell, borrado, red, escalado de privilegios ni acceso fuera de las raíces configuradas. Las rutas de configuración y auditoría se mantienen fuera de las raíces. Las pruebas usan carpetas temporales y API de sistema simuladas cuando corresponde.
+
+La aceptación en CI demuestra las pruebas del repositorio, no que el usuario haya configurado permisos correctamente ni que el agente funcione sobre sus carpetas personales. La prueba local de instalación, RAM y permisos sigue pendiente.
