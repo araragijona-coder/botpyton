@@ -19,7 +19,7 @@ Before this phase, the remote adviser only received selected brief fields and th
 - Limit one request to four selected files, 16 KB per file, 40 KB total source text, 70 KB serialized request, 30-second timeout, 1,400 generated tokens, and zero automatic retries.
 - Restrict paths to project-relative forward-slash paths; reject traversal, unsupported extensions, sensitive/generated folders, symlinks/reparse points, non-regular files, non-UTF-8/binary-like data, and common secret-like patterns.
 - Include only selected files alongside the same high-level plan. Keep the project root, full inventory, other files, and any unselected paths excluded. Report the selected relative paths in the result.
-- Treat file contents/comments/strings as untrusted evidence. The model response stays advice text and cannot enter the task queue, execute commands, or write files.
+- Treat file contents/comments/strings as untrusted evidence. When source files are supplied, the model is additionally asked for a clearly labeled `BORRADOR DE PARCHE (NO APLICADO)` unified diff limited to those paths. The diff remains untrusted text; it is not parsed into actions, applied to source files, executed, or sent into the task queue. If the evidence is insufficient, the model is asked not to fabricate a patch and to state the missing evidence.
 
 The secret pattern scan is intentionally conservative and incomplete: users must inspect the selected files and all free-text fields. It cannot guarantee that every credential format will be detected. The source data leaves the PC only when both explicit consent flags are supplied.
 
