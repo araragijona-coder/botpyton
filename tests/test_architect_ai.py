@@ -34,7 +34,7 @@ class ArchitectAIAdapterTests(unittest.TestCase):
 
     def test_request_uses_only_free_router_and_selected_brief_context(self):
         with tempfile.TemporaryDirectory() as tmp:
-            local_path = str(Path(tmp) / "private-project-path")
+            local_path = str(Path(tmp))
             brief = {
                 "schema_version": 1,
                 "task_type": "design",
