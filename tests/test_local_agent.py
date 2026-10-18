@@ -51,7 +51,7 @@ class LocalAgentTests(unittest.TestCase):
         self.assertEqual(list(self.project.iterdir()), [])
 
     def test_read_file_returns_content_and_audits_intent_and_result_without_content(self):
-        (self.project / "hello.py").write_text("VALUE = 17\n", encoding="utf-8")
+        (self.project / "hello.py").write_bytes(b"VALUE = 17\n")
         result = self.agent().read_file("project", "hello.py")
         self.assertEqual(result["content"], "VALUE = 17\n")
         self.assertEqual(result["sha256"], hashlib.sha256(b"VALUE = 17\n").hexdigest())
@@ -99,7 +99,7 @@ class LocalAgentTests(unittest.TestCase):
 
     def test_existing_file_replacement_requires_read_permission_and_exact_hash(self):
         target = self.project / "app.py"
-        target.write_text("VALUE = 1\n", encoding="utf-8")
+        target.write_bytes(b"VALUE = 1\n")
         with self.assertRaisesRegex(LocalAgentError, "expected_sha256"):
             self.agent().write_file("project", "app.py", "VALUE = 2\n")
         stale = "0" * 64

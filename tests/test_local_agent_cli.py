@@ -53,7 +53,7 @@ class LocalAgentCliTests(unittest.TestCase):
         self.assertFalse((self.root / "new.py").exists())
 
     def test_list_and_read_commands_use_the_selected_root(self):
-        (self.root / "app.py").write_text("VALUE = 5\n", encoding="utf-8")
+        (self.root / "app.py").write_bytes(b"VALUE = 5\n")
         code, stdout, stderr = self._call([
             "--local-agent-config", str(self.config),
             "--local-agent-list", "project",
@@ -92,7 +92,7 @@ class LocalAgentCliTests(unittest.TestCase):
 
     def test_replacement_requires_exact_hash_and_is_non_destructive_on_mismatch(self):
         target = self.root / "app.py"
-        target.write_text("VALUE = 1\n", encoding="utf-8")
+        target.write_bytes(b"VALUE = 1\n")
         with patch("sys.stdin", io.StringIO("VALUE = 2\n")):
             code, _, stderr = self._call([
                 "--local-agent-config", str(self.config),
