@@ -250,3 +250,11 @@ python -m bot.main --pc-cleanup-restore "C:\\path\\to\\BOTPYTON\\Quarantine\\ses
 - The read-only preview offers reconciliation only if the quarantine path is absent, the original path remains inside a recognized cache root with no linked/reparse parent, and the original file passes bounded regular-file checks plus the recorded size and SHA-256 comparison.
 - A second explicit restore confirmation revalidates these conditions and updates only manifest state; it does not copy, move, replace or overwrite a file. The report warns that matching bytes do not establish which process placed them there.
 - Added regression coverage for injected write failures of both exception types and verified the subsequent reconciliation path. Linux and Windows CI must pass before merging.
+
+## Phase 36 — Quarantine manifest publication failure recovery
+
+- A post-move manifest write may raise `ValueError` (including bounded serialization failures), not only `OSError`. Previously that exception fell into the generic item handler, which could mislabel a completed move as `failed`; restore preview then refused that state.
+- Treat all post-move manifest-publication failures as transaction/persistence failures, not file-move failures. Preserve the verified moved state, stop before processing the remaining selected paths, and account for unprocessed selections as skipped.
+- Track the SHA-256 of the last successfully persisted manifest so an error report never presents an in-memory digest as though it were durable.
+- Catch final persistence errors and preserve accurate moved counters in the outer exceptional path.
+- Regression injects two `ValueError` failures after one move and verifies the stale on-disk manifest remains valid, one verified cache file is safely restorable, and the second selection was never moved.

@@ -333,6 +333,15 @@ def quarantine_application_cache_candidates(
     if any(not isinstance(path, str) or not path for path in selected_paths) or len(set(selected_paths)) != len(selected_paths):
         return {**base_report, "status": "cache_quarantine_blocked", "moved_count": 0, "note": "Selection contains invalid or duplicate paths."}
 
+    # Keep counters outside the guarded block so an unexpected later exception
+    # cannot erase evidence that a file was already moved.
+    moved_count = 0
+    failed_count = 0
+    persistence_failed = False
+    manifest_path: Path | None = None
+    session: Path | None = None
+    durable_manifest_sha256: str | None = None
+
     try:
         _local_app_data(env)
         fresh = preview_application_cache(env=env, windows=True, max_candidates=MAX_APPLICATION_CACHE_CANDIDATES, timeout_seconds=5.0)
@@ -413,10 +422,20 @@ def quarantine_application_cache_candidates(
             "confirmation": CACHE_QUARANTINE_CONFIRMATION,
             "items": prepared,
         }
-        _atomic_write_manifest(manifest_path, manifest)
-        moved_count = 0
-        failed_count = 0
-        persistence_failed = False
+        def persist_manifest() -> None:
+            nonlocal durable_manifest_sha256
+            try:
+                _atomic_write_manifest(manifest_path, manifest)
+            except (OSError, ValueError):
+                # Report the checksum of the last manifest actually persisted,
+                # never the in-memory state whose write just failed.
+                if durable_manifest_sha256 is not None:
+                    manifest["manifest_sha256"] = durable_manifest_sha256
+                raise
+            durable_manifest_sha256 = manifest["manifest_sha256"]
+
+        # The initial durable record must exist before the first file can move.
+        persist_manifest()
         for index, item in enumerate(prepared):
             source = Path(item["original_path"])
             destination = Path(item["quarantine_path"])
@@ -434,7 +453,12 @@ def quarantine_application_cache_candidates(
                 ):
                     item["state"] = "skipped_changed"
                     failed_count += 1
-                    _atomic_write_manifest(manifest_path, manifest)
+                    try:
+                        persist_manifest()
+                    except (OSError, ValueError):
+                        persistence_failed = True
+                        failed_count += len(prepared) - index - 1
+                        break
                     continue
                 # On Windows, rename is a single atomic directory-entry operation
                 # and fails if another process creates the destination first. Avoid a
@@ -444,24 +468,27 @@ def quarantine_application_cache_candidates(
                 item["state"] = "moved"
                 moved_count += 1
                 try:
-                    _atomic_write_manifest(manifest_path, manifest)
-                except OSError:
-                    # The last durable manifest says pending and records both paths/hash;
-                    # recovery tooling can detect a matching file at the quarantine destination.
+                    persist_manifest()
+                except (OSError, ValueError):
+                    # Do not relabel a completed move as failed. The durable record
+                    # still contains both paths/hash and remains usable whether it
+                    # says pending or moved; stop before touching any later selection.
                     persistence_failed = True
+                    failed_count += len(prepared) - index - 1
                     break
             except (OSError, ValueError):
                 item["state"] = "failed"
                 failed_count += 1
                 try:
-                    _atomic_write_manifest(manifest_path, manifest)
-                except OSError:
+                    persist_manifest()
+                except (OSError, ValueError):
                     persistence_failed = True
+                    failed_count += len(prepared) - index - 1
                     break
         manifest["status"] = "partial" if failed_count or persistence_failed or moved_count != len(prepared) else "complete"
         try:
-            _atomic_write_manifest(manifest_path, manifest)
-        except OSError:
+            persist_manifest()
+        except (OSError, ValueError):
             persistence_failed = True
         if persistence_failed:
             final_status = "cache_quarantine_partial"
@@ -480,7 +507,7 @@ def quarantine_application_cache_candidates(
             "moved_count": moved_count, "files_moved": moved_count,
             "files_skipped": failed_count, "bytes_quarantined": sum(x["size_bytes"] for x in prepared if x["state"] == "moved"),
             "manifest_path": str(manifest_path), "session_id": session.name,
-            "manifest_sha256": manifest.get("manifest_sha256"),
+            "manifest_sha256": durable_manifest_sha256,
             "note": note,
             "limitations": [
                 "Files are moved, not permanently deleted. Close the relevant browser before selecting cache files.",
@@ -491,11 +518,27 @@ def quarantine_application_cache_candidates(
         }
     except (OSError, RuntimeError, ValueError) as exc:
         detail = str(exc).replace("\\r", " ").replace("\\n", " ")[:240]
-        return {
-            **base_report, "status": "cache_quarantine_blocked", "moved_count": 0,
-            "failure_type": type(exc).__name__, "failure_detail": detail,
-            "note": f"Quarantine stopped before a usable result ({type(exc).__name__}). No automatic retry was attempted.",
+        report: dict[str, Any] = {
+            **base_report,
+            "status": "cache_quarantine_partial" if moved_count else "cache_quarantine_blocked",
+            "moved_count": moved_count,
+            "files_moved": moved_count,
+            "files_skipped": failed_count,
+            "manifest_sha256": durable_manifest_sha256,
+            "failure_type": type(exc).__name__,
+            "failure_detail": detail,
+            "note": (
+                f"Quarantine stopped after moving {moved_count} file(s) ({type(exc).__name__}); "
+                "inspect the manifest and original/quarantine paths before retrying."
+                if moved_count else
+                f"Quarantine stopped before moving any files ({type(exc).__name__}); no files were moved."
+            ),
         }
+        if manifest_path is not None:
+            report["manifest_path"] = str(manifest_path)
+        if session is not None:
+            report["session_id"] = session.name
+        return report
 
 
 def preview_application_cache_restore(
