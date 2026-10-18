@@ -80,10 +80,12 @@ def _diff_paths(patch: str) -> list[str]:
             "GIT binary patch", "Binary files ",
         )) for line in section):
             raise PatchCycleError("File creation/deletion, rename/copy, mode changes and binary patches are blocked")
-        if any(re.search(r"\b120000\b", line) for line in section if line.startswith("index ")):
-            raise PatchCycleError("Symbolic-link patches are not supported")
-        old_headers = [line for line in section if line.startswith("--- ")]
-        new_headers = [line for line in section if line.startswith("+++ ")]
+        if any(re.search(r"\b(?:120000|160000)\b", line) for line in section if line.startswith("index ")):
+            raise PatchCycleError("Symbolic-link and submodule patches are not supported")
+        first_hunk = next((index for index, line in enumerate(section) if line.startswith("@@")), len(section))
+        headers = section[:first_hunk]
+        old_headers = [line for line in headers if line.startswith("--- ")]
+        new_headers = [line for line in headers if line.startswith("+++ ")]
         if len(old_headers) != 1 or len(new_headers) != 1:
             raise PatchCycleError("Every diff section must contain one --- and one +++ file header")
         old_header_path = _header_path(old_headers[0], "--- ")
@@ -383,10 +385,11 @@ def apply_reviewed_patch(
             "baseline_workspace": baseline_workspace,
             "baseline_check": baseline,
             "verification": {"changed_paths_match": True, "git_diff_check": diff_check["exit_code"] == 0, "changed_files": static},
-            "project_check_run": False,
+            "candidate_project_check_run": False,
             "reason": "Static verification failed; project code was not executed on the candidate.",
-            "source_repository_modified": False,
-            "project_code_executed": bool(baseline),
+            "source_working_tree_modified": False,
+            "project_code_executed": project_code_executed,
+            "project_code_execution_attempted": project_code_execution_attempted,
             "network_used": False,
             "ai_enabled": False,
             "merge_performed": False,
