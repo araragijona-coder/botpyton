@@ -71,14 +71,15 @@ class ArchitectAIAdapterTests(unittest.TestCase):
             self.assertNotIn('"source_code"', sent)
 
     def test_blocked_local_brief_never_uses_the_network(self):
-        missing_root = str(Path(tempfile.gettempdir()) / "botpyton-path-that-does-not-exist-22")
-        brief = {
-            "task_type": "implement",
-            "goal": "Implement a bounded local data validation feature",
-            "project_root": missing_root,
-        }
-        with mock.patch("bot.architect_ai.urlopen") as open_url:
-            result = request_architecture_advice(brief, api_key="test-key-not-real")
+        with tempfile.TemporaryDirectory() as tmp:
+            missing_root = str(Path(tmp) / "does-not-exist")
+            brief = {
+                "task_type": "implement",
+                "goal": "Implement a bounded local data validation feature",
+                "project_root": missing_root,
+            }
+            with mock.patch("bot.architect_ai.urlopen") as open_url:
+                result = request_architecture_advice(brief, api_key="test-key-not-real")
         self.assertEqual(result["status"], "blocked")
         self.assertFalse(result["safety"]["network_used"])
         open_url.assert_not_called()
