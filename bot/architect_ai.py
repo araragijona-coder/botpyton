@@ -263,15 +263,18 @@ def _safe_failure_report(report: object) -> dict[str, Any]:
                 cleaned: dict[str, Any] = {}
                 for field, limit in (("path", 300), ("check", 100), ("reason", 700), ("note", 400)):
                     if field in item:
-                        value = text_field(item[field], f"verification.changed_files.{field}", limit)
-                        if value:
-                            if field == "path" and (
-                                value.startswith("/") or "\\" in value or ":" in value
-                                or any(part in {"", ".", ".."} for part in value.split("/"))
+                        if field == "path":
+                            raw_path = item[field]
+                            if (
+                                not isinstance(raw_path, str) or not raw_path or len(raw_path) > limit
+                                or raw_path.startswith("/") or "\\" in raw_path or ":" in raw_path
+                                or any(part in {"", ".", ".."} for part in raw_path.split("/"))
                             ):
                                 raise ArchitectAIError(
                                     "Failure report contains a non-relative or unsafe verified file path."
                                 )
+                        value = text_field(item[field], f"verification.changed_files.{field}", limit)
+                        if value:
                             cleaned[field] = value
                 if isinstance(item.get("ok"), bool):
                     cleaned["ok"] = item["ok"]
