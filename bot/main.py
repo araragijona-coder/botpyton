@@ -452,10 +452,14 @@ def main(argv: list[str] | None = None) -> int:
             for entry in preview["items"]:
                 if isinstance(entry, dict):
                     print(f"  [{entry.get('status', 'unknown')}] {entry.get('path', '(path missing)')}")
-            print(f"Ready to restore: {preview['ready_count']}; skipped: {preview['files_skipped']}")
-            if preview["ready_count"] == 0:
+            print(
+                f"Ready to restore: {preview['ready_count']}; "
+                f"metadata-only reconciliations: {preview.get('reconcile_count', 0)}; "
+                f"skipped: {preview['files_skipped']}"
+            )
+            if preview["ready_count"] == 0 and preview.get("reconcile_count", 0) == 0:
                 return print_pc_result(preview)
-            typed = input(f'Type exactly "{RESTORE_CONFIRMATION}" to restore ready entries: ')
+            typed = input(f'Type exactly "{RESTORE_CONFIRMATION}" to restore/reconcile eligible entries: ')
             if typed != RESTORE_CONFIRMATION:
                 print("CANCELLED: confirmation did not match; no files were restored.")
                 return 2
