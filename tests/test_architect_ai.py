@@ -311,6 +311,32 @@ class ArchitectAIAdapterTests(unittest.TestCase):
             self.assertNotIn("untrusted_extra_instruction", sent)
             self.assertNotIn("private_unapproved_field", sent)
 
+    def test_failure_report_rejects_untyped_status_and_absolute_verified_paths(self):
+        brief = {
+            "task_type": "implement",
+            "goal": "Fix a parser regression",
+        }
+        invalid_reports = [
+            {"status": ["candidate_checks_failed"]},
+            {
+                "status": "candidate_checks_failed",
+                "verification": {"changed_files": [{"path": "C:\\Users\\private\\secret.py", "ok": False}]},
+            },
+            {
+                "status": "candidate_checks_failed",
+                "verification": {"changed_files": [{"path": "/home/user/private/secret.py", "ok": False}]},
+            },
+        ]
+        with mock.patch("bot.architect_ai.urlopen") as open_url:
+            for report in invalid_reports:
+                with self.subTest(report=report):
+                    with self.assertRaises(ArchitectAIError):
+                        request_architecture_advice(
+                            brief, api_key="test-key-not-real", failure_report=report,
+                            send_failure_report=True,
+                        )
+        open_url.assert_not_called()
+
     def test_failure_report_rejects_secret_like_values_before_network(self):
         brief = {
             "task_type": "implement",
