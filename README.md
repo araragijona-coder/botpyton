@@ -207,7 +207,7 @@ The common `validate_change_plan()` validator now rejects `draft: false`, so ind
 
 ## Security model
 
-- Python standard library only; no AI/LLM services or inference APIs.
+- The core worker needs only the Python standard library and has no required AI/LLM or inference API. The explicitly invoked Phase 25 architecture adviser is the only optional remote-AI path.
 - GitHub REST operations are restricted to the fixed `api.github.com` host and the configured repository.
 - No arbitrary shell command from task text.
 - Source-change plans are path-validated, size-limited, fingerprinted and committed on isolated branches.
