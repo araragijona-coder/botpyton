@@ -143,7 +143,7 @@ class ReviewedPatchCycleTests(unittest.TestCase):
         self.assertEqual(result["status"], "candidate_static_verification_failed")
         self.assertFalse(result["verification"]["changed_files"][0]["ok"])
         self.assertFalse(result["verification"]["changed_paths_match"] is False)
-        self.assertFalse(result["project_check_run"])
+        self.assertFalse(result["candidate_project_check_run"])
         self.assertEqual((self.root / "app.py").read_text(encoding="utf-8"), "VALUE = 1\n")
         self.assertFalse(result["merge_performed"])
 
