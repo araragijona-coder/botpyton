@@ -5,7 +5,7 @@ import unittest
 from pathlib import Path
 
 from bot.memory import JsonMemory
-from bot.queue import QueueError, TaskQueue
+from bot.queue import QueueError, TaskQueue, _fingerprint
 
 
 class _SlowJsonMemory(JsonMemory):
@@ -85,6 +85,44 @@ class PersistentQueueTests(unittest.TestCase):
                     worker.join(2)
             results.close()
             results.join_thread()
+
+    def test_malformed_persisted_record_fails_closed_without_rewriting_state(self):
+        self.queue.enqueue_many([task("A")])
+        state = self.queue.memory.load()
+        state["tasks"]["A"].pop("status")
+        self.queue.memory.save(state)
+        before = self.queue.memory.path.read_bytes()
+
+        with self.assertRaisesRegex(QueueError, "missing fields"):
+            self.queue.claim_next()
+
+        self.assertEqual(self.queue.memory.path.read_bytes(), before)
+
+    def test_unknown_persisted_dependency_fails_closed_without_rewriting_state(self):
+        self.queue.enqueue_many([task("A"), task("B", ["A"])])
+        state = self.queue.memory.load()
+        payload = state["tasks"]["B"]["payload"]
+        payload["depends_on"] = ["MISSING"]
+        state["tasks"]["B"]["idempotency_key"] = _fingerprint(payload)
+        self.queue.memory.save(state)
+        before = self.queue.memory.path.read_bytes()
+
+        with self.assertRaisesRegex(QueueError, "dependency graph is invalid"):
+            self.queue.claim_next()
+
+        self.assertEqual(self.queue.memory.path.read_bytes(), before)
+
+    def test_persisted_payload_fingerprint_mismatch_fails_closed(self):
+        self.queue.enqueue_many([task("A")])
+        state = self.queue.memory.load()
+        state["tasks"]["A"]["payload"]["goal"] = "altered without fingerprint update"
+        self.queue.memory.save(state)
+        before = self.queue.memory.path.read_bytes()
+
+        with self.assertRaisesRegex(QueueError, "invalid idempotency fingerprint"):
+            self.queue.resume_interrupted()
+
+        self.assertEqual(self.queue.memory.path.read_bytes(), before)
 
     def test_same_id_different_payload_is_rejected_without_mutation(self):
         self.queue.enqueue_many([task("A")])
