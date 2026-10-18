@@ -55,6 +55,10 @@ _ALLOWED_BRIEF_FIELDS = (
 class ArchitectAIError(ValueError):
     """Raised when optional external architecture advice cannot be completed safely."""
 
+    def __init__(self, message: str, *, network_used: bool = False) -> None:
+        super().__init__(message)
+        self.network_used = network_used
+
 
 def _safe_context(brief: dict[str, Any], local_plan: dict[str, Any]) -> dict[str, Any]:
     """Build the smallest review context; deliberately excludes project_root and inventory."""
@@ -158,30 +162,32 @@ def request_architecture_advice(
             exc.code,
             f"OpenRouter returned HTTP {exc.code}. No automatic retry was attempted.",
         )
-        raise ArchitectAIError(detail) from None
+        raise ArchitectAIError(detail, network_used=True) from None
     except URLError:
         raise ArchitectAIError(
-            "Could not connect to OpenRouter. Check the connection and try manually later; no retry was attempted."
+            "Could not connect to OpenRouter. Check the connection and try manually later; no retry was attempted.",
+            network_used=True,
         ) from None
     except TimeoutError:
-        raise ArchitectAIError("The request timed out; no automatic retry was attempted.") from None
+        raise ArchitectAIError("The request timed out; no automatic retry was attempted.", network_used=True) from None
     except OSError:
-        raise ArchitectAIError("The request failed at the network layer; no automatic retry was attempted.") from None
+        raise ArchitectAIError("The request failed at the network layer; no automatic retry was attempted.", network_used=True) from None
 
     if len(raw) > MAX_RESPONSE_BYTES:
-        raise ArchitectAIError("The provider response exceeded the local size limit and was rejected.")
+        raise ArchitectAIError("The provider response exceeded the local size limit and was rejected.", network_used=True)
     try:
         response_data = json.loads(raw.decode("utf-8"))
         content = response_data["choices"][0]["message"]["content"]
     except (UnicodeError, json.JSONDecodeError, KeyError, IndexError, TypeError) as exc:
         raise ArchitectAIError(
-            f"OpenRouter returned an unexpected response format ({type(exc).__name__})."
+            f"OpenRouter returned an unexpected response format ({type(exc).__name__}).",
+            network_used=True,
         ) from None
 
     if not isinstance(content, str) or not content.strip():
-        raise ArchitectAIError("OpenRouter returned an empty advice message.")
+        raise ArchitectAIError("OpenRouter returned an empty advice message.", network_used=True)
     if len(content) > 80_000:
-        raise ArchitectAIError("The architecture advice exceeded the local text limit and was rejected.")
+        raise ArchitectAIError("The architecture advice exceeded the local text limit and was rejected.", network_used=True)
 
     return {
         "status": "advice_received",
