@@ -510,3 +510,17 @@ A restore can successfully move a verified cache file, then fail to persist the 
 ## Phase 36 — keep quarantine recoverable when manifest publication fails
 
 During quarantine, a `ValueError` while saving the post-move manifest could previously fall into the generic item-error handler, relabel the item as `failed`, and leave a verified file in quarantine that the restore preview would refuse to offer. The corrected path preserves the factual `moved` state in memory, stops processing further selections, reports moved/skipped counts, and keeps the previous durable manifest checksum when a write fails. The regression forces the post-move and final writes to raise `ValueError`, then verifies that the quarantine copy remains available and can be restored. See [the Phase 36 audit](docs/research/PHASE-36-QUARANTINE-MANIFEST-RECOVERY.md).
+
+
+## Phase 37 — recoverable temporary-file restore after manifest write failure
+
+The general temporary-file quarantine used by `--pc-cleanup-restore` had an uncovered failure path: after the original file was atomically moved back, a failed manifest write could escape the restore routine without a result report. The last durable entry could remain `restoring`, and the read-only preview treated the missing quarantine copy as unavailable even if the approved original path already contained the matching bytes. This was separate from the browser-cache quarantine fixed in Phase 35/36.
+
+The fix catches manifest publication errors around each restore transition, reports completed moves separately from metadata reconciliation, and stops subsequent file operations when the recovery record cannot be saved. A stale `restoring` item is offered for explicit metadata-only reconciliation only when its quarantine path is absent and the approved temporary-root destination passes regular-file/path checks plus the recorded size and SHA-256 comparison. The explicit restore confirmation persists the manifest state; it does not move, replace, or overwrite a file. Manifest staging files are cleaned up after failed writes/replacements. Regression tests inject the post-move write failure and the final-write failure, verify the file bytes remain intact, and then verify read-only preview and explicit reconciliation recover the stale state.
+
+External maintenance notes used as analogues (not claimed as the same bugs):
+- BleachBit 6.0.6 (2026-10-17) fixed CLI behavior so a failure on one path would not prevent handling the other supplied paths, and included multiple file-cleaning reliability fixes: https://www.bleachbit.org/news/bleachbit-606
+- CCleaner v7.12.1526 (2026-09-29) documented a file-write security fix and a shutdown race involving background tasks; v7.11.1504 also made Duplicate Finder report which files were actually removed rather than a generic result: https://www.ccleaner.com/ccleaner/version-history/
+- Microsoft documents that Windows move APIs return a failure result and expose extended error information; BOTPYTON therefore treats a failed persistence/move as an explicit outcome rather than assuming a requested operation completed: https://learn.microsoft.com/en-us/windows/win32/api/winbase/nf-winbase-movefileexa
+
+Validation target: Linux foundation test suite and Windows low-memory smoke suite must both pass on the PR before merge, then be rechecked on `main`. No user PC or personal files are tested; all regressions use isolated temporary directories.
