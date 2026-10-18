@@ -2,6 +2,7 @@ import hashlib
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from bot.verification import evaluate_verification_checks
 
@@ -42,6 +43,44 @@ class VerificationTests(unittest.TestCase):
             self.assertFalse(result["all_passed"])
             self.assertEqual(result["status"], "failed")
             self.assertFalse(result["checks"][0]["ok"])
+
+    def test_json_valid_rejects_excessive_nesting_and_continues_other_checks(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            nested = root / "nested.json"
+            nested.write_text("[" * 65 + "0" + "]" * 65, encoding="utf-8")
+            (root / "present.txt").write_text("present", encoding="utf-8")
+
+            result = evaluate_verification_checks(
+                [
+                    {"type": "json_valid", "path": "nested.json"},
+                    {"type": "file_exists", "path": "present.txt"},
+                ],
+                root,
+                action_results=[],
+            )
+
+            self.assertEqual(result["status"], "failed")
+            self.assertFalse(result["all_passed"])
+            self.assertFalse(result["checks"][0]["ok"])
+            self.assertIn("nesting depth limit", result["checks"][0]["reason"])
+            self.assertTrue(result["checks"][1]["ok"])
+            self.assertFalse(result["code_executed"])
+
+    def test_json_valid_reports_decoder_recursion_errors_instead_of_raising(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            (root / "deep.json").write_text("[]", encoding="utf-8")
+            with patch("bot.verification.json.loads", side_effect=RecursionError("nesting too deep")):
+                result = evaluate_verification_checks(
+                    [{"type": "json_valid", "path": "deep.json"}],
+                    root,
+                    action_results=[],
+                )
+
+            self.assertEqual(result["status"], "failed")
+            self.assertFalse(result["checks"][0]["ok"])
+            self.assertIn("RecursionError", result["checks"][0]["reason"])
 
 
 if __name__ == "__main__":
