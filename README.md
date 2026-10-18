@@ -499,6 +499,10 @@ BOTPYTON now validates the staged ZIP and prepares its SHA-256 sidecar before re
 
 See [the Phase 32 regression and upstream references](docs/research/PHASE-32-ATOMIC-PACKAGE-PUBLISH.md). Python documents per-path atomic replacement at [`os.replace()`](https://docs.python.org/3/library/os.html#os.replace); BleachBit's [6.0.6 notes](https://www.bleachbit.org/news/bleachbit-606) provide a separate upstream example of making deployment fail when any artifact upload fails.
 
-## Phase 34 — bounded restore manifest
+## Restore manifest input limits (2026-10-18)
 
 The browser-cache restore preview reads its manifest with an actual 256 KiB input cap, checks file identity before and after reading, rejects detected concurrent changes, and limits JSON nesting to 64 levels. A bad or changing manifest blocks restoration and leaves quarantined files in place. See [the Phase 34 audit and upstream references](docs/research/PHASE-34-BOUNDED-RESTORE-MANIFEST.md).
+
+## Phase 35 — restore manifest recovery after a successful move
+
+A restore can successfully move a verified cache file, then fail to persist the manifest update. BOTPYTON now reports the actual movement count even on persistence exceptions and offers a read-only preview status when the quarantine copy is absent but the allowlisted original path matches the durable manifest size and SHA-256. With the existing explicit restore confirmation, it can persist the stale item's state without moving or overwriting any file. Matching content proves integrity, not which process placed it at the path. Regression tests inject both `OSError` and `ValueError` manifest-write failures. See [the Phase 35 audit](docs/research/PHASE-35-RESTORE-MANIFEST-RECONCILIATION.md).
