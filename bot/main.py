@@ -8,6 +8,7 @@ from pathlib import Path
 
 from .autonomy import AutonomousCycleError, run_autonomous_cycle
 from .architect import ArchitectPlanError, build_architecture_plan
+from .architect_ai import ArchitectAIError, request_architecture_advice
 from .bounded_io import BoundedReadError, enforce_json_depth, read_bounded_bytes
 from .checkpoint import CheckpointError, export_checkpoint, restore_checkpoint
 from .diagnostics import diagnose_failure
@@ -93,6 +94,10 @@ def main(argv: list[str] | None = None) -> int:
                         help="bounded read-only project inventory; candidate checks are not executed")
     parser.add_argument("--architect-plan", metavar="BRIEF_JSON",
                         help="turn a bounded programming brief into a deterministic reviewable architecture plan; no code executed")
+    parser.add_argument("--architect-ai", metavar="BRIEF_JSON",
+                        help="request optional second-opinion architecture advice from OpenRouter's free-model router")
+    parser.add_argument("--allow-external-ai", action="store_true",
+                        help="explicitly consent to sending selected brief fields to OpenRouter; required with --architect-ai")
     parser.add_argument("--system-profile", action="store_true", help="report available RAM, disk space and a conservative child-process memory budget")
     parser.add_argument("--doctor", action="store_true", help="run read-only preflight and show concrete next steps for common setup/resource problems")
     parser.add_argument("--pc-check", action="store_true", help="run the read-only, offline local PC-care audit")
@@ -168,6 +173,39 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--memory", default=".cerebro/memory/state.json", help="memory file path")
     args = parser.parse_args(argv)
     try:
+        if args.allow_external_ai and not args.architect_ai:
+            raise ArchitectAIError("--allow-external-ai requires --architect-ai")
+        if args.architect_ai and args.architect_plan:
+            raise ArchitectAIError("Choose either --architect-ai or --architect-plan, not both")
+        if args.architect_ai:
+            if not args.allow_external_ai:
+                _print_json({
+                    "status": "consent_required",
+                    "provider": "OpenRouter",
+                    "model": "openrouter/free",
+                    "note": "No API request was sent. Add --allow-external-ai only after reviewing the brief and consenting to send its selected fields to the provider.",
+                    "safety": {"network_used": False, "project_code_executed": False, "files_written": False},
+                })
+                return 2
+            brief = _read_bounded_json(args.architect_ai, limit_bytes=50_000)
+            try:
+                result = request_architecture_advice(brief)
+            except ArchitectAIError as exc:
+                _print_json({
+                    "status": "error",
+                    "provider": "OpenRouter",
+                    "model": "openrouter/free",
+                    "error": str(exc),
+                    "safety": {
+                        "network_used": exc.network_used,
+                        "project_code_executed": False,
+                        "commands_executed": False,
+                        "files_written": False,
+                    },
+                })
+                return 2
+            _print_json(result)
+            return 0 if result["status"] == "advice_received" else 2
         if args.doctor:
             result = run_preflight(args.project_root)
             _print_json(result)
@@ -495,6 +533,13 @@ def main(argv: list[str] | None = None) -> int:
             return 1 if terminal_bad or pending_after_limit else 0
         parser.print_help()
         return 0
+    except ArchitectAIError as exc:
+        _print_json({
+            "status": "error",
+            "error": str(exc),
+            "safety": {"network_used": exc.network_used, "project_code_executed": False, "files_written": False},
+        })
+        return 2
     except (OSError, UnicodeError, json.JSONDecodeError, PolicyError, MemoryError,
             QueueError, CheckpointError, GitHubOpsError, AutonomousCycleError, ProcessRunnerError, LocalChangeError, ProjectCheckError, ValueError, EOFError) as exc:
         print(f"CHECK FAIL: {exc}", file=sys.stderr)
