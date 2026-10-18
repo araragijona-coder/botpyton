@@ -10,6 +10,7 @@ import time
 from pathlib import Path
 from typing import Any
 
+from .bounded_io import BoundedReadError, enforce_json_depth
 from .application_cache import (
     MAX_APPLICATION_CACHE_CANDIDATES,
     _cache_roots_for_profile,
@@ -27,6 +28,7 @@ MAX_CACHE_FILE_BYTES = 32 * 1024 * 1024
 MAX_CACHE_BATCH_BYTES = 128 * 1024 * 1024
 CACHE_HASH_CHUNK_BYTES = 128 * 1024
 MAX_CACHE_MANIFEST_BYTES = 256 * 1024
+MAX_CACHE_MANIFEST_JSON_DEPTH = 64
 MAX_CACHE_RESTORE_ITEMS = MAX_SELECTED_CACHE_FILES
 
 
@@ -196,6 +198,60 @@ def _known_cache_root_for_path(path: Path, env: dict[str, str] | None = None) ->
     return None
 
 
+
+def _read_bounded_manifest(path: Path) -> dict[str, Any]:
+    """Read a manifest under a hard byte cap and reject file replacement/growth."""
+    try:
+        before = path.stat(follow_symlinks=False)
+        if not stat.S_ISREG(before.st_mode) or _is_link_or_reparse(path):
+            raise ValueError("Quarantine manifest must be a regular file, not a link/reparse point.")
+        if before.st_size < 0 or before.st_size > MAX_CACHE_MANIFEST_BYTES:
+            raise ValueError("Quarantine manifest exceeds the approved size limit.")
+
+        before_signature = (before.st_dev, before.st_ino, before.st_size)
+        with path.open("rb") as stream:
+            opened = os.fstat(stream.fileno())
+            if not stat.S_ISREG(opened.st_mode) or (
+                opened.st_dev, opened.st_ino, opened.st_size
+            ) != before_signature:
+                raise ValueError("Quarantine manifest changed while it was being opened.")
+            raw = stream.read(MAX_CACHE_MANIFEST_BYTES + 1)
+            after_open = os.fstat(stream.fileno())
+
+        if len(raw) > MAX_CACHE_MANIFEST_BYTES or after_open.st_size > MAX_CACHE_MANIFEST_BYTES:
+            raise ValueError("Quarantine manifest exceeds the approved size limit.")
+        opened_signature = (opened.st_dev, opened.st_ino, opened.st_size)
+        after_open_signature = (after_open.st_dev, after_open.st_ino, after_open.st_size)
+        after_path = path.stat(follow_symlinks=False)
+        after_path_signature = (after_path.st_dev, after_path.st_ino, after_path.st_size)
+        if (
+            not stat.S_ISREG(after_path.st_mode)
+            or opened_signature != after_open_signature
+            or after_open_signature != after_path_signature
+            or _is_link_or_reparse(path)
+        ):
+            raise ValueError("Quarantine manifest changed during bounded reading.")
+
+        try:
+            manifest = json.loads(raw.decode("utf-8"))
+        except (UnicodeError, json.JSONDecodeError, RecursionError) as exc:
+            raise ValueError("Quarantine manifest could not be parsed as bounded UTF-8 JSON.") from exc
+        try:
+            enforce_json_depth(
+                manifest,
+                max_depth=MAX_CACHE_MANIFEST_JSON_DEPTH,
+                label="Quarantine manifest",
+            )
+        except BoundedReadError as exc:
+            raise ValueError(str(exc)) from exc
+        if not isinstance(manifest, dict):
+            raise ValueError("Quarantine manifest root must be a JSON object.")
+        return manifest
+    except ValueError:
+        raise
+    except OSError as exc:
+        raise ValueError("Quarantine manifest could not be read safely.") from exc
+
 def _manifest_location(path_value: str | Path, env: dict[str, str] | None = None) -> tuple[Path, Path, dict[str, Any]]:
     path = Path(path_value).expanduser()
     if not path.is_absolute() or path.name != "manifest.json" or _is_link_or_reparse(path):
@@ -210,13 +266,8 @@ def _manifest_location(path_value: str | Path, env: dict[str, str] | None = None
         raise ValueError("Manifest is outside the approved BOTPYTON browser-cache quarantine root.")
     if not path.is_file():
         raise ValueError("Quarantine manifest was not found.")
-    if path.stat().st_size > MAX_CACHE_MANIFEST_BYTES:
-        raise ValueError("Quarantine manifest exceeds the approved size limit.")
-    try:
-        manifest = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
-        raise ValueError("Quarantine manifest could not be read as valid UTF-8 JSON.") from exc
-    if not isinstance(manifest, dict) or manifest.get("product") != "BOTPYTON browser-cache quarantine":
+    manifest = _read_bounded_manifest(path)
+    if manifest.get("product") != "BOTPYTON browser-cache quarantine":
         raise ValueError("Manifest product identity is invalid.")
     if manifest.get("schema_version") != 1 or manifest.get("session_id") != session.name:
         raise ValueError("Manifest schema/session identity is invalid.")
