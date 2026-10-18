@@ -289,6 +289,18 @@ def _manifest_location(path_value: str | Path, env: dict[str, str] | None = None
         quarantine = item.get("quarantine_path")
         size = item.get("size_bytes")
         digest = item.get("sha256")
+        browser = item.get("browser")
+        profile = item.get("profile")
+        cache_area = item.get("cache_area")
+        if (
+            not isinstance(browser, str) or not browser or len(browser) > 240
+            or not isinstance(profile, str) or not profile or len(profile) > 240
+            or not isinstance(cache_area, str) or not cache_area or len(cache_area) > 240
+        ):
+            # Restore preview formats per-item results with these fields below.
+            # Validate them here so a manifest with missing keys is rejected as
+            # malformed input instead of raising KeyError after validation.
+            raise ValueError("Manifest contains missing or invalid browser/profile/cache-area metadata.")
         if (
             not isinstance(original, str) or not Path(original).is_absolute()
             or not isinstance(quarantine, str)

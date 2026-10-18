@@ -290,3 +290,12 @@ python -m bot.main --pc-cleanup-restore "C:\\path\\to\\BOTPYTON\\Quarantine\\ses
 - Add an isolated regression with a valid checksummed but impossible filename; preview must report a skipped entry without crashing and preserve the quarantined file.
 - External references: BleachBit 6.0.6 maintenance notes and CCleaner version history discuss failure-tolerant path processing and clear per-file error outcomes. They are reliability analogues, not reports of this exact BOTPYTON bug.
 - Required gate: Linux foundation tests and Windows low-memory smoke pass before merge and post-merge.
+
+
+## Phase 40 — application-cache manifest schema validation
+
+- Require non-empty, bounded `browser`, `profile`, and `cache_area` fields in every browser-cache quarantine manifest item because the restore preview reads these keys to format per-item outcomes.
+- A manifest with missing required fields is rejected as invalid before preview processing; restore remains blocked and quarantined bytes remain untouched.
+- Regression removes each field and recomputes the checksum to ensure malformed-but-checksummed records are still rejected.
+- References: official CCleaner version history (file-write security and more precise per-file error reporting) and BleachBit 6.0.4 maintenance notes. These are design analogues, not evidence that those projects had the same missing-field bug.
+- Required gate: Linux foundation tests and Windows low-memory smoke pass before merge and post-merge.
