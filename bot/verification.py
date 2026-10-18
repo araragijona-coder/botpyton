@@ -6,6 +6,7 @@ import json
 from pathlib import Path, PurePosixPath
 from typing import Any
 
+from .bounded_io import BoundedReadError, enforce_json_depth, read_bounded_bytes
 from .policy import PolicyError, validate_relative_path
 from .verifier import verify_python_files
 
@@ -82,12 +83,21 @@ def evaluate_verification_checks(
                 result.update({"ok": not errors, "python_syntax_errors": errors})
             elif check_type == "json_valid":
                 path = _target(base, check["path"])
-                if not path.is_file() or path.stat().st_size > MAX_JSON_CHECK_BYTES:
+                if not path.is_file():
                     result.update({"path": check["path"], "ok": False,
-                                   "reason": "JSON file is missing or exceeds 200 KB"})
+                                   "reason": "JSON file does not exist"})
                 else:
-                    json.loads(path.read_text(encoding="utf-8"))
-                    result.update({"path": check["path"], "ok": True, "reason": "valid JSON"})
+                    # Bound the actual read, not just a preceding stat: the file
+                    # may grow or be replaced between checking its size and reading.
+                    raw = read_bounded_bytes(
+                        path,
+                        limit_bytes=MAX_JSON_CHECK_BYTES,
+                        label=f"JSON verification file {check['path']}",
+                    )
+                    value = json.loads(raw.decode("utf-8"))
+                    enforce_json_depth(value, label=f"JSON verification file {check['path']}")
+                    result.update({"path": check["path"], "ok": True,
+                                   "reason": "valid JSON within byte and nesting limits"})
             elif check_type == "tests_pass":
                 candidates = [
                     item for item in action_results
@@ -120,7 +130,10 @@ def evaluate_verification_checks(
                                "reason": "report exists" if ok else "report is not present"})
             else:
                 raise VerificationError(f"Unknown verification check type: {check_type}")
-        except (OSError, UnicodeError, json.JSONDecodeError, KeyError, PolicyError, VerificationError) as exc:
+        except (
+            OSError, UnicodeError, json.JSONDecodeError, KeyError, PolicyError,
+            BoundedReadError, VerificationError, RecursionError,
+        ) as exc:
             result.update({"ok": False, "reason": f"{type(exc).__name__}: {exc}"})
         results.append(result)
     all_passed = all(item["ok"] for item in results)
