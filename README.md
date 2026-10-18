@@ -498,3 +498,7 @@ La redacción es una defensa por capas, no un detector universal de datos privad
 BOTPYTON now validates the staged ZIP and prepares its SHA-256 sidecar before replacing the published outputs. It keeps prior outputs as temporary backups until both new files are published. If the second publication fails, it attempts to restore the previous ZIP/checksum pair; if another process has changed or occupied a target, it preserves that file and reports that rollback was incomplete instead of overwriting it. This protects the integrity relationship between the portable archive and its checksum. It does not make two separate filenames one indivisible filesystem transaction.
 
 See [the Phase 32 regression and upstream references](docs/research/PHASE-32-ATOMIC-PACKAGE-PUBLISH.md). Python documents per-path atomic replacement at [`os.replace()`](https://docs.python.org/3/library/os.html#os.replace); BleachBit's [6.0.6 notes](https://www.bleachbit.org/news/bleachbit-606) provide a separate upstream example of making deployment fail when any artifact upload fails.
+
+## Phase 34 — bounded restore manifest
+
+The browser-cache restore preview reads its manifest with an actual 256 KiB input cap, checks file identity before and after reading, rejects detected concurrent changes, and limits JSON nesting to 64 levels. A bad or changing manifest blocks restoration and leaves quarantined files in place. See [the Phase 34 audit and upstream references](docs/research/PHASE-34-BOUNDED-RESTORE-MANIFEST.md).

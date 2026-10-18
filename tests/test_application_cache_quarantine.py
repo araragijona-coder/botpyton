@@ -7,6 +7,8 @@ from pathlib import Path
 
 from bot.application_cache import preview_application_cache
 from bot.application_cache_quarantine import (
+    _canonical_digest,
+    MAX_CACHE_MANIFEST_BYTES,
     CACHE_QUARANTINE_CONFIRMATION,
     CACHE_RESTORE_CONFIRMATION,
     preview_application_cache_restore,
@@ -258,6 +260,83 @@ class ApplicationCacheQuarantineTests(unittest.TestCase):
         result = preview_application_cache_restore("/not-used/manifest.json", env={}, windows=False)
         self.assertEqual(result["status"], "unsupported_platform")
         self.assertEqual(result["ready_count"], 0)
+
+
+    def test_manifest_read_rejects_growth_after_initial_size_check(self):
+        from unittest import mock
+
+        with tempfile.TemporaryDirectory() as tmp:
+            _local, chosen, _untouched, env = self._fixture(tmp, 1_700_000_000.0)
+            result = quarantine_application_cache_candidates(
+                [str(chosen.resolve())],
+                confirmation=CACHE_QUARANTINE_CONFIRMATION,
+                env=env,
+                windows=True,
+            )
+            self.assertEqual(result["status"], "cache_quarantined")
+            manifest_path = Path(result["manifest_path"])
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            quarantined = Path(manifest["items"][0]["quarantine_path"])
+            self.assertTrue(quarantined.is_file())
+
+            # Simulate another process growing the manifest after the caller's
+            # initial metadata check but after its read stream is opened.
+            real_open = Path.open
+            grew = False
+
+            def grow_after_open(path, mode="r", *args, **kwargs):
+                nonlocal grew
+                stream = real_open(path, mode, *args, **kwargs)
+                if path == manifest_path and mode == "rb" and not grew:
+                    grew = True
+                    with real_open(path, "ab") as writer:
+                        writer.write(b" " * (MAX_CACHE_MANIFEST_BYTES + 1))
+                return stream
+
+            with mock.patch.object(Path, "open", new=grow_after_open):
+                preview = preview_application_cache_restore(
+                    manifest_path, env=env, windows=True
+                )
+
+            self.assertTrue(grew, "the test must mutate the file in the read race window")
+            self.assertEqual(preview["status"], "cache_manifest_invalid")
+            self.assertEqual(preview["ready_count"], 0)
+            self.assertTrue(
+                quarantined.is_file(),
+                "invalid/growing manifests must not move the quarantined file",
+            )
+
+
+    def test_manifest_rejects_excessive_json_nesting_without_restoring(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            _local, chosen, _untouched, env = self._fixture(tmp, 1_700_000_000.0)
+            result = quarantine_application_cache_candidates(
+                [str(chosen.resolve())],
+                confirmation=CACHE_QUARANTINE_CONFIRMATION,
+                env=env,
+                windows=True,
+            )
+            self.assertEqual(result["status"], "cache_quarantined")
+            manifest_path = Path(result["manifest_path"])
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            quarantined = Path(manifest["items"][0]["quarantine_path"])
+            nested = "bounded"
+            for _ in range(80):
+                nested = [nested]
+            manifest["test_depth_probe"] = nested
+            manifest["manifest_sha256"] = _canonical_digest(manifest)
+            manifest_path.write_text(
+                json.dumps(manifest, ensure_ascii=False, sort_keys=True) + "\n",
+                encoding="utf-8",
+            )
+
+            preview = preview_application_cache_restore(
+                manifest_path, env=env, windows=True
+            )
+            self.assertEqual(preview["status"], "cache_manifest_invalid")
+            self.assertEqual(preview["ready_count"], 0)
+            self.assertTrue(quarantined.is_file())
+            self.assertFalse(chosen.exists())
 
 
 if __name__ == "__main__":
