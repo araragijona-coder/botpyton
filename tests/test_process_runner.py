@@ -196,5 +196,34 @@ class ProcessRunnerTests(unittest.TestCase):
                 )
 
 
+    def test_timeout_kills_descendants_that_inherit_output_pipes(self):
+        import time
+
+        with tempfile.TemporaryDirectory() as temp:
+            marker = Path(temp) / "child-survived-timeout.txt"
+            child_code = (
+                "import time; from pathlib import Path; "
+                f"time.sleep(1.3); Path({str(marker)!r}).write_text('survived', encoding='utf-8')"
+            )
+            parent_code = (
+                "import subprocess, sys, time; "
+                "time.sleep(0.2); "
+                f"subprocess.Popen([sys.executable, '-c', {child_code!r}]); "
+                "time.sleep(30)"
+            )
+            result = run_process(
+                [sys.executable, "-c", parent_code],
+                cwd=temp,
+                allowed_root=temp,
+                approved_executables=[sys.executable],
+                timeout_seconds=1,
+            )
+            self.assertTrue(result["timed_out"])
+            # The child would create this marker shortly after the leader is
+            # killed if timeout cleanup only terminated the direct process.
+            time.sleep(0.8)
+            self.assertFalse(marker.exists(), "a descendant survived the process timeout")
+
+
 if __name__ == "__main__":
     unittest.main()

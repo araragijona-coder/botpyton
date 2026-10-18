@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import os
+import signal
 import subprocess
 import threading
 from pathlib import Path
@@ -211,6 +212,41 @@ def _bounded_reader(stream, limit: int, storage: dict, key: str) -> None:
         stream.close()
 
 
+def _terminate_process_tree(process, memory_job) -> bool:
+    """Terminate this execution's process group/job, not only its leader.
+
+    Returns True when the Windows Job Object handle was closed and must not
+    be closed a second time by the caller.
+    """
+    if os.name == "nt":
+        if memory_job is not None:
+            handle, kernel32 = memory_job
+            # JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE stops the leader and every
+            # descendant assigned to this job. Close it before joining pipe
+            # readers, since a descendant may otherwise keep those pipes open.
+            kernel32.CloseHandle(handle)
+            return True
+        if process.poll() is None:
+            try:
+                process.kill()
+            except OSError:
+                pass
+        return False
+
+    # Popen uses start_new_session=True on POSIX, making the leader PID the
+    # process-group ID. Children inheriting stdout/stderr are killed with it.
+    try:
+        os.killpg(process.pid, signal.SIGKILL)
+    except ProcessLookupError:
+        pass
+    except OSError:
+        if process.poll() is None:
+            try:
+                process.kill()
+            except OSError:
+                pass
+    return False
+
 
 def _attach_windows_memory_job(process, memory_limit_mb: int):
     """Apply a Windows Job Object memory cap and kill descendants when it closes."""
@@ -336,16 +372,20 @@ def run_process(
     memory_job = None
     timed_out = False
     try:
-        process = subprocess.Popen(
-            normalized_argv,
-            cwd=workdir,
-            env=child_env,
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            shell=False,
-            close_fds=True,
-        )
+        launch_options = {
+            "cwd": workdir,
+            "env": child_env,
+            "stdin": subprocess.DEVNULL,
+            "stdout": subprocess.PIPE,
+            "stderr": subprocess.PIPE,
+            "shell": False,
+            "close_fds": True,
+        }
+        if os.name != "nt":
+            # Isolate child processes from BOTPYTON so a timeout can kill the
+            # entire execution group without signaling unrelated processes.
+            launch_options["start_new_session"] = True
+        process = subprocess.Popen(normalized_argv, **launch_options)
         memory_job = _attach_windows_memory_job(process, memory_limit_mb)
         stdout_thread = threading.Thread(
             target=_bounded_reader, args=(process.stdout, output_limit_bytes, captured, "stdout"),
@@ -361,7 +401,8 @@ def run_process(
             process.wait(timeout=timeout_seconds)
         except subprocess.TimeoutExpired:
             timed_out = True
-            process.kill()
+            if _terminate_process_tree(process, memory_job):
+                memory_job = None
             process.wait()
         stdout_thread.join(timeout=2)
         stderr_thread.join(timeout=2)
@@ -369,9 +410,11 @@ def run_process(
             raise ProcessRunnerError("Output collector did not stop after process termination")
         exit_code = process.returncode
     except (OSError, ProcessRunnerError) as exc:
-        if process is not None and process.poll() is None:
-            process.kill()
-            process.wait()
+        if process is not None:
+            if _terminate_process_tree(process, memory_job):
+                memory_job = None
+            if process.poll() is None:
+                process.wait()
         raise ProcessRunnerError(f"Process launch failed or limits could not be applied: {type(exc).__name__}: {exc}") from exc
     finally:
         if memory_job is not None:

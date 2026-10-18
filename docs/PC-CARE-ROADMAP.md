@@ -329,3 +329,12 @@ python -m bot.main --pc-cleanup-restore "C:\\path\\to\\BOTPYTON\\Quarantine\\ses
 - Regressions verify two report writes use distinct source paths and that an injected serialization failure cleans staging state while the previous durable report remains byte-for-byte unchanged.
 - Official reliability context: Python `tempfile.mkstemp` documentation describes exclusive, race-free temporary-file creation under supported OS semantics; CCleaner's v7.12.1526 notes document a file-write security fix and shutdown timing crash, while BleachBit 6.0.2 reports a Windows arbitrary-file-deletion security issue in elevated cleaning. These are lessons/analogues, not identical defects.
 - Required gate: Linux foundation tests and Windows low-memory smoke pass on the PR and on post-merge `main`.
+
+
+## Phase 44 — process-tree timeout cleanup
+
+- Isolate POSIX child executions with a new session/process group; on timeout or launch/output failure, signal that group, not just the direct process.
+- On Windows, close an attached `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE` Job Object before joining output-reader threads, preventing descendants from keeping pipes open after the parent is terminated.
+- Regression launches a short-lived parent plus a child that tries to create a delayed marker; assert the child never writes after the runner's timeout.
+- Research analogue: GitHub Actions Runner documents an orphan-process cleanup gap where descendants can outlive the supervising process; its release notes also record work to wait for workers during cancellation. These are analogous lessons, not claims of the same upstream defect.
+- Required gate: Linux foundation tests and Windows low-memory smoke pass on the PR and post-merge `main`. CI does not replace testing on the user's PC.
