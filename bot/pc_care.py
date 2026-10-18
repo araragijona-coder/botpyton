@@ -2097,7 +2097,12 @@ def preview_quarantined_restore(
         total_hashed += used
         results.append(inspected)
     ready_count = sum(1 for item in results if item.get("ready") is True)
-    skipped_count = sum(1 for item in results if item.get("ready") is False and item.get("status") != "already_restored")
+    reconcile_count = sum(1 for item in results if item.get("reconcile") is True)
+    skipped_count = sum(
+        1 for item in results
+        if item.get("ready") is False
+        and item.get("status") not in {"already_restored", "reconcile_manifest_state"}
+    )
     return {
         "product": "BOTPYTON PC Care",
         "schema_version": 1,
@@ -2108,6 +2113,7 @@ def preview_quarantined_restore(
         "manifest_status": manifest.get("status", "unknown"),
         "candidate_count": len(results),
         "ready_count": ready_count,
+        "reconcile_count": reconcile_count,
         "files_restored": 0,
         "files_skipped": skipped_count,
         "hash_bytes_examined": total_hashed,
@@ -2115,6 +2121,8 @@ def preview_quarantined_restore(
         "limitations": [
             "Dry-run only: no files are restored or changed.",
             "Files with missing or mismatched SHA-256 metadata, a path collision, a link/reparse component, or an unavailable hash are not eligible for restoration.",
+            "A stale 'restoring' item is offered for metadata-only reconciliation only if its quarantine path is absent and the approved original matches the recorded size and SHA-256.",
+            "Matching content supports integrity recovery but does not prove which process placed those bytes at the destination.",
             "At most 512 MiB of file contents are hashed during one checklist.",
         ],
     }
