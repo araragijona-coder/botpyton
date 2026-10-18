@@ -456,3 +456,16 @@ La fase reduce la exposición a crecimiento concurrente y datos JSON patológico
 **Upstream references:** Python documents that on Windows `os.rename()` raises `FileExistsError` when a destination exists, supporting the no-overwrite move contract ([official docs](https://docs.python.org/3/library/os.html#os.rename)). The current [BleachBit 6.0.6 maintenance notes](https://www.bleachbit.org/news/bleachbit-606) provide a separate real-world lesson: maintainers fix concrete cleanup/configuration regressions and adjust failure handling so one failing path does not accidentally suppress unrelated operations. Those notes are context, not evidence that BleachBit has this same bug.
 
 **Limitations:** SHA-256 and size establish content equality, not provenance or authenticity. The reconciliation path only repairs the manifest's durable state and intentionally does not claim to prove which process restored the file. Target-PC testing remains required.
+
+
+## Phase 36 — Quarantine move succeeds but manifest publication raises ValueError
+
+**Finding:** The quarantine loop caught only `OSError` around the manifest write after `_move_without_overwriting()`. A `ValueError` (for example, an enforced manifest-size validation error) escaped to the generic per-item handler. That handler changed `item["state"]` to `failed`, even though the file had already moved, and could then persist that false state. The restore preview accepts only `pending` or `moved` items for normal restoration, so the verified cache file could become inaccessible through the normal restore flow.
+
+**Correction:** Treat `OSError` and `ValueError` after a move as manifest-persistence failures, preserve the factual `moved` in-memory state, stop further moves, and count the unprocessed selections. Catch failures from the final manifest write and keep actual move counts in exceptional reports. The report hash now points to the last successfully persisted version, rather than the intended in-memory version.
+
+**Regression:** inject `ValueError` for the per-item and final writes after the first selected file has moved. Confirm the durable pending manifest still validates, the quarantined file passes restore preview, the second selection remains at its original path, and a subsequent explicit restore returns the moved file without overwriting anything.
+
+**Upstream engineering context:** The official Python [`os.replace()` documentation](https://docs.python.org/3/library/os.html#os.replace) describes replacement of one path and its atomicity for that operation; it does not make a file move plus separate manifest update one transaction. The [BleachBit 6.0.6 maintenance notes](https://www.bleachbit.org/news/bleachbit-606) provide a concrete recent example of maintainers fixing configuration and deletion regressions, and ensuring deployment fails when any artifact upload fails. These sources are engineering context, not a claim that either upstream project has this exact BOTPYTON defect.
+
+**Limitations:** A manifest write may still fail persistently because the file system is unavailable, storage is full, or the manifest exceeds its cap. BOTPYTON stops further moves and reports the partial state; it cannot guarantee persistence against a permanently failing storage layer. No real PC data was altered by CI fixtures.
