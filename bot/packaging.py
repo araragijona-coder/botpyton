@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+import secrets
 import stat
 import time
 import tomllib
@@ -247,6 +248,121 @@ def verify_portable_archive(archive_path: str | Path) -> dict:
     }
 
 
+
+def _publish_package_pair(
+    temporary_archive: Path,
+    temporary_checksum: Path,
+    final_archive: Path,
+    final_checksum: Path,
+) -> None:
+    """Publish a ZIP/checksum pair and roll back if either publication fails.
+
+    os.replace() is atomic for one destination, not for two destinations. Keep
+    prior outputs as same-directory backups until both staged files are live.
+    Never roll back over a path that another process has changed or occupied.
+    """
+    token = secrets.token_hex(8)
+    archive_backup = final_archive.with_name(f".{final_archive.name}.{token}.bak")
+    checksum_backup = final_checksum.with_name(f".{final_checksum.name}.{token}.bak")
+
+    existing: dict[Path, bool] = {}
+    for destination in (final_archive, final_checksum):
+        try:
+            metadata = destination.lstat()
+        except FileNotFoundError:
+            existing[destination] = False
+            continue
+        if _is_link_or_reparse(destination) or not stat.S_ISREG(metadata.st_mode):
+            raise ValueError(
+                f"existing portable package output must be a regular file: {destination.name}"
+            )
+        existing[destination] = True
+
+    archive_info = temporary_archive.stat(follow_symlinks=False)
+    checksum_info = temporary_checksum.stat(follow_symlinks=False)
+    archive_identity = (archive_info.st_dev, archive_info.st_ino)
+    checksum_identity = (checksum_info.st_dev, checksum_info.st_ino)
+    moved_archive = False
+    moved_checksum = False
+    published_archive = False
+    published_checksum = False
+
+    try:
+        if existing[final_archive]:
+            os.replace(final_archive, archive_backup)
+            moved_archive = True
+        if existing[final_checksum]:
+            os.replace(final_checksum, checksum_backup)
+            moved_checksum = True
+        os.replace(temporary_archive, final_archive)
+        published_archive = True
+        os.replace(temporary_checksum, final_checksum)
+        published_checksum = True
+    except Exception as publish_error:
+        rollback_errors: list[str] = []
+
+        def remove_our_published_file(destination: Path, identity: tuple[int, int]) -> None:
+            try:
+                current = destination.stat(follow_symlinks=False)
+            except FileNotFoundError:
+                return
+            except OSError as exc:
+                rollback_errors.append(f"cannot inspect {destination.name}: {type(exc).__name__}")
+                return
+            if (current.st_dev, current.st_ino) != identity:
+                rollback_errors.append(
+                    f"{destination.name} changed concurrently; its current contents were preserved"
+                )
+                return
+            try:
+                destination.unlink()
+            except OSError as exc:
+                rollback_errors.append(f"cannot remove failed publication {destination.name}: {type(exc).__name__}")
+
+        if published_checksum:
+            remove_our_published_file(final_checksum, checksum_identity)
+        if published_archive:
+            remove_our_published_file(final_archive, archive_identity)
+
+        for backup, destination, moved in (
+            (checksum_backup, final_checksum, moved_checksum),
+            (archive_backup, final_archive, moved_archive),
+        ):
+            if not moved:
+                continue
+            try:
+                destination.lstat()
+            except FileNotFoundError:
+                pass
+            except OSError as exc:
+                rollback_errors.append(f"cannot inspect restore target {destination.name}: {type(exc).__name__}")
+                continue
+            else:
+                rollback_errors.append(
+                    f"{destination.name} is occupied; previous output remains in {backup.name}"
+                )
+                continue
+            try:
+                os.replace(backup, destination)
+            except OSError as exc:
+                rollback_errors.append(
+                    f"cannot restore previous {destination.name}: {type(exc).__name__}; backup retained at {backup.name}"
+                )
+
+        if rollback_errors:
+            details = "; ".join(rollback_errors)
+            raise OSError(
+                f"Portable package publication failed and rollback was incomplete: {details}"
+            ) from publish_error
+        raise
+    else:
+        # Publication succeeded; leftover backups are harmless if cleanup is denied.
+        for backup in (archive_backup, checksum_backup):
+            try:
+                backup.unlink(missing_ok=True)
+            except OSError:
+                pass
+
 def build_portable_package(source_root: str | Path, output_dir: str | Path) -> dict:
     """Create a reproducible source ZIP and SHA-256 sidecar without bundling runtime/user data."""
     import json
@@ -287,7 +403,10 @@ def build_portable_package(source_root: str | Path, output_dir: str | Path) -> d
         raise ValueError("generated package manifest exceeds the size cap")
     output.mkdir(parents=True, exist_ok=True)
     final_path = output / "BOTPYTON-portable.zip"
-    temporary_path = output / f".BOTPYTON-portable-{time.time_ns()}.tmp"
+    checksum_path = final_path.with_suffix(final_path.suffix + ".sha256")
+    token = secrets.token_hex(8)
+    temporary_path = output / f".BOTPYTON-portable-{token}.tmp"
+    checksum_temp = checksum_path.with_name(f".{checksum_path.name}.{token}.tmp")
     try:
         with zipfile.ZipFile(temporary_path, "w", allowZip64=False) as archive:
             for (relative, path), record in zip(files, records):
@@ -295,27 +414,26 @@ def build_portable_package(source_root: str | Path, output_dir: str | Path) -> d
             manifest_info = _zip_info(PACKAGE_MANIFEST, len(manifest_bytes))
             with archive.open(manifest_info, "w") as stream:
                 stream.write(manifest_bytes)
-        verify_portable_archive(temporary_path)
-        os.replace(temporary_path, final_path)
+        # Validate and hash the staged ZIP before touching either published output.
+        verified = verify_portable_archive(temporary_path)
+        checksum_text = f'{verified["archive_sha256"]}  {final_path.name}\n'
+        with checksum_temp.open("x", encoding="ascii", newline="\n") as stream:
+            stream.write(checksum_text)
+            stream.flush()
+            os.fsync(stream.fileno())
+        _publish_package_pair(temporary_path, checksum_temp, final_path, checksum_path)
     except Exception:
-        try:
-            temporary_path.unlink(missing_ok=True)
-        except OSError:
-            pass
+        for candidate in (temporary_path, checksum_temp):
+            try:
+                candidate.unlink(missing_ok=True)
+            except OSError:
+                pass
         raise
-    verified = verify_portable_archive(final_path)
-    checksum_path = final_path.with_suffix(final_path.suffix + ".sha256")
-    checksum_temp = checksum_path.with_name(f".{checksum_path.name}.{time.time_ns()}.tmp")
-    checksum_text = f'{verified["archive_sha256"]}  {final_path.name}\n'
-    with checksum_temp.open("x", encoding="ascii", newline="\n") as stream:
-        stream.write(checksum_text)
-        stream.flush()
-        os.fsync(stream.fileno())
-    os.replace(checksum_temp, checksum_path)
     return {
         **verified,
-        "version": version,
+        "archive_path": str(final_path.resolve()),
         "checksum_path": str(checksum_path.resolve()),
+        "version": version,
         "file_count": len(files),
         "network_used": False,
     }
