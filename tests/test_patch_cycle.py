@@ -1,6 +1,7 @@
 """Tests for the isolated reviewed-patch cycle."""
 import shutil
 import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -178,6 +179,24 @@ class ReviewedPatchCycleTests(unittest.TestCase):
         self.assertEqual((candidate / "app.py").read_text(encoding="utf-8"), "VALUE = 2\n")
         self.assertFalse(result["merge_performed"])
         self.assertFalse(result["push_performed"])
+
+    def test_normal_cli_import_does_not_load_optional_patch_engine(self):
+        project_root = Path(__file__).resolve().parents[1]
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-c",
+                "import sys; import bot.main; print('bot.patch_cycle' in sys.modules)",
+            ],
+            cwd=project_root,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            timeout=15,
+            check=True,
+        )
+        self.assertEqual(result.stdout.strip(), "False", result.stderr)
 
     def test_source_repository_must_be_clean(self):
         (self.root / "app.py").write_text("VALUE = 1\n", encoding="utf-8")
