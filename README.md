@@ -581,3 +581,8 @@ Checkpoint import now enforces the complete durable task-record schema before to
 ## Phase 43 — isolate and clean report staging files
 
 Executor reports are now staged through uniquely created temporary files in the reports directory before atomic replacement. Concurrent executions of the same task ID no longer share a predictable `.json.tmp` pathname. Failed serialization or publication performs best-effort staging-file cleanup, while a previous complete report remains intact until replacement succeeds. Regression tests cover unique staging paths and injected serialization failure. See [Phase 43 research](docs/research/PHASE-43-REPORT-TEMPFILE-ATOMICITY.md).
+
+
+## Phase 44 — terminate timed-out process trees
+
+BOTPYTON now isolates each POSIX subprocess in its own session and terminates the whole process group on timeout or execution cleanup, rather than killing only the leader. On Windows, when the memory Job Object is available, timeout closes that job before waiting on output collectors so descendants cannot keep stdout/stderr pipes open or outlive the task. Regression coverage launches a child that would write a marker after the parent timeout and confirms it never survives. See [Phase 44 research](docs/research/PHASE-44-PROCESS-TREE-TIMEOUT-CLEANUP.md).
