@@ -160,6 +160,10 @@ class PortablePackageTests(unittest.TestCase):
             root = Path(temp) / "source"
             root.mkdir()
             self._minimal_package_source(root)
+            # This fixture is also consumed by tomllib when building a package.
+            (root / "pyproject.toml").write_text(
+                '[project]\nversion = "0.0.0"\n', encoding="utf-8"
+            )
             output = Path(temp) / "dist"
             first = build_portable_package(root, output)
             archive_path = Path(first["archive_path"])
