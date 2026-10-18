@@ -384,7 +384,7 @@ class PcCareTests(unittest.TestCase):
             self.assertGreaterEqual(restore_preview["files_skipped"], 1)
             quarantined = manifest_path.parent / next(
                 item["quarantine_name"] for item in manifest["items"]
-                if item["original_path"] == str(first)
+                if Path(item["original_path"]).name == first.name
             )
             self.assertTrue(quarantined.is_file())
             self.assertEqual(quarantined.read_bytes(), b"first original")
