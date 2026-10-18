@@ -337,6 +337,39 @@ class ArchitectAIAdapterTests(unittest.TestCase):
                         )
         open_url.assert_not_called()
 
+    def test_failure_report_redacts_absolute_paths_inside_tracebacks_and_logs(self):
+        brief = {
+            "task_type": "implement",
+            "goal": "Fix a parser regression",
+        }
+        report = {
+            "status": "candidate_checks_failed",
+            "candidate_check": {
+                "ok": False,
+                "stderr_tail": (
+                    'Traceback (most recent call last):\n'
+                    '  File "C:\\Users\\Alice Smith\\AppData\\Local\\Temp\\worktree\\test_parser.py", line 12\n'
+                    'AssertionError at /home/runner/work/botpyton/botpyton/tests/test_parser.py:12\n'
+                    'See https://docs.python.org/3/library/unittest.html for test details'
+                ),
+            },
+        }
+        response_bytes = json.dumps({
+            "choices": [{"message": {"content": "Review the assertion and add a regression test."}}],
+        }).encode("utf-8")
+        with mock.patch("bot.architect_ai.urlopen", return_value=io.BytesIO(response_bytes)) as open_url:
+            request_architecture_advice(
+                brief, api_key="test-key-not-real",
+                failure_report=report, send_failure_report=True,
+            )
+        payload = json.loads(open_url.call_args.args[0].data.decode("utf-8"))
+        sent = payload["messages"][1]["content"]
+        self.assertNotIn("C:\\Users", sent)
+        self.assertNotIn("Alice Smith", sent)
+        self.assertNotIn("/home/runner", sent)
+        self.assertGreaterEqual(sent.count("[LOCAL_PATH_REDACTED]"), 2)
+        self.assertIn("https://docs.python.org/3/library/unittest.html", sent)
+
     def test_failure_report_rejects_secret_like_values_before_network(self):
         brief = {
             "task_type": "implement",
