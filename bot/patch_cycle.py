@@ -11,11 +11,10 @@ import hashlib
 import json
 import re
 import shlex
-import shutil
 import stat
 import tempfile
 import tomllib
-from pathlib import Path, PurePosixPath
+from pathlib import Path
 from typing import Any
 
 from .bounded_io import BoundedReadError, read_bounded_bytes
@@ -246,33 +245,16 @@ def apply_reviewed_patch(
     parent = str(workspace_parent) if workspace_parent is not None else None
     baseline: dict[str, Any] | None = None
     baseline_workspace: str | None = None
-    if project_check_id:
-        try:
-            baseline_data = create_isolated_workspace(
-                root, f"{task_id}-baseline", workspace_parent=parent
-            )
-            baseline_workspace = baseline_data["workspace_path"]
-        except WorkspaceError as exc:
-            raise PatchCycleError(f"Could not create baseline worktree ({type(exc).__name__}): {exc}") from exc
+    baseline_run: dict[str, Any] | None = None
+    candidate_run: dict[str, Any] | None = None
+    project_code_execution_attempted = False
+    project_code_executed = False
 
     try:
         candidate_data = create_isolated_workspace(root, f"{task_id}-candidate", workspace_parent=parent)
     except WorkspaceError as exc:
         raise PatchCycleError(f"Could not create candidate worktree ({type(exc).__name__}): {exc}") from exc
     candidate_root = Path(candidate_data["workspace_path"])
-
-    if project_check_id and baseline_workspace:
-        try:
-            baseline_run = run_project_check(
-                project_check_id, baseline_workspace, execute_project_code=True,
-                timeout_seconds=timeout_seconds, memory_limit_mb=memory_limit_mb,
-            )
-            baseline = _check_summary(baseline_run)
-        except (ProjectCheckError, OSError, RuntimeError, ValueError) as exc:
-            baseline = {
-                "check_id": project_check_id, "ok": False,
-                "error": f"{type(exc).__name__}: {str(exc)[:500]}",
-            }
 
     temporary_patch: str | None = None
     try:
@@ -289,16 +271,38 @@ def apply_reviewed_patch(
                 "reason": reason[-2_000:],
                 "patch": {"sha256": hashlib.sha256(patch_bytes).hexdigest(), "bytes": len(patch_bytes), "files": paths, "applied": False},
                 "candidate_workspace": str(candidate_root),
-                "baseline_workspace": baseline_workspace,
-                "baseline_check": baseline,
-                "source_repository_modified": False,
-                "project_code_executed": bool(baseline),
+                "project_code_executed": False,
+                "project_code_execution_attempted": False,
                 "network_used": False,
                 "ai_enabled": False,
                 "merge_performed": False,
                 "push_performed": False,
                 "human_review_required": True,
             }
+
+        # Run the baseline only after Git confirms the diff is applicable.
+        # A stale/invalid patch cannot trigger unrelated project code execution.
+        if project_check_id:
+            try:
+                baseline_data = create_isolated_workspace(
+                    root, f"{task_id}-baseline", workspace_parent=parent
+                )
+                baseline_workspace = baseline_data["workspace_path"]
+            except WorkspaceError as exc:
+                raise PatchCycleError(f"Could not create baseline worktree ({type(exc).__name__}): {exc}") from exc
+            try:
+                project_code_execution_attempted = True
+                baseline_run = run_project_check(
+                    project_check_id, baseline_workspace, execute_project_code=True,
+                    timeout_seconds=timeout_seconds, memory_limit_mb=memory_limit_mb,
+                )
+                project_code_executed = True
+                baseline = _check_summary(baseline_run)
+            except (ProjectCheckError, OSError, RuntimeError, ValueError) as exc:
+                baseline = {
+                    "check_id": project_check_id, "ok": False,
+                    "error": f"{type(exc).__name__}: {str(exc)[:500]}",
+                }
 
         applied = _git(candidate_root, ["apply", "--whitespace=error", temporary_patch], timeout_seconds=45)
         if applied["exit_code"] != 0:
@@ -311,8 +315,8 @@ def apply_reviewed_patch(
                 "candidate_workspace": str(candidate_root),
                 "baseline_workspace": baseline_workspace,
                 "baseline_check": baseline,
-                "source_repository_modified": False,
-                "project_code_executed": bool(baseline),
+                "project_code_executed": project_code_executed,
+                "project_code_execution_attempted": project_code_execution_attempted,
                 "network_used": False,
                 "ai_enabled": False,
                 "merge_performed": False,
@@ -337,8 +341,9 @@ def apply_reviewed_patch(
                 "patch": {"sha256": hashlib.sha256(patch_bytes).hexdigest(), "bytes": len(patch_bytes), "files": paths, "applied": True},
                 "candidate_workspace": str(candidate_root),
                 "observed_changed_paths": changed_paths,
-                "source_repository_modified": False,
-                "project_code_executed": bool(baseline),
+                "source_working_tree_modified": False,
+                "project_code_executed": project_code_executed,
+                "project_code_execution_attempted": project_code_execution_attempted,
                 "network_used": False,
                 "ai_enabled": False,
                 "merge_performed": False,
@@ -392,10 +397,12 @@ def apply_reviewed_patch(
     diagnostic = None
     if project_check_id:
         try:
+            project_code_execution_attempted = True
             candidate_run = run_project_check(
                 project_check_id, candidate_root, execute_project_code=True,
                 timeout_seconds=timeout_seconds, memory_limit_mb=memory_limit_mb,
             )
+            project_code_executed = True
             candidate_check = _check_summary(candidate_run)
             if not candidate_run.get("ok"):
                 log = (str(candidate_run.get("stdout", "")) + "\n" + str(candidate_run.get("stderr", "")))[-16_000:]
@@ -417,12 +424,31 @@ def apply_reviewed_patch(
         "candidate_checks_failed" if project_check_id else
         "candidate_ready_for_review"
     )
+    try:
+        workspace_inspection = inspect_workspace(candidate_root)
+    except WorkspaceError as exc:
+        return {
+            "status": "candidate_verification_failed",
+            "task_id": task_id,
+            "reason": f"Could not inspect the candidate diff ({type(exc).__name__}): {str(exc)[:500]}",
+            "candidate_workspace": str(candidate_root),
+            "source_working_tree_modified": False,
+            "project_code_executed": project_code_executed,
+            "project_code_execution_attempted": project_code_execution_attempted,
+            "network_used": False,
+            "ai_enabled": False,
+            "merge_performed": False,
+            "push_performed": False,
+            "human_review_required": True,
+        }
     return {
         "status": status,
         "task_id": task_id,
         "base_sha": candidate_data["base_sha"],
         "candidate_branch": candidate_data["branch"],
         "candidate_workspace": str(candidate_root),
+        "candidate_worktree_status": workspace_inspection["working_tree_status"],
+        "candidate_diff_stat": workspace_inspection["diff_stat"],
         "baseline_workspace": baseline_workspace,
         "patch": {
             "sha256": hashlib.sha256(patch_bytes).hexdigest(),
@@ -448,7 +474,8 @@ def apply_reviewed_patch(
             "A failed candidate check is not retried with identical inputs; inspect the diagnostic and make a new reviewed patch.",
         ],
         "source_repository_modified": False,
-        "project_code_executed": bool(project_check_id),
+        "project_code_executed": project_code_executed,
+            "project_code_execution_attempted": project_code_execution_attempted,
         "network_used": False,
         "ai_enabled": False,
         "merge_performed": False,
