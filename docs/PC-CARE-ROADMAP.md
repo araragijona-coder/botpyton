@@ -309,3 +309,13 @@ python -m bot.main --pc-cleanup-restore "C:\\path\\to\\BOTPYTON\\Quarantine\\ses
 - Regression tests cover missing record fields, unknown dependencies and changed payload/fingerprint mismatches in temporary directories, asserting the stored bytes remain unchanged.
 - External references: official CCleaner version history (documented file-write/startup/shutdown bugs and clearer per-item failures), Python 3.9.20 security bug-fix notes involving malformed inputs, and Python JSON documentation. These are reliability analogues, not identical upstream defects.
 - Required gate: Linux foundation tests and Windows low-memory smoke pass on the PR and on post-merge `main`.
+
+
+## Phase 42 — checkpoint restore schema integrity
+
+- Validate all durable queue record fields before checkpoint restore, not just task payload/status/attempt counts.
+- Reject non-object payloads and non-string statuses as controlled `CheckpointError` responses rather than allowing an unexpected exception or writing an unusable queue state.
+- Validate required timestamps, optional metadata types, result JSON serializability, idempotency fingerprint and attempt bounds before memory replacement.
+- Regression fixtures recompute the manifest digest after removing a required field or making a payload non-object, proving schema checks are independent of digest checks and existing destination memory is preserved.
+- Official maintenance analogues: [CCleaner v7.12.1526 version notes](https://www.ccleaner.com/ccleaner/version-history/) document a security file-write fix and crash corrections; [BleachBit 6.0.6 notes](https://www.bleachbit.org/news/bleachbit-606) document maintenance fixes for saving preferences and Windows configuration repair. These are analogous reliability lessons, not the same defect.
+- Required gate: Linux foundation tests and Windows low-memory smoke pass on the PR and post-merge `main`.

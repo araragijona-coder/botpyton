@@ -37,6 +37,24 @@ class CheckpointTests(unittest.TestCase):
     def tearDown(self):
         self.temp.cleanup()
 
+    def _rewrite_checkpoint_state(self, mutate):
+        state_path = self.checkpoint_dir / "state.json"
+        manifest_path = self.checkpoint_dir / "manifest.json"
+        state = json.loads(state_path.read_text(encoding="utf-8"))
+        mutate(state)
+        state_text = json.dumps(
+            state, ensure_ascii=False, indent=2, sort_keys=True
+        ) + "\n"
+        state_path.write_text(state_text, encoding="utf-8", newline="\n")
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        manifest["sha256"] = hashlib.sha256(state_text.encode("utf-8")).hexdigest()
+        manifest["task_count"] = len(state["tasks"])
+        manifest_path.write_text(
+            json.dumps(manifest, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+            newline="\n",
+        )
+
     def test_round_trip_preserves_queue_and_dependency_state(self):
         queue = TaskQueue(JsonMemory(self.source_memory))
         queue.enqueue_many([task("B", ["A"]), task("A")])
@@ -108,6 +126,45 @@ class CheckpointTests(unittest.TestCase):
         JsonMemory(self.source_memory).save(state)
         with self.assertRaisesRegex(CheckpointError, "Idempotency key mismatch"):
             export_checkpoint(self.source_memory, self.checkpoint_dir)
+
+    def test_restore_rejects_missing_record_metadata_without_overwriting_memory(self):
+        queue = TaskQueue(JsonMemory(self.source_memory))
+        queue.enqueue_many([task()])
+        export_checkpoint(self.source_memory, self.checkpoint_dir)
+        existing = {
+            "schema_version": 1, "tasks": {},
+            "incidents": [{"keep": "existing memory"}], "solutions": [],
+        }
+        JsonMemory(self.restore_memory).save(existing)
+
+        # Recompute the manifest digest so this exercises schema validation, not
+        # the earlier tampering/integrity check.
+        self._rewrite_checkpoint_state(
+            lambda state: state["tasks"]["A"].pop("created_at")
+        )
+
+        with self.assertRaisesRegex(CheckpointError, "missing record fields"):
+            restore_checkpoint(self.checkpoint_dir, self.restore_memory)
+        self.assertEqual(JsonMemory(self.restore_memory).load(), existing)
+
+    def test_restore_rejects_non_object_payload_without_overwriting_memory(self):
+        queue = TaskQueue(JsonMemory(self.source_memory))
+        queue.enqueue_many([task()])
+        export_checkpoint(self.source_memory, self.checkpoint_dir)
+        existing = {
+            "schema_version": 1, "tasks": {},
+            "incidents": [{"keep": "existing memory"}], "solutions": [],
+        }
+        JsonMemory(self.restore_memory).save(existing)
+
+        # A matching SHA-256 proves byte integrity only, not a valid object schema.
+        self._rewrite_checkpoint_state(
+            lambda state: state["tasks"]["A"].update(payload=None)
+        )
+
+        with self.assertRaisesRegex(CheckpointError, "must be a JSON object"):
+            restore_checkpoint(self.checkpoint_dir, self.restore_memory)
+        self.assertEqual(JsonMemory(self.restore_memory).load(), existing)
 
     def test_oversized_state_is_rejected_before_parsing_without_overwriting_memory(self):
         JsonMemory(self.source_memory).save({
