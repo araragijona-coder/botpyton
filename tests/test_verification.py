@@ -84,7 +84,9 @@ class VerificationTests(unittest.TestCase):
 
     def test_verification_rejects_a_reparse_point_component(self):
         with tempfile.TemporaryDirectory() as temp:
-            root = Path(temp)
+            # Match the canonical root used by evaluate_verification_checks(),
+            # including Windows runner paths that may resolve through aliases.
+            root = Path(temp).resolve()
             real_directory = root / "real"
             real_directory.mkdir()
             (real_directory / "settings.json").write_text('{"safe":true}', encoding="utf-8")
