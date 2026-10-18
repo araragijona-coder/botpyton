@@ -123,5 +123,115 @@ class ArchitectAIAdapterTests(unittest.TestCase):
         self.assertEqual(code, 2)
 
 
+
+    def test_source_context_requires_separate_consent_before_network(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            project = Path(tmp)
+            (project / "src.py").write_text("def f(): return 1\n", encoding="utf-8")
+            brief = {
+                "task_type": "implement",
+                "goal": "Implement a small safe input parsing feature",
+                "project_root": str(project),
+            }
+            with mock.patch("bot.architect_ai.urlopen") as open_url:
+                with self.assertRaisesRegex(ArchitectAIError, "Explicit source-context consent"):
+                    request_architecture_advice(
+                        brief, api_key="test-key-not-real", context_paths=["src.py"]
+                    )
+            open_url.assert_not_called()
+
+    def test_explicit_source_context_is_bounded_and_reported(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            project = Path(tmp)
+            src = project / "src" / "parser.py"
+            src.parent.mkdir()
+            src.write_text("def parse_count(value):\n    return int(value)\n", encoding="utf-8")
+            brief = {
+                "task_type": "implement",
+                "goal": "Add explicit validation to the parser function",
+                "project_root": str(project),
+                "acceptance_criteria": ["Invalid input returns a controlled error"],
+            }
+            response_bytes = json.dumps({
+                "choices": [{"message": {"content": "Inspect the conversion contract and add regression cases."}}]
+            }).encode("utf-8")
+            with mock.patch("bot.architect_ai.urlopen", return_value=io.BytesIO(response_bytes)) as open_url:
+                result = request_architecture_advice(
+                    brief, api_key="test-key-not-real",
+                    context_paths=["src/parser.py"], send_source_context=True,
+                )
+            self.assertEqual(result["status"], "advice_received")
+            self.assertTrue(result["safety"]["project_files_uploaded"])
+            self.assertEqual(result["safety"]["source_context_file_count"], 1)
+            self.assertEqual(result["safety"]["source_context_paths"], ["src/parser.py"])
+            self.assertFalse(result["safety"]["project_code_executed"])
+            request = open_url.call_args.args[0]
+            payload = json.loads(request.data.decode("utf-8"))
+            sent = payload["messages"][1]["content"]
+            self.assertIn("def parse_count(value)", sent)
+            self.assertIn('"src/parser.py"', sent)
+            self.assertNotIn(str(project), sent)
+
+    def test_source_context_rejects_path_traversal_and_secret_like_content(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            project = Path(tmp)
+            (project / "src.py").write_text("API_KEY = 'sk-or-v1-123456789012345678901234567890'\n", encoding="utf-8")
+            brief = {
+                "task_type": "implement",
+                "goal": "Implement a small safe input parsing feature",
+                "project_root": str(project),
+            }
+            with mock.patch("bot.architect_ai.urlopen") as open_url:
+                with self.assertRaisesRegex(ArchitectAIError, "traversal"):
+                    request_architecture_advice(
+                        brief, api_key="test-key-not-real",
+                        context_paths=["../src.py"], send_source_context=True,
+                    )
+                with self.assertRaisesRegex(ArchitectAIError, "credential or private key"):
+                    request_architecture_advice(
+                        brief, api_key="test-key-not-real",
+                        context_paths=["src.py"], send_source_context=True,
+                    )
+            open_url.assert_not_called()
+
+    def test_cli_source_context_requires_second_consent_and_accepts_selected_file(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            project = Path(tmp) / "project"
+            project.mkdir()
+            (project / "parser.py").write_text("def parse_value(value): return int(value)\n", encoding="utf-8")
+            brief_path = Path(tmp) / "brief.json"
+            brief_path.write_text(json.dumps({
+                "task_type": "implement",
+                "goal": "Implement a small safe input parsing feature",
+                "project_root": str(project),
+            }), encoding="utf-8")
+            no_consent_output = io.StringIO()
+            with contextlib.redirect_stdout(no_consent_output), mock.patch.dict(
+                os.environ, {API_KEY_ENV: "test-key-not-real"}, clear=True
+            ), mock.patch("bot.architect_ai.urlopen") as open_url:
+                code = main([
+                    "--architect-ai", str(brief_path), "--allow-external-ai",
+                    "--architect-ai-context", "parser.py",
+                ])
+            self.assertEqual(code, 2)
+            self.assertEqual(json.loads(no_consent_output.getvalue())["status"], "source_consent_required")
+            open_url.assert_not_called()
+
+            response_bytes = json.dumps({
+                "choices": [{"message": {"content": "Review type conversion and test invalid input."}}]
+            }).encode("utf-8")
+            consent_output = io.StringIO()
+            with contextlib.redirect_stdout(consent_output), mock.patch.dict(
+                os.environ, {API_KEY_ENV: "test-key-not-real"}, clear=True
+            ), mock.patch("bot.architect_ai.urlopen", return_value=io.BytesIO(response_bytes)) as open_url:
+                code = main([
+                    "--architect-ai", str(brief_path), "--allow-external-ai",
+                    "--architect-ai-context", "parser.py", "--send-source-context",
+                ])
+            self.assertEqual(code, 0)
+            result = json.loads(consent_output.getvalue())
+            self.assertTrue(result["safety"]["project_files_uploaded"])
+            open_url.assert_called_once()
+
 if __name__ == "__main__":
     unittest.main()

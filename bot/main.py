@@ -96,7 +96,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--architect-ai", metavar="BRIEF_JSON",
                         help="request optional second-opinion architecture advice from OpenRouter's free-model router")
     parser.add_argument("--allow-external-ai", action="store_true",
-                        help="explicitly consent to sending selected brief fields to OpenRouter; required with --architect-ai")
+                        help="consent to send selected brief fields to OpenRouter; required with --architect-ai")
+    parser.add_argument("--architect-ai-context", action="append", metavar="RELATIVE_PATH",
+                        help="select one source file under brief.project_root for the remote adviser; repeat up to 4 files")
+    parser.add_argument("--send-source-context", action="store_true",
+                        help="additional explicit consent to upload the selected source files with --architect-ai")
     parser.add_argument("--system-profile", action="store_true", help="report available RAM, disk space and a conservative child-process memory budget")
     parser.add_argument("--doctor", action="store_true", help="run read-only preflight and show concrete next steps for common setup/resource problems")
     parser.add_argument("--pc-check", action="store_true", help="run the read-only, offline local PC-care audit")
@@ -171,16 +175,38 @@ def main(argv: list[str] | None = None) -> int:
                         help="seconds per fixed test attempt for --autonomous-cycle (hard maximum: 120)")
     parser.add_argument("--memory", default=".cerebro/memory/state.json", help="memory file path")
     args = parser.parse_args(argv)
-    if args.architect_ai or args.allow_external_ai:
+    if args.architect_ai or args.allow_external_ai or args.architect_ai_context or args.send_source_context:
         # Load urllib/TLS only for this explicit feature; normal local BOTPYTON startup
         # should not pay the import/memory cost of an optional remote API.
         from .architect_ai import ArchitectAIError, request_architecture_advice
     try:
         if args.allow_external_ai and not args.architect_ai:
             raise ValueError("--allow-external-ai requires --architect-ai")
+        if args.architect_ai_context and not args.architect_ai:
+            raise ValueError("--architect-ai-context requires --architect-ai")
+        if args.send_source_context and not args.architect_ai:
+            raise ValueError("--send-source-context requires --architect-ai")
+        if args.send_source_context and not args.architect_ai_context:
+            raise ValueError("--send-source-context requires at least one --architect-ai-context path")
         if args.architect_ai and args.architect_plan:
             raise ValueError("Choose either --architect-ai or --architect-plan, not both")
         if args.architect_ai:
+            if args.architect_ai_context and not args.send_source_context:
+                _print_json({
+                    "status": "source_consent_required",
+                    "provider": "OpenRouter",
+                    "model": "openrouter/free",
+                    "note": "No API request was sent. Review each exact file path and add --send-source-context only if you consent to uploading those file contents.",
+                    "selected_paths": args.architect_ai_context,
+                    "safety": {
+                        "network_used": False,
+                        "project_files_uploaded": False,
+                        "project_code_executed": False,
+                        "commands_executed": False,
+                        "files_written": False,
+                    },
+                })
+                return 2
             if not args.allow_external_ai:
                 _print_json({
                     "status": "consent_required",
@@ -192,7 +218,11 @@ def main(argv: list[str] | None = None) -> int:
                 return 2
             brief = _read_bounded_json(args.architect_ai, limit_bytes=50_000)
             try:
-                result = request_architecture_advice(brief)
+                result = request_architecture_advice(
+                    brief,
+                    context_paths=args.architect_ai_context,
+                    send_source_context=args.send_source_context,
+                )
             except ArchitectAIError as exc:
                 _print_json({
                     "status": "error",

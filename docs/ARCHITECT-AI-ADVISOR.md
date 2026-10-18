@@ -4,7 +4,7 @@
 
 El núcleo determinista de BOTPYTON sigue funcionando sin IA, sin API, sin servicios en segundo plano y sin dependencias adicionales. Esta función agrega una segunda opinión opcional para interpretar un encargo de programación, priorizar preguntas, detectar riesgos de implementación y proponer pruebas.
 
-El modelo no convierte a BOTPYTON en un programador autónomo: no recibe herramientas del sistema, no puede leer el repositorio a través de este adaptador, no cambia archivos, no ejecuta comandos y no publica ni fusiona cambios. Sus sugerencias deben convertirse en un plan validado y pasar las comprobaciones normales.
+El modelo no convierte a BOTPYTON en un programador autónomo: no recibe herramientas del sistema, no cambia archivos, no ejecuta comandos y no publica ni fusiona cambios. Por defecto no recibe código fuente. Opcionalmente puede revisar hasta cuatro archivos que selecciones por ruta exacta, si además de autorizar la API das un segundo consentimiento específico para subir su contenido. Sus sugerencias siguen siendo recomendaciones humanas revisables.
 
 ## Proveedor seleccionado: OpenRouter Free Models Router
 
@@ -44,7 +44,19 @@ python -m bot.main --architect-plan .cerebro/examples/architect-design-brief.jso
 
 No se hace ninguna solicitud de red con `--architect-ai` a menos que se incluya `--allow-external-ai`. Sin esa segunda opción, BOTPYTON muestra el aviso de consentimiento y termina sin llamar al proveedor.
 
-El módulo remite solamente estos campos estructurados del brief, si están presentes: `schema_version`, `goal`, `task_type`, `observed_error`, `reproduction_steps`, `acceptance_criteria`, `constraints`, `must_not_change` y `available_evidence), junto con un resumen del plan determinista local. Excluye `project_root` y el inventario local del repositorio; no envía el contenido de archivos del proyecto, no busca secretos ni adjunta logs automáticamente. Sin embargo, un usuario puede pegar código, credenciales, nombres privados o rutas dentro de campos del brief: esos valores sí serían parte de la solicitud. Revísalos y redáctalos antes de autorizar el envío.
+Por defecto, el módulo remite solamente estos campos estructurados del brief, si están presentes: `schema_version`, `goal`, `task_type`, `observed_error`, `reproduction_steps`, `acceptance_criteria`, `constraints`, `must_not_change` y `available_evidence), junto con un resumen del plan determinista local. Excluye `project_root` y el inventario local del repositorio por defecto; no adjunta logs automáticamente. El contenido de archivos solo se añade mediante rutas seleccionadas y el consentimiento adicional descrito abajo. El detector de secretos cubre patrones comunes, no todos los formatos posibles. Sin embargo, un usuario puede pegar código, credenciales, nombres privados o rutas dentro de campos del brief: esos valores sí serían parte de la solicitud. Revísalos y redáctalos antes de autorizar el envío.
+
+### Contexto de código explícitamente seleccionado (Phase 26)
+
+Para aportar evidencia real al diagnóstico sin subir el repositorio entero, puedes añadir hasta cuatro rutas relativas a `project_root`. Hace falta `--allow-external-ai` y, de forma separada, `--send-source-context`; si falta cualquiera, no se envía el contenido del archivo. Ejemplo:
+
+```powershell
+python -m bot.main --architect-ai .cerebro/examples/architect-design-brief.json --allow-external-ai --architect-ai-context bot/queue.py --architect-ai-context tests/test_queue.py --send-source-context
+```
+
+Cada archivo debe ser regular, de texto UTF-8, tener una extensión de código/documentación admitida y no superar 16.000 bytes; se permiten cuatro archivos como máximo y 40.000 bytes de contexto en total. El cuerpo de la solicitud completa se limita a 70.000 bytes. Las rutas deben usar separadores `/`, ser relativas a `project_root` y no pueden atravesar directorios. Se rechazan enlaces simbólicos/reparse points, ubicaciones generadas/privadas, archivos con nombres sensibles y patrones comunes que parecen credenciales. Esos filtros reducen el riesgo, pero **no garantizan que cada secreto imaginable sea detectado**.
+
+El módulo transmite solo el contenido de las rutas elegidas; no hace un recorrido automático ni sube el inventario completo. Aun así, revisar el diff/contexto antes de enviar sigue siendo responsabilidad del usuario. El texto del código es entrada no confiable: las instrucciones incrustadas en comentarios, strings, fixtures o documentación no pueden cambiar las reglas del asesor. La salida sigue siendo consejo en texto; no es un parche aplicable ni se ejecuta.
 
 La clave se lee de una variable de entorno; nunca se acepta como argumento de la CLI ni se escribe en un informe. La solicitud usa HTTPS, tamaño de petición y respuesta acotados, tiempo límite, límite de tokens y cero reintentos. Los errores de red/cuota se informan sin intentar evadir el límite. Las políticas de retención de los proveedores seleccionados por el router se rigen por sus propias condiciones; no envíes información confidencial si no puedes aceptar esas condiciones.
 
@@ -58,4 +70,4 @@ La clave se lee de una variable de entorno; nunca se acepta como argumento de la
 
 ## Pruebas
 
-La suite de regresión simula las respuestas de red: verifica consentimiento explícito, endpoint/modelo gratuito fijo, exclusión de la ruta local, límite de tokens, ausencia de reintentos cuando se recibe HTTP 429, bloqueo local sin red y configuración faltante sin llamada. Las pruebas no necesitan una clave real y no consumen cuota del proveedor.
+La suite de regresión simula las respuestas de red: verifica consentimiento explícito, endpoint/modelo gratuito fijo, exclusión de la ruta local, límite de tokens, ausencia de reintentos cuando se recibe HTTP 429, bloqueo local sin red, configuración faltante, segundo consentimiento de contexto, límites de rutas y rechazo de contenido con apariencia de secreto. Las pruebas no necesitan una clave real y no consumen cuota del proveedor.

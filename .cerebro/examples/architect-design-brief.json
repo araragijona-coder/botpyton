@@ -1,6 +1,7 @@
 {
   "schema_version": 1,
   "task_type": "design",
+  "project_root": ".",
   "goal": "Design a maintainable plugin boundary for adding programming-language analyzers to BOTPYTON",
   "acceptance_criteria": [
     "Compare at least two viable approaches and explain trade-offs",
