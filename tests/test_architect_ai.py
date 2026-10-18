@@ -171,6 +171,9 @@ class ArchitectAIAdapterTests(unittest.TestCase):
             self.assertIn("def parse_count(value)", sent)
             self.assertIn('"src/parser.py"', sent)
             self.assertNotIn(str(project), sent)
+            system_prompt = payload["messages"][0]["content"]
+            self.assertIn("BORRADOR DE PARCHE (NO APLICADO)", system_prompt)
+            self.assertIn("limited to those exact supplied paths", system_prompt)
 
     def test_source_context_rejects_path_traversal_and_secret_like_content(self):
         with tempfile.TemporaryDirectory() as tmp:
