@@ -533,7 +533,7 @@ def preview_application_cache_restore(
                 checked.append({"index": index + 1, "browser": item["browser"], "profile": item["profile"], "path": str(original), "status": "not_quarantined"})
                 partial = True
                 continue
-            if quarantined.is_symlink() or _is_link_or_reparse(quarantined):
+            if quarantined.is_symlink() or (quarantined.exists() and _is_link_or_reparse(quarantined)):
                 checked.append({"index": index + 1, "browser": item["browser"], "profile": item["profile"], "path": str(original), "status": "quarantine_item_linked"})
                 partial = True
                 continue
@@ -709,7 +709,7 @@ def restore_application_cache_quarantine(
                         or _path_has_link_from(original.parent, root)
                         or quarantined.exists()
                         or quarantined.is_symlink()
-                        or _is_link_or_reparse(quarantined)
+                        or (quarantined.exists() and _is_link_or_reparse(quarantined))
                     ):
                         skipped += 1
                         continue
