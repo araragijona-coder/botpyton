@@ -154,6 +154,12 @@ class LocalAgentTests(unittest.TestCase):
         with self.assertRaisesRegex(LocalAgentError, "outside every configured root"):
             self.agent()
 
+    def test_agent_config_itself_must_live_outside_authorized_roots(self):
+        inside_config = self.project / "agent.json"
+        inside_config.write_text(json.dumps(self.config()), encoding="utf-8")
+        with self.assertRaisesRegex(LocalAgentError, "config must be outside"):
+            load_local_agent_config(inside_config)
+
     def test_overlapping_roots_are_rejected(self):
         nested = self.project / "nested"
         nested.mkdir()
