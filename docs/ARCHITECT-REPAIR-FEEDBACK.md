@@ -44,3 +44,17 @@ Si genera un `BORRADOR DE PARCHE (NO APLICADO)`, revisalo en un editor, guardalo
 - Un fallo nuevo o ambiguo no permite repetir el mismo parche sin evidencia nueva.
 
 La fuente externa de inspiración es el registro de problemas y correcciones que publican los mantenedores de herramientas y frameworks: ver [la bitácora de correcciones externas](research/EXTERNAL_BUG_FIXES_AND_BOTPYTON_GUARDS.md). Esas publicaciones guían las preguntas de diagnóstico, pero no prueban que BOTPYTON tenga la misma causa raíz.
+
+
+## Corrección de privacidad — Fase 29
+
+La redacción de la Fase 29 sustituye patrones conocidos de rutas absolutas locales que aparezcan *dentro* de los textos permitidos del informe, incluidos tracebacks y fragmentos de salida. Las rutas Windows citadas se procesan antes de los tokens sin comillas para poder cubrir directorios con espacios. Se preservan las URL web habituales. Esto complementa, pero no reemplaza, revisar el informe y el brief: no existe una regex universal para todos los datos privados.
+
+Ejemplo de fragmento antes del envío:
+
+```text
+File "C:\Users\Nombre Apellido\AppData\Local\Temp\worktree\test.py", line 20
+AssertionError at /home/runner/work/project/project/tests/test_parser.py:20
+```
+
+El texto incluido en la solicitud externa reemplaza esas ubicaciones reconocidas por `[LOCAL_PATH_REDACTED]`. El informe original en el disco no se modifica. La bandera `--send-failure-report` sigue siendo obligatoria.

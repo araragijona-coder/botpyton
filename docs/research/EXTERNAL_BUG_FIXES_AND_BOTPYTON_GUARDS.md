@@ -378,3 +378,27 @@ La selección de fuentes y el informe de fallos siguen siendo consentimientos in
 ### Verificación de la Fase 28
 
 Las pruebas de regresión deben demostrar que (1) un informe sin consentimiento no activa la red, (2) el informe enviado excluye rutas locales y campos arbitrarios, (3) los patrones de secretos bloquean la solicitud, y (4) el comando CLI requiere la bandera de consentimiento específica. La integración solo se considera verificada tras ejecutar las suites Linux y Windows del repositorio.
+
+
+## Fase 29 — Redacción de rutas locales en informes de reparación (2026-10-18)
+
+### Referencias oficiales revisadas
+
+- **BleachBit 6.0.4**, publicada el 8 de septiembre de 2026, documenta varias correcciones de seguridad para Windows, entre ellas una eliminación arbitraria potencial al limpiar con privilegios elevados y defensas relacionadas con enlaces simbólicos, además de usar rutas absolutas para algunos ejecutables para evitar la búsqueda insegura de binarios. La lección relevante es tratar las rutas y el contexto de ejecución como parte del límite de seguridad, no como texto inocuo. Fuente: https://www.bleachbit.org/news/bleachbit-604
+- **Python 3.11.17**, publicado el 1 de octubre de 2026, incluye una corrección de seguridad donde el fallback de extracción de un miembro tipo enlace de `tarfile` debe aplicar los filtros de extracción y omitir miembros rechazados por esos filtros. Es un ejemplo de defensa que debe aplicarse en la ruta de fallback, no solo en el camino principal. Fuente: https://www.python.org/downloads/release/python-31117/
+- **GitHub Actions — Script injections**, documentación vigente que advierte que los valores del contexto de GitHub y otros datos de eventos son entradas no confiables si pueden convertirse en código. Aunque la brecha detectada en esta fase es de exposición de rutas y no de ejecución de comandos, se adopta el mismo principio: el texto del log no es metadato seguro por el hecho de proceder de una prueba. Fuente: https://docs.github.com/en/actions/concepts/security/script-injections
+- **Python 3.15.0**, publicado el 9 de octubre de 2026, es la versión estable mayor más reciente consultada en esta revisión. BOTPYTON sigue declarando Python 3.11 como versión mínima; no cambia automáticamente su entorno de ejecución solo porque haya una versión nueva. Fuente: https://www.python.org/downloads/release/python-3150/
+
+### Hallazgo concreto
+
+La Fase 28 filtraba una lista controlada de campos del JSON y no incluía directamente `candidate_workspace` ni `baseline_workspace`. Sin embargo, `reason`, `stdout_tail`, `stderr_tail` y algunos campos de diagnóstico eran texto libre. Un traceback puede incrustar rutas absolutas (por ejemplo, una ruta de perfil Windows o la carpeta de trabajo de GitHub Actions). Dichas rutas sobrevivían al filtrado de campos y podían enviarse tras el consentimiento de `--send-failure-report`. La declaración de que se omitían las rutas de worktree era, por tanto, más amplia de lo que el código garantizaba.
+
+### Corrección y límites
+
+- Se agrega un paso de redacción de patrones comunes de rutas absolutas Windows y Unix en los campos textuales permitidos, después del control de secretos y antes del recorte de longitud.
+- Las expresiones tienen un orden consciente: primero rutas citadas que pueden incluir espacios, después rutas no citadas; se preservan URL como `https://docs.python.org/...`.
+- Se añaden pruebas de regresión para una ruta de usuario Windows con espacios, un traceback Linux y la preservación de una URL de documentación.
+- No se alteran los campos relativos de archivo del diff ni los logs localmente guardados.
+- La redacción no puede demostrar que toda ruta o dato privado imaginable sea detectado. Las credenciales conocidas siguen siendo bloqueadas y el consentimiento explícito sigue siendo obligatorio.
+
+La verificación de esta fase requiere que pasen las suites existentes en Linux y Windows, ya que la expresión de rutas Windows debe probarse también en el runner Windows. No se añaden dependencias ni llamadas de red al runtime local; la consulta al asesor sigue siendo opcional y explícitamente consentida.

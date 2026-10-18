@@ -484,3 +484,10 @@ python -m bot.main --architect-ai .cerebro/examples/architect-design-brief.json 
 The separate `--send-failure-report` flag is required in addition to `--allow-external-ai`; source contents still require the independent `--send-source-context` flag. The report is field-filtered and size-limited, absolute workspace paths and arbitrary JSON fields are excluded, and common secret patterns are rejected before any request. The scanner cannot guarantee that every secret is detected, so inspect the report before consenting. See [Phase 28 repair feedback](docs/ARCHITECT-REPAIR-FEEDBACK.md).
 
 BOTPYTON does not apply the suggested revision automatically. Review and save the new diff, then run the Phase 27 isolated patch cycle again. If evidence is ambiguous, ask for clarification rather than repeating an unchanged patch.
+
+
+## Phase 29: redacción de rutas locales en evidencia de reparación
+
+Antes de compartir el informe de una reparación con el asesor remoto, BOTPYTON ahora sustituye patrones comunes de rutas absolutas locales que aparezcan dentro de los logs, tracebacks y textos de diagnóstico. La fase anterior ya omitía campos enteros de ubicación, pero una ruta también podía venir incrustada en el texto de un error. Se cubren rutas Windows citadas y sin comillas, y raíces Unix frecuentes como `/home`, `/Users`, `/tmp`, `/runner` y `/workspace`. Las URL web no se deben confundir con rutas locales.
+
+La redacción es una defensa por capas, no un detector universal de datos privados: otras rutas, nombres de usuario, secretos con formatos desconocidos y datos incluidos en el brief o en los archivos fuente seleccionados pueden seguir siendo sensibles. Inspeccioná el informe antes de usar `--send-failure-report`. No cambia el consentimiento externo ni el ciclo aislado de parches.
