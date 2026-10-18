@@ -222,7 +222,7 @@ def _read_selected_source_context(brief: object, context_paths: list[str]) -> li
                     or (after_path.st_dev, after_path.st_ino, after_path.st_size) != identity_open
                     or _is_link_or_reparse(target)):
                 raise ArchitectAIError(f"Selected context file '{raw_path}' changed during bounded read.")
-                for index, _part in enumerate(relative.parts[:-1]):
+            for index, _part in enumerate(relative.parts[:-1]):
                 # Re-check parent directory components after the read to catch replacement by a link.
                 parent = root.joinpath(*relative.parts[:index + 1])
                 if _is_link_or_reparse(parent):
