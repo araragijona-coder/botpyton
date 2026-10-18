@@ -1,6 +1,6 @@
 # BotPyton — deterministic GitHub worker without AI
 
-BotPyton is a deterministic software-work automation bot. It uses **no AI models, inference APIs, or AI service credentials**. Its task engine combines a JSON queue with strict allowlists. Task descriptions are data, never commands.
+BotPyton's core worker is deterministic and does not require AI models, inference APIs, or AI service credentials. Its task engine combines a JSON queue with strict allowlists. Task descriptions are data, never commands. A separate architecture-advice command is optional and makes a remote AI request only after explicit user consent; it is not part of normal task execution.
 
 ## Capabilities
 
@@ -10,7 +10,7 @@ BotPyton is a deterministic software-work automation bot. It uses **no AI models
 - Bounded autonomous cycle: run fixed tests, apply at most one exact known repair after a failure, rerun tests, verify Python/JSON files, and persist per-attempt evidence.
 - Conservative diagnostics plus two exact source repairs: a uniquely located JSON trailing comma and a supported one-line Python compound-header colon.
 - Declarative GitHub operations: create an isolated bot branch, create one commit containing the declared paths, and open a draft pull request for review.
-- No automatic merge, no arbitrary shell commands, no automatic package installation, and no AI/API calls to AI services.
+- No automatic merge, no arbitrary shell commands, and no automatic package installation. The normal worker does not call AI APIs; the optional architecture adviser is isolated, explicitly authorized, and described below.
 
 ## Interfaz de escritorio
 
@@ -46,6 +46,28 @@ The diagnostic registry now covers common failure signatures across Python and i
 The recovery policy no longer automatically retries a known or unknown task failure with unchanged inputs and no new evidence. To continue, first fix the cause through an approved path, provide new evidence, or explicitly requeue after review. This avoids repeating deterministic syntax, JSON, type-contract, or missing-dependency failures without changing conditions.
 
 See [docs/research/PHASE-24-EVIDENCE-BASED-RECOVERY.md](docs/research/PHASE-24-EVIDENCE-BASED-RECOVERY.md). The registry runs locally and does not install tools, change permissions, or make network/API calls.
+
+## Phase 25: optional free-model architecture adviser
+
+BOTPYTON now supports a separate, opt-in second opinion for software architecture through OpenRouter's free-model router. The base architecture planner remains offline and deterministic. The remote adviser does not read or upload project source files, run code, write files, issue commands, change the queue, or create pull requests.
+
+Current free-router limits published by OpenRouter are **50 requests/day and 20 requests/minute**; the free model router prices input and output at $0. The selected underlying model can change, and availability/limits are not guaranteed. BOTPYTON makes one request, sets a maximum output token count, enforces payload/response/time limits, and never retries a failed request. See [the detailed setup, consent, privacy, and limits](docs/ARCHITECT-AI-ADVISOR.md).
+
+Configure `BOTPYTON_OPENROUTER_API_KEY` in your Windows user environment. Then review your structured brief and explicitly allow external processing:
+
+```powershell
+python -m bot.main --architect-ai .cerebro/examples/architect-design-brief.json --allow-external-ai
+```
+
+Without `--allow-external-ai`, no request is sent. For the entirely local workflow, continue to use:
+
+```powershell
+python -m bot.main --architect-plan .cerebro/examples/architect-design-brief.json
+```
+
+Only selected brief fields and the local plan's high-level steps/questions are sent; the local project path and repository inventory are excluded. Any sensitive text pasted into brief fields can still be sent, so remove credentials and private source details before consent. The model reply is advice for human review, not executable instructions. This does not make BOTPYTON an autonomous general-purpose programmer.
+
+Sources: [OpenRouter free model router](https://openrouter.ai/openrouter/free) · [official pricing and limits](https://openrouter.ai/pricing).
 
 ## Quick start
 
@@ -185,7 +207,7 @@ The common `validate_change_plan()` validator now rejects `draft: false`, so ind
 
 ## Security model
 
-- Python standard library only; no AI/LLM services or inference APIs.
+- The core worker needs only the Python standard library and has no required AI/LLM or inference API. The explicitly invoked Phase 25 architecture adviser is the only optional remote-AI path.
 - GitHub REST operations are restricted to the fixed `api.github.com` host and the configured repository.
 - No arbitrary shell command from task text.
 - Source-change plans are path-validated, size-limited, fingerprinted and committed on isolated branches.
