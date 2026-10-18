@@ -1,0 +1,21 @@
+{
+  "schema_version": 1,
+  "task_type": "design",
+  "goal": "Design a maintainable plugin boundary for adding programming-language analyzers to BOTPYTON",
+  "acceptance_criteria": [
+    "Compare at least two viable approaches and explain trade-offs",
+    "Preserve local-first operation and avoid required external services",
+    "Keep project-code execution separately authorized and bounded"
+  ],
+  "constraints": [
+    "Python standard library first",
+    "Windows 10/11 and current Linux CI",
+    "On-demand operation with low idle memory",
+    "No network access for normal planning"
+  ],
+  "must_not_change": [
+    "Do not install packages automatically",
+    "Do not execute commands supplied as task text",
+    "Do not automatically merge source changes"
+  ]
+}

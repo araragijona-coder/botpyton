@@ -7,6 +7,7 @@ import sys
 from pathlib import Path
 
 from .autonomy import AutonomousCycleError, run_autonomous_cycle
+from .architect import ArchitectPlanError, build_architecture_plan
 from .bounded_io import BoundedReadError, enforce_json_depth, read_bounded_bytes
 from .checkpoint import CheckpointError, export_checkpoint, restore_checkpoint
 from .diagnostics import diagnose_failure
@@ -90,6 +91,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--check", action="store_true", help="validate Python syntax and memory schema")
     parser.add_argument("--inspect-repository", metavar="PATH", nargs="?", const=".",
                         help="bounded read-only project inventory; candidate checks are not executed")
+    parser.add_argument("--architect-plan", metavar="BRIEF_JSON",
+                        help="turn a bounded programming brief into a deterministic reviewable architecture plan; no code executed")
     parser.add_argument("--system-profile", action="store_true", help="report available RAM, disk space and a conservative child-process memory budget")
     parser.add_argument("--doctor", action="store_true", help="run read-only preflight and show concrete next steps for common setup/resource problems")
     parser.add_argument("--pc-check", action="store_true", help="run the read-only, offline local PC-care audit")
@@ -172,6 +175,11 @@ def main(argv: list[str] | None = None) -> int:
         if args.inspect_repository is not None:
             _print_json(inspect_repository(args.inspect_repository))
             return 0
+        if args.architect_plan:
+            brief = _read_bounded_json(args.architect_plan, limit_bytes=50_000)
+            result = build_architecture_plan(brief)
+            _print_json(result)
+            return 0 if result["decision"] == "ready_to_plan" else 2
         if args.create_workspace and args.workspace_status:
             raise WorkspaceError("Use either --create-workspace or --workspace-status, not both")
         if args.workspace_parent and not args.create_workspace:
