@@ -25,6 +25,20 @@ La forma más sencilla de usar BOTPYTON es **hacer doble clic en `BOTPYTON.bat`*
 - Requiere Python 3.11+ con Tk/Tcl habilitado. Usa la biblioteca estándar, sin dependencias de interfaz externas ni servicios de IA.
 - Es una revisión técnica amplia, no un antivirus, una búsqueda exhaustiva de cada archivo del disco ni una reparación automática. El resultado puede indicar límites si Windows no permite consultar algún dato.
 
+## Phase 23: software-architecture planning
+
+BOTPYTON now has a first deterministic architecture-planning command. It validates a structured programming brief, inventories a supplied project within existing bounds, selects a task-oriented workflow, asks for missing evidence, and returns explicit stop conditions and a test/verification plan. It does **not** claim to understand every free-form request, edit code, or execute the project.
+
+Start with the included example:
+
+```bash
+python -m bot.main --architect-plan .cerebro/examples/architect-design-brief.json
+```
+
+Edit the JSON fields for the real task. Important fields include `goal`, `task_type`, `project_root`, `observed_error`, `reproduction_steps`, `acceptance_criteria`, `constraints`, and `must_not_change`. The result is JSON and distinguishes `ready_to_plan`, `needs_information`, and `blocked`. Exit code 2 means essential information is missing or the request is blocked; do not treat that as a completed change.
+
+Read [docs/ARCHITECTURE-KERNEL.md](docs/ARCHITECTURE-KERNEL.md) for the exact input contract and limitations. The feature uses the Python standard library, makes no network/API requests, does not execute project code, and writes no files during planning.
+
 ## Quick start
 
 Requires Python 3.11+.
