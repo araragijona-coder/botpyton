@@ -67,6 +67,15 @@ python -m bot.main --architect-plan .cerebro/examples/architect-design-brief.jso
 
 Only selected brief fields and the local plan's high-level steps/questions are sent by default; the local project path and repository inventory are excluded. Any sensitive text pasted into brief fields can still be sent, so remove credentials and private source details before consent. To provide actual code evidence, choose up to four relative file paths under project_root, such as --architect-ai-context bot/queue.py --architect-ai-context tests/test_queue.py, and add --send-source-context. Without that second flag no source text is uploaded. Each file is capped at 16 KB, total source context at 40 KB, and the full request at 70 KB; common secret-like values and link/reparse paths are rejected, though the scanner cannot guarantee that every secret is detected. The model reply is advice for human review, not executable instructions. This does not make BOTPYTON an autonomous general-purpose programmer.
 
+## Phase 26: selected source context for the optional architecture adviser
+
+The adviser can now use actual code evidence rather than infer from the task description. Source text is still excluded by default. Choose no more than four exact paths under `project_root`, and add a separate consent flag:
+
+```powershell
+python -m bot.main --architect-ai .cerebro/examples/architect-design-brief.json --allow-external-ai --architect-ai-context bot/queue.py --architect-ai-context tests/test_queue.py --send-source-context
+```
+
+Each selected file is capped at 16 KB, all selected source at 40 KB, and the complete serialized request at 70 KB. The loader rejects traversal, symbolic/reparse links, unsupported extensions, generated/private folders, binary/non-UTF-8 content, and common secret patterns. This filter cannot guarantee every secret is detected; review the selected files yourself. The remote adviser still only returns advice, does not execute or write code, and is not a general-purpose autonomous programmer. See [Phase 26 research and constraints](docs/research/PHASE-26-EXPLICIT-SOURCE-CONTEXT.md).
 Sources: [OpenRouter free model router](https://openrouter.ai/openrouter/free) · [official pricing and limits](https://openrouter.ai/pricing).
 
 ## Quick start
