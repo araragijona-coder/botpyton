@@ -34,13 +34,6 @@ VAGUE_GOALS = (
     "fix it", "make it better", "improve it", "do it", "que funcione",
     "make it work", "arreglalo todo",
 )
-ERROR_HINTS = re.compile(
-    r"\b(error|exception|traceback|stack trace|falla|fallo|crash|se cierra|"
-    r"no funciona|no arranca|failing|failed|assertion|syntaxerror|"
-    r"modulenotfounderror|keyerror|timeout)\b",
-    re.IGNORECASE,
-)
-
 
 class ArchitectPlanError(ValueError):
     """Raised when an architecture brief is malformed or outside safe bounds."""
@@ -52,6 +45,8 @@ def _text(value: object, field: str, maximum: int, *, required: bool = False) ->
     if not isinstance(value, str):
         raise ArchitectPlanError(f"{field} must be a string")
     value = value.strip()
+    if not required and not value:
+        return None
     if required and not value:
         raise ArchitectPlanError(f"{field} must not be empty")
     if len(value) > maximum:
@@ -245,6 +240,7 @@ def build_architecture_plan(brief: object) -> dict[str, Any]:
     blocking_questions: list[dict[str, str]] = []
     recommended_questions: list[dict[str, str]] = []
     warnings: list[str] = []
+    inventory: dict[str, Any] | None = None
     vague = _is_vague(goal)
     if vague:
         blocking_questions.append({
