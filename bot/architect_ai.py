@@ -148,7 +148,7 @@ def _safe_failure_report(report: object) -> dict[str, Any]:
         "candidate_static_verification_failed",
         "candidate_checks_failed",
     }
-    if status not in allowed_failures:
+    if not isinstance(status, str) or status not in allowed_failures:
         raise ArchitectAIError(
             "The failure report status is not a recognized failed patch-cycle result."
         )
@@ -247,6 +247,13 @@ def _safe_failure_report(report: object) -> dict[str, Any]:
                     if field in item:
                         value = text_field(item[field], f"verification.changed_files.{field}", limit)
                         if value:
+                            if field == "path" and (
+                                value.startswith("/") or "\\" in value or ":" in value
+                                or any(part in {"", ".", ".."} for part in value.split("/"))
+                            ):
+                                raise ArchitectAIError(
+                                    "Failure report contains a non-relative or unsafe verified file path."
+                                )
                             cleaned[field] = value
                 if isinstance(item.get("ok"), bool):
                     cleaned["ok"] = item["ok"]
