@@ -219,7 +219,7 @@ def request_architecture_advice(
             "commands_executed": False,
             "files_written": False,
             "human_review_required": True,
-            "brief_fields_sent": list(_ALLOWED_BRIEF_FIELDS),
+            "brief_fields_sent": list(context["brief"].keys()),
             "note": (
                 "Only selected brief fields and the local plan were sent. Values you put in "
                 "observed_error or available_evidence may still contain sensitive text; review "
