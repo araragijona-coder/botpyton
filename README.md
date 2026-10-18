@@ -39,6 +39,14 @@ Edit the JSON fields for the real task. Important fields include `goal`, `task_t
 
 Read [docs/ARCHITECTURE-KERNEL.md](docs/ARCHITECTURE-KERNEL.md) for the exact input contract and limitations. The feature uses the Python standard library, makes no network/API requests, does not execute project code, and writes no files during planning.
 
+## Phase 24: evidence-based recovery
+
+The diagnostic registry now covers common failure signatures across Python and initial patterns for Node/JavaScript, TypeScript, Go, Rust, Java, C#, and Git conflicts. It supplies diagnostic steps, a reversible experiment, a stop condition, and a documentation reference. A matched signature is only a lead; every report explicitly says the root cause is not yet confirmed.
+
+The recovery policy no longer automatically retries a known or unknown task failure with unchanged inputs and no new evidence. To continue, first fix the cause through an approved path, provide new evidence, or explicitly requeue after review. This avoids repeating deterministic syntax, JSON, type-contract, or missing-dependency failures without changing conditions.
+
+See [docs/research/PHASE-24-EVIDENCE-BASED-RECOVERY.md](docs/research/PHASE-24-EVIDENCE-BASED-RECOVERY.md). The registry runs locally and does not install tools, change permissions, or make network/API calls.
+
 ## Quick start
 
 Requires Python 3.11+.

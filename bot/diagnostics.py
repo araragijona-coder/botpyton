@@ -212,17 +212,34 @@ def diagnose_failure(
             **_conflict_evidence(base),
             "recommendation": "Resolve only identified conflict markers on an isolated branch; no merge was performed."
         })
+    if decision.strategy == "inspect_import_contract":
+        details.update({
+            **_dependency_evidence(base, log_text),
+            "recommendation": "Compare the imported symbol and package API/version; do not install or upgrade dependencies automatically.",
+        })
     if decision.category == "unknown":
         details["recommendation"] = (
             "No exact known-error rule matched. Preserve the complete log, inspect the bounded "
-            "traceback context, form one testable hypothesis, and run a small reversible experiment. "
+            "traceback context, form one testable hypothesis, and run a small reversible experiment "
+            "only when evidence can distinguish the cause; ask for missing evidence otherwise. "
             "No source edit or automatic retry was performed."
         )
+    details.update({
+        "knowledge_rule_id": decision.rule_id,
+        "diagnostic_steps": list(decision.diagnostic_steps),
+        "safe_experiment": decision.safe_experiment,
+        "stop_condition": decision.stop_condition,
+        "reference_url": decision.reference_url,
+        "root_cause_confirmed": False,
+        "automatic_retry_permitted": decision.retryable,
+    })
     return {
         "category": decision.category,
         "strategy": decision.strategy,
         "retryable": decision.retryable,
         "reason": decision.reason,
+        "automatic_retry_permitted": decision.retryable,
+        "requires_new_evidence_before_retry": not decision.retryable,
         "automatic_source_edit_applied": False,
         "details": details,
     }

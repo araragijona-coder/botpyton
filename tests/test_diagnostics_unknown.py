@@ -19,14 +19,17 @@ class UnknownDiagnosticsTests(unittest.TestCase):
                 "NameError: name 'missing' is not defined\n"
             )
             result = diagnose_failure(log, root)
-            self.assertEqual(result["category"], "unknown")
+            self.assertEqual(result["category"], "name_resolution")
+            self.assertEqual(result["strategy"], "inspect_identifier_scope")
+            self.assertFalse(result["retryable"])
             self.assertFalse(result["automatic_source_edit_applied"])
             self.assertEqual(result["details"]["error_type_guess"], "NameError")
             frame = result["details"]["traceback_frames"][0]
             self.assertEqual(frame["path"], "app.py")
             self.assertTrue(frame["source_read"])
             self.assertEqual(target.read_text(encoding="utf-8"), original)
-            self.assertIn("reversible experiment", result["details"]["recommendation"])
+            self.assertIn("Trace the identifier definition", result["details"]["safe_experiment"])
+            self.assertIn("Stop if multiple identifiers", result["details"]["stop_condition"])
             self.assertIn("identifier spelling", result["details"]["suggested_experiment"])
 
     def test_credential_like_values_are_redacted_from_diagnostics(self):
