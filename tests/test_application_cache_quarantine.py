@@ -3,6 +3,7 @@ import json
 import os
 import tempfile
 import unittest
+from unittest import mock
 from pathlib import Path
 
 from bot.application_cache import preview_application_cache
@@ -199,6 +200,57 @@ class ApplicationCacheQuarantineTests(unittest.TestCase):
             )
             self.assertEqual(restored["status"], "cache_restore_blocked")
             self.assertEqual(chosen.read_bytes(), b"new browser cache")
+
+    def test_restore_manifest_write_failure_can_be_reconciled_without_moving_again(self):
+        for failure_type in (OSError, ValueError):
+            with self.subTest(failure_type=failure_type.__name__), tempfile.TemporaryDirectory() as tmp:
+                _local, chosen, untouched, env = self._fixture(tmp, 1_700_000_000.0)
+                result = quarantine_application_cache_candidates(
+                    [str(chosen.resolve())], confirmation=CACHE_QUARANTINE_CONFIRMATION,
+                    env=env, windows=True,
+                )
+                self.assertEqual(result["status"], "cache_quarantined", result.get("note"))
+                manifest_path = Path(result["manifest_path"])
+                manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+                quarantined = Path(manifest["items"][0]["quarantine_path"])
+
+                # Simulate the file move succeeding while both manifest writes fail.
+                with mock.patch(
+                    "bot.application_cache_quarantine._atomic_write_manifest",
+                    side_effect=failure_type("injected manifest persistence failure"),
+                ):
+                    interrupted = restore_application_cache_quarantine(
+                        manifest_path, confirmation=CACHE_RESTORE_CONFIRMATION,
+                        env=env, windows=True,
+                    )
+
+                self.assertEqual(interrupted["status"], "cache_restore_partial")
+                self.assertEqual(interrupted["files_restored"], 1)
+                self.assertEqual(interrupted["files_reconciled"], 0)
+                self.assertEqual(chosen.read_bytes(), b"selected cache")
+                self.assertTrue(untouched.is_file())
+                self.assertFalse(quarantined.exists())
+
+                stale = json.loads(manifest_path.read_text(encoding="utf-8"))
+                self.assertIn(stale["items"][0]["state"], {"moved", "pending"})
+                preview = preview_application_cache_restore(manifest_path, env=env, windows=True)
+                self.assertEqual(preview["status"], "restore_preview_reconcile_available")
+                self.assertEqual(preview["ready_count"], 0)
+                self.assertEqual(preview["reconcile_count"], 1)
+                self.assertEqual(preview["items"][0]["status"], "reconcile_manifest_state")
+
+                reconciled = restore_application_cache_quarantine(
+                    manifest_path, confirmation=CACHE_RESTORE_CONFIRMATION,
+                    env=env, windows=True,
+                )
+                self.assertEqual(reconciled["status"], "cache_restore_reconciled")
+                self.assertEqual(reconciled["files_restored"], 0)
+                self.assertEqual(reconciled["files_reconciled"], 1)
+                self.assertEqual(chosen.read_bytes(), b"selected cache")
+                self.assertFalse(quarantined.exists())
+                durable = json.loads(manifest_path.read_text(encoding="utf-8"))
+                self.assertEqual(durable["items"][0]["state"], "restored")
+                self.assertEqual(durable["status"], "complete")
 
     def test_manifest_tampering_fails_closed(self):
         with tempfile.TemporaryDirectory() as tmp:

@@ -235,10 +235,18 @@ python -m bot.main --pc-cleanup-restore "C:\\path\\to\\BOTPYTON\\Quarantine\\ses
 - Adds a unit assertion for the sixth operation and a Windows smoke assertion that the emitted benchmark includes `desktop_app_cache_preview`. Non-Windows test mode must explicitly label the desktop preview unsupported rather than scanning.
 - This improves measurement coverage but is not a measurement of the user's Ryzen 5 5600G. Target-PC RAM/CPU/timing checks and any comparison with CCleaner remain pending.
 
-## Phase 34 — bounded browser-cache restore manifest
+## Restore manifest input limits (2026-10-18)
 
 - The restore path reads the manifest as bounded binary input (256 KiB maximum plus one detection byte), rather than trusting a prior stat() followed by an unbounded text read.
 - It checks that the manifest remains a regular, non-reparse file and compares the opened file identity and size against metadata before and after reading; detected growth or modification blocks restore.
 - It caps decoded JSON nesting at 64 levels and fails closed on invalid UTF-8, invalid JSON, or decoder recursion errors.
 - Regression tests simulate the manifest growing after the initial metadata check and a validly checksummed JSON document with excessive nesting. In both cases the verified cache file must remain in quarantine.
 - This protects the restore preview from unbounded manifest input; it is not a complete elimination of every filesystem TOCTOU race. SHA-256 remains an integrity check rather than a digital signature.
+
+## Phase 35 — Restore manifest reconciliation after persistence failure
+
+- Covers the crash/error window where the verified file move succeeds but the next manifest write fails.
+- Restore reports moved files even when manifest serialization or persistence raises either `OSError` or `ValueError`; counters distinguish file movement from metadata-only reconciliation.
+- The read-only preview offers reconciliation only if the quarantine path is absent, the original path remains inside a recognized cache root with no linked/reparse parent, and the original file passes bounded regular-file checks plus the recorded size and SHA-256 comparison.
+- A second explicit restore confirmation revalidates these conditions and updates only manifest state; it does not copy, move, replace or overwrite a file. The report warns that matching bytes do not establish which process placed them there.
+- Added regression coverage for injected write failures of both exception types and verified the subsequent reconciliation path. Linux and Windows CI must pass before merging.
