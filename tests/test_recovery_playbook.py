@@ -50,6 +50,20 @@ class RecoveryPlaybookTests(unittest.TestCase):
         self.assertEqual(decision.rule_id, "GO-MODULE")
         self.assertEqual(decision.strategy, "resolve_go_module")
 
+    def test_specific_language_codes_beat_generic_wrapper_messages(self):
+        syntax = classify_failure(
+            "ImportError: Failed to import test module: test_broken\n"
+            "Original traceback: SyntaxError: expected ':'",
+        )
+        self.assertEqual(syntax.rule_id, "PY-SYNTAX")
+        self.assertEqual(syntax.strategy, "inspect_syntax_location")
+
+        typescript = classify_failure(
+            "error TS2307: Cannot find module './x' or its corresponding type declarations",
+        )
+        self.assertEqual(typescript.rule_id, "TYPESCRIPT-MODULE")
+        self.assertEqual(typescript.strategy, "resolve_typescript_module")
+
     def test_unknown_failure_requests_evidence_and_stops(self):
         decision = classify_failure("unrecognized compiler crash", attempt=1, max_attempts=3)
         self.assertEqual(decision.category, "unknown")
