@@ -7,6 +7,7 @@ from pathlib import Path
 
 from bot.application_cache import preview_application_cache
 from bot.application_cache_quarantine import (
+    _canonical_digest,
     MAX_CACHE_MANIFEST_BYTES,
     CACHE_QUARANTINE_CONFIRMATION,
     CACHE_RESTORE_CONFIRMATION,
@@ -304,6 +305,38 @@ class ApplicationCacheQuarantineTests(unittest.TestCase):
                 quarantined.is_file(),
                 "invalid/growing manifests must not move the quarantined file",
             )
+
+
+    def test_manifest_rejects_excessive_json_nesting_without_restoring(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            _local, chosen, _untouched, env = self._fixture(tmp, 1_700_000_000.0)
+            result = quarantine_application_cache_candidates(
+                [str(chosen.resolve())],
+                confirmation=CACHE_QUARANTINE_CONFIRMATION,
+                env=env,
+                windows=True,
+            )
+            self.assertEqual(result["status"], "cache_quarantined")
+            manifest_path = Path(result["manifest_path"])
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            quarantined = Path(manifest["items"][0]["quarantine_path"])
+            nested = "bounded"
+            for _ in range(80):
+                nested = [nested]
+            manifest["test_depth_probe"] = nested
+            manifest["manifest_sha256"] = _canonical_digest(manifest)
+            manifest_path.write_text(
+                json.dumps(manifest, ensure_ascii=False, sort_keys=True) + "\\n",
+                encoding="utf-8",
+            )
+
+            preview = preview_application_cache_restore(
+                manifest_path, env=env, windows=True
+            )
+            self.assertEqual(preview["status"], "cache_manifest_invalid")
+            self.assertEqual(preview["ready_count"], 0)
+            self.assertTrue(quarantined.is_file())
+            self.assertFalse(chosen.exists())
 
 
 if __name__ == "__main__":
