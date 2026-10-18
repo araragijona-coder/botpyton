@@ -44,7 +44,6 @@ from .policy import PolicyError, validate_task, validate_relative_path
 from .queue import QueueError, TaskQueue
 from .verifier import verify_python_files
 from .workspace import WorkspaceError, create_isolated_workspace, inspect_workspace
-from .patch_cycle import PatchCycleError, apply_reviewed_patch
 
 
 def _print_json(value: object) -> None:
@@ -263,6 +262,8 @@ def main(argv: list[str] | None = None) -> int:
             _print_json(result)
             return 0 if result["decision"] == "ready_to_plan" else 2
         if args.apply_reviewed_patch:
+            # Keep the optional patch engine unloaded during normal BOTPYTON startup.
+            from .patch_cycle import PatchCycleError, apply_reviewed_patch
             if not args.patch_task_id:
                 raise PatchCycleError("--apply-reviewed-patch requires --patch-task-id TASK_ID")
             if args.execute_project_code and not args.patch_check:
@@ -595,7 +596,7 @@ def main(argv: list[str] | None = None) -> int:
         parser.print_help()
         return 0
     except (OSError, UnicodeError, json.JSONDecodeError, PolicyError, MemoryError,
-            QueueError, CheckpointError, GitHubOpsError, AutonomousCycleError, ProcessRunnerError, LocalChangeError, ProjectCheckError, PatchCycleError, ValueError, EOFError) as exc:
+            QueueError, CheckpointError, GitHubOpsError, AutonomousCycleError, ProcessRunnerError, LocalChangeError, ProjectCheckError, ValueError, EOFError) as exc:
         print(f"CHECK FAIL: {exc}", file=sys.stderr)
         return 2
 
