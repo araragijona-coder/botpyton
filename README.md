@@ -524,3 +524,19 @@ External maintenance notes used as analogues (not claimed as the same bugs):
 - Microsoft documents that Windows move APIs return a failure result and expose extended error information; BOTPYTON therefore treats a failed persistence/move as an explicit outcome rather than assuming a requested operation completed: https://learn.microsoft.com/en-us/windows/win32/api/winbase/nf-winbase-movefileexa
 
 Validation target: Linux foundation test suite and Windows low-memory smoke suite must both pass on the PR before merge, then be rechecked on `main`. No user PC or personal files are tested; all regressions use isolated temporary directories.
+
+
+## Phase 38 — safer initial quarantine when manifest writes fail
+
+The general temporary-file quarantine had unguarded manifest writes on several branches (file changed before move, unsafe destination, and a failed move), and the post-move guard caught only `OSError`. If disk space ran out, permissions changed, or manifest validation raised `ValueError`, the function could raise without an accurate operation report or continue with a stale persisted state. It also left the top-level manifest status at `in_progress` after the operation ended.
+
+The correction catches `OSError` and `ValueError` at each persistence boundary, records the failure type, stops later file moves immediately, preserves truthful move counts, and attempts one final partial-state publication. It now persists a terminal `completed` or `partial` manifest status when possible. If the initial manifest cannot be persisted, no files have been moved: the function returns an explicit failure and removes only an empty newly created session directory (never a tree). If the start-audit event cannot be saved, it marks the session as `not_started` when possible and makes no file changes.
+
+Regression tests simulate a disk-full error before the first move, a `ValueError` after the first move, and access denial while persisting a skipped item. They verify original bytes, accurate moved counts, no later moves after the persistence failure, and a readable partial manifest with a restore candidate for the file already moved.
+
+External maintenance context (related patterns, not a claim of identical upstream defects):
+- [CCleaner Version History](https://www.ccleaner.com/ccleaner/version-history/): v7.12.1526 (29 Sep 2026) documents a file-write security fix and a shutdown timing fix; v7.11.1504 improves Duplicate Finder reports so it identifies which files could not be deleted rather than showing a generic error.
+- [BleachBit 6.0.6](https://www.bleachbit.org/news/bleachbit-606), published 17 Oct 2026, lists file-cleaning reliability fixes and fixes for processing multiple paths when a supplied wipe path fails.
+- [Python `os.replace` / `os.rename` documentation](https://docs.python.org/3/library/os.html#os.replace) explains that atomicity applies to the individual rename/replace operation; it does not make a separate file movement and manifest update a single transaction.
+
+The relevant acceptance gate is green Linux foundation tests and Windows low-memory smoke before merge, followed by both checks on `main`. Tests use isolated temporary files only; no personal PC files are moved.
