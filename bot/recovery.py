@@ -205,7 +205,7 @@ KNOWN_RULES = (
         "https://docs.python.org/3/library/exceptions.html",
     ),
     FailureRule(
-        "NODE-MODULE", ("ERR_MODULE_NOT_FOUND", "Cannot find module"),
+        "NODE-MODULE", ("ERR_MODULE_NOT_FOUND", "Cannot find module '", 'Cannot find module "'),
         "build_environment", "resolve_javascript_module",
         ("Identify the active Node version and package manager.",
          "Check import path, package.json exports, working directory, and lockfile.",
