@@ -348,3 +348,33 @@ Es un riesgo de concurrencia del diseño, no evidencia de que una tarea se haya 
 Este bloqueo coordina instancias de BOTPYTON que usan la misma ruta local de memoria y comparten un sistema de archivos que respeta los bloqueos asesorados. No convierte el JSON en una base de datos distribuida y no protege contra programas externos que deliberadamente ignoren el bloqueo lateral. No se agregan servicios en segundo plano, llamadas de red, dependencias externas ni borrado automático de historial.
 
 La fase queda sujeta a la suite general y a la prueba de Windows antes de integrarse en `main`.
+
+
+## Investigación — 2026-10-18: informes de mantenimiento como evidencia de reparación
+
+### Publicaciones oficiales revisadas
+
+- **BleachBit 6.0.6 (17 de octubre de 2026)** describe un defecto de Windows donde las preferencias podían dejar de guardarse después de ejecutar por primera vez como administrador; la corrección incluye reparar carpetas de configuración afectadas. También registra la pérdida de cambios en preferencias al salir mediante atajos de teclado, además de mejoras de inicio y escaneo. Fuente: https://www.bleachbit.org/news/bleachbit-606
+- **Python 3.14.8 (30 de septiembre de 2026)** registra decenas de correcciones y varias correcciones de seguridad, entre ellas problemas de agotamiento de memoria en la descompresión y validación de extracción de archivos. La lección aplicable es identificar la ruta de entrada concreta y probar el caso de borde que motivó el arreglo, no convertir el número de versión en una garantía genérica. Fuente: https://www.python.org/downloads/release/python-3148/
+- **pytest 9.1.1 (19 de junio de 2026)** registra arreglos para mensajes de coincidencia incorrectos y regresiones al parametrizar fixtures y cargar archivos `conftest.py`. Sirve como modelo para registrar síntoma, versión/condición de reproducción, causa confirmada y prueba de regresión. Fuente: https://pytest.org/en/stable/changelog.html
+- **GitHub Changelog (18 de mayo y 4 de junio de 2026)** documenta un flujo que permite pedir a Copilot que investigue un trabajo de Actions fallido, empuje una corrección a una rama y la deje para revisión. Esto muestra el valor operativo de pasar los logs de CI al siguiente intento; no significa que BOTPYTON use Copilot ni tenga las mismas capacidades. Fuentes: https://github.blog/changelog/2026-05-18-one-click-fixes-for-failing-actions-with-copilot-cloud-agent/ y https://github.blog/changelog/2026-06-04-fix-with-copilot-for-failing-actions-now-in-pro-pro-and-max/
+- La documentación de GitHub advierte que títulos, mensajes, nombres de ramas y otros datos de eventos son entradas no confiables si un workflow los interpreta como código. Fuentes: https://docs.github.com/en/actions/concepts/security/script-injections y https://docs.github.com/en/actions/reference/security/secure-use
+
+### Mejora implementada en BOTPYTON — Fase 28
+
+Los informes fallidos del ciclo de parches contienen evidencia importante (estado, pruebas de referencia/candidatas, salidas resumidas y diagnóstico), pero hasta ahora había que trasladarla manualmente al siguiente pedido de asesoría. La nueva opción `--architect-ai-failure-report` permite seleccionar un informe guardado, mientras `--send-failure-report` exige un consentimiento separado antes de incluir evidencia de pruebas en la solicitud remota.
+
+La preparación del informe:
+
+- permite únicamente estados de fallo conocidos del ciclo de parches;
+- copia una lista limitada de campos, no todos los campos JSON de entrada;
+- omite las rutas absolutas de los worktrees y los campos arbitrarios;
+- limita el tamaño total, la cantidad de archivos y los fragmentos de salida;
+- rechaza valores que coinciden con patrones comunes de credenciales antes de enviar la solicitud;
+- marca los logs como datos no confiables y exige distinguir observaciones de hipótesis.
+
+La selección de fuentes y el informe de fallos siguen siendo consentimientos independientes. El asesor continúa sin ejecutar comandos ni modificar el proyecto. La revisión humana, la aplicación aislada, el control de sintaxis y las pruebas de proyecto siguen siendo pasos separados; no se añade un bucle automático de reintentos.
+
+### Verificación de la Fase 28
+
+Las pruebas de regresión deben demostrar que (1) un informe sin consentimiento no activa la red, (2) el informe enviado excluye rutas locales y campos arbitrarios, (3) los patrones de secretos bloquean la solicitud, y (4) el comando CLI requiere la bandera de consentimiento específica. La integración solo se considera verificada tras ejecutar las suites Linux y Windows del repositorio.

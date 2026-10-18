@@ -469,3 +469,18 @@ The current feature gap against CCleaner is documented in [`docs/CCLEANER-PARITY
 ## Phase 27 — Read-only startup target advisor
 
 Run `python -m bot.main --pc-startup-advisor` or select **W** in `BOTPYTON.bat`. The advisor reads Windows Run/RunOnce entries and startup-folder items, extracts only a recognized executable/script target, checks whether that target exists, and never returns registry command arguments. It does not disable entries, launch commands, measure actual boot impact, or label a program unnecessary. Results can include local paths; inspect them before sharing.
+
+
+## Phase 28: evidence-guided repair feedback
+
+When a reviewed patch fails in Phase 27, BOTPYTON can now give the optional architecture adviser the **sanitized failure evidence** from that patch cycle. This reduces the need to manually summarize the failing test and helps the adviser revise its hypothesis. It is still advice, not an autonomous retry loop.
+
+Save the complete JSON output from a failed `--apply-reviewed-patch` run as `repair-result.json`. Review the exact files and report first, then provide the same explicitly selected source context used for the patch proposal:
+
+```powershell
+python -m bot.main --architect-ai .cerebro/examples/architect-design-brief.json --allow-external-ai --architect-ai-context src/parser.py --architect-ai-context tests/test_parser.py --send-source-context --architect-ai-failure-report repair-result.json --send-failure-report
+```
+
+The separate `--send-failure-report` flag is required in addition to `--allow-external-ai`; source contents still require the independent `--send-source-context` flag. The report is field-filtered and size-limited, absolute workspace paths and arbitrary JSON fields are excluded, and common secret patterns are rejected before any request. The scanner cannot guarantee that every secret is detected, so inspect the report before consenting. See [Phase 28 repair feedback](docs/ARCHITECT-REPAIR-FEEDBACK.md).
+
+BOTPYTON does not apply the suggested revision automatically. Review and save the new diff, then run the Phase 27 isolated patch cycle again. If evidence is ambiguous, ask for clarification rather than repeating an unchanged patch.
