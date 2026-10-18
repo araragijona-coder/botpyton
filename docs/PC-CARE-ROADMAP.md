@@ -269,3 +269,15 @@ python -m bot.main --pc-cleanup-restore "C:\\path\\to\\BOTPYTON\\Quarantine\\ses
 - Added regression tests for post-move/final manifest write failures, subsequent reconciliation, and temporary staging cleanup.
 - External references: BleachBit 6.0.6 maintenance notes; CCleaner v7.12/v7.11 release notes; Microsoft `MoveFileEx` error semantics. These are reliability analogues, not claims of identical defects.
 - Required gate: Linux foundation tests and Windows low-memory smoke pass before merge and post-merge.
+
+
+## Phase 38 — quarantine persistence failures
+
+- Catch both `OSError` and `ValueError` for manifest writes after skipped items, failed moves, and successful moves.
+- Stop all later candidate moves after a manifest publication failure; accurately report files already quarantined.
+- Save the session's terminal `completed` or `partial` state when possible instead of leaving `in_progress` after the run ends.
+- If the initial manifest cannot be saved, report failure before any move and remove only the empty session directory.
+- If the audit start event fails, do not move files and persist `not_started` when possible.
+- Add regressions for initial disk-full, post-move validation failure, and access-denied state persistence failures.
+- Reference notes: official CCleaner v7.12/v7.11 release notes, BleachBit 6.0.6 notes, and Python `os.replace` documentation. These provide analogous reliability practices, not evidence of identical upstream bugs.
+- Required gate: Linux foundation tests and Windows low-memory smoke pass before merge and post-merge.

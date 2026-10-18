@@ -485,3 +485,21 @@ La fase reduce la exposición a crecimiento concurrente y datos JSON patológico
 - Microsoft documents that `MoveFileEx` returns success/failure and requires `GetLastError` for extended details. BOTPYTON similarly distinguishes a completed move from failed persistence and does not treat the intended operation as successful merely because it was attempted: https://learn.microsoft.com/en-us/windows/win32/api/winbase/nf-winbase-movefileexa
 
 **Safety scope:** tests use temporary fixtures only. This does not modify the user's PC. Merge is gated on both Linux foundation tests and Windows low-memory smoke passing; post-merge checks must be green too.
+
+
+## Phase 38 — initial temporary-file quarantine when manifest writes fail
+
+**Base:** `790b6c43bd164ddb86a030011eabc60b67ef7e49` (Phase 37 on `main`).
+
+**Finding:** In `quarantine_cleanup_candidates()`, manifest writes on the `skipped_changed_before_move`, `skipped_quarantine_path_unsafe`, and `move_failed` branches were unguarded; the post-move branch caught only `OSError`. A manifest `ValueError` or a storage/permission error could escape with no useful result or leave the session-wide status at `in_progress`. No terminal session status was saved on the successful path either, reducing clarity for later restore previews.
+
+**Correction:** catch both `OSError` and `ValueError` around every manifest publication after session creation; once persistence fails, stop moving later candidates. Compute `files_quarantined` from actual item state and filesystem evidence, set global state to `completed` or `partial` when that final write succeeds, and return `manifest_write_failed` with the failing exception type when any persistence step fails. If the first manifest write fails, no source has moved; report every selected file as blocked and remove only the empty session directory if the manifest is absent. If the audit-start record is unavailable, do not move files and mark the manifest `not_started` if that update can be saved.
+
+**Tests:** initial manifest raises a simulated disk-full `OSError`; one test injects `ValueError` after the first successful move and validates exact byte content, one quarantined file, the second file untouched, and one recoverable restore candidate; another injects `OSError` while persisting a skipped-changed-before-move state and proves the later valid candidate is not moved.
+
+**External maintenance analogues:**
+- [CCleaner Version History](https://www.ccleaner.com/ccleaner/version-history/): v7.12.1526 (29 Sep 2026) reports a file-write security issue and a shutdown race with background tasks; v7.11.1504 changed Duplicate Finder results to identify files that could not be deleted rather than giving only a generic error.
+- [BleachBit 6.0.6](https://www.bleachbit.org/news/bleachbit-606), published 17 Oct 2026, documents file-cleaning reliability work, including a fix around processing multiple paths if one supplied wipe path fails.
+- [Python os.replace/os.rename documentation](https://docs.python.org/3/library/os.html#os.replace) makes clear that the atomicity applies to one rename/replace action, not to the distinct file move plus manifest update as a combined transaction.
+
+These sources motivate accurate failure reporting and recovery state; they do not mean any upstream project had this identical BOTPYTON bug. Merge only with Linux and Windows CI passing before and after merge. No real user files are modified by these tests.
