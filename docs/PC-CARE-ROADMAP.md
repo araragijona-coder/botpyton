@@ -234,3 +234,11 @@ python -m bot.main --pc-cleanup-restore "C:\\path\\to\\BOTPYTON\\Quarantine\\ses
 - The operation report records its status, candidate count, entries examined, wall time, and CPU time alongside the existing benchmark steps. Before/after process RSS remains a process-level snapshot/high-water mark, not a peak uniquely attributed to this operation.
 - Adds a unit assertion for the sixth operation and a Windows smoke assertion that the emitted benchmark includes `desktop_app_cache_preview`. Non-Windows test mode must explicitly label the desktop preview unsupported rather than scanning.
 - This improves measurement coverage but is not a measurement of the user's Ryzen 5 5600G. Target-PC RAM/CPU/timing checks and any comparison with CCleaner remain pending.
+
+## Phase 34 — bounded browser-cache restore manifest
+
+- The restore path reads the manifest as bounded binary input (256 KiB maximum plus one detection byte), rather than trusting a prior stat() followed by an unbounded text read.
+- It checks that the manifest remains a regular, non-reparse file and compares the opened file identity and size against metadata before and after reading; detected growth or modification blocks restore.
+- It caps decoded JSON nesting at 64 levels and fails closed on invalid UTF-8, invalid JSON, or decoder recursion errors.
+- Regression tests simulate the manifest growing after the initial metadata check and a validly checksummed JSON document with excessive nesting. In both cases the verified cache file must remain in quarantine.
+- This protects the restore preview from unbounded manifest input; it is not a complete elimination of every filesystem TOCTOU race. SHA-256 remains an integrity check rather than a digital signature.
