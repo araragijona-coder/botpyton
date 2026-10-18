@@ -220,6 +220,8 @@ def _read_bounded_manifest(path: Path) -> dict[str, Any]:
 
         if len(raw) > MAX_CACHE_MANIFEST_BYTES or after_open.st_size > MAX_CACHE_MANIFEST_BYTES:
             raise ValueError("Quarantine manifest exceeds the approved size limit.")
+        if after_open.st_mtime_ns != opened.st_mtime_ns:
+            raise ValueError("Quarantine manifest changed while its contents were being read.")
         opened_signature = (opened.st_dev, opened.st_ino, opened.st_size)
         after_open_signature = (after_open.st_dev, after_open.st_ino, after_open.st_size)
         after_path = path.stat(follow_symlinks=False)
