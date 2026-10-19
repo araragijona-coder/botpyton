@@ -9,7 +9,7 @@
 
 ## Implemented
 
-- Add a Windows directory-chain lease that opens each existing directory component with FILE_FLAG_OPEN_REPARSE_POINT and FILE_FLAG_BACKUP_SEMANTICS, verifies directory/reparse attributes plus volume/file-index identity, and deliberately omits FILE_SHARE_DELETE while the operation is active.
+- Add a Windows directory-chain lease that opens each existing directory component with FILE_FLAG_OPEN_REPARSE_POINT and FILE_FLAG_BACKUP_SEMANTICS, verifies directory/reparse attributes, file-index identity when the filesystem provides it, and path-chain identity, and deliberately omits FILE_SHARE_DELETE while the operation is active.
 - Use that lease during directory enumeration and file staging/publication. If a path changes before the lease is acquired, a component is a reparse point, native identity verification fails, or a Windows handle cannot be safely opened, fail closed.
 - Check directory-chain identity after a listing and refuse to return data if the listed path was substituted while scanning.
 - Verify staged writes by regular-file status, size, and SHA-256; after publication, read the target within its configured byte limit and verify its SHA-256 again.
