@@ -9,7 +9,7 @@ from unittest.mock import patch
 
 from bot.local_agent import (
     LocalAgent, LocalAgentError, load_local_agent_config,
-    _directory_chain_lease, _path_chain_signature,
+    _directory_chain_lease, _path_chain_signature, _publish_staged_file,
 )
 
 
@@ -209,6 +209,26 @@ class LocalAgentTests(unittest.TestCase):
         self.assertEqual(status["event_count"], 1)
         record = json.loads(self.audit_path.read_text(encoding="utf-8"))
         self.assertEqual(record["outcome"], "denied")
+
+    @unittest.skipIf(os.name == "nt", "dir_fd publication is the POSIX implementation")
+    def test_atomic_publication_stays_anchored_to_open_parent_directory(self):
+        parent = self.project / "parent"
+        moved = self.project / "moved-parent"
+        parent.mkdir()
+        target = parent / "published.txt"
+        staged = parent / ".published.txt.stage"
+        staged.write_bytes(b"complete payload")
+        flags = __import__("os").O_RDONLY | getattr(__import__("os"), "O_DIRECTORY", 0)
+        parent_fd = __import__("os").open(parent, flags)
+        try:
+            # Simulate a directory path being replaced after its descriptor was opened.
+            parent.rename(moved)
+            parent.mkdir()
+            _publish_staged_file(staged, target, parent_fd, replace_existing=False)
+            self.assertEqual((moved / "published.txt").read_bytes(), b"complete payload")
+            self.assertFalse((parent / "published.txt").exists())
+        finally:
+            __import__("os").close(parent_fd)
 
     def test_new_file_write_is_exclusive_and_audited(self):
         result = self.agent().write_file("project", "new.py", "VALUE = 2\n")
