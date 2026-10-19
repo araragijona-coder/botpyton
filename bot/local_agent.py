@@ -417,7 +417,7 @@ def _publish_staged_file(
             handle, file_rename_info_class, ctypes.byref(rename), ctypes.sizeof(rename)
         ):
             error = ctypes.get_last_error()
-            raise LocalAgentError(f"Handle-relative atomic publication failed: WinError {error}")
+            raise LocalAgentError(f"Native atomic publication failed: WinError {error}")
     finally:
         kernel32.CloseHandle(handle)
 
