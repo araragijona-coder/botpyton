@@ -5,6 +5,7 @@ import hashlib
 import json
 import os
 import re
+import secrets
 import stat
 import tempfile
 from contextlib import contextmanager
@@ -142,9 +143,27 @@ def _directory_chain_lease(
         raise LocalAgentError(f"{label} path changed before its directory lease; access blocked")
 
     if os.name != "nt":
+        flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
+        flags |= getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_CLOEXEC", 0)
+        descriptor: int | None = None
         try:
-            yield
+            descriptor = os.open(target, flags)
+            opened = os.fstat(descriptor)
+            last = initial[-1]
+            if (
+                not stat.S_ISDIR(opened.st_mode)
+                or (opened.st_dev, opened.st_ino, stat.S_IFMT(opened.st_mode))
+                != (last[1], last[2], last[3])
+            ):
+                raise LocalAgentError(f"{label} directory identity changed while opening")
+            yield descriptor
+        except LocalAgentError:
+            raise
+        except OSError as exc:
+            raise LocalAgentError(f"{label} directory handle could not be safely acquired") from exc
         finally:
+            if descriptor is not None:
+                os.close(descriptor)
             _assert_path_chain_unchanged(target, initial, label)
         return
 
@@ -240,7 +259,7 @@ def _directory_chain_lease(
 
         if _path_chain_signature(target, label) != initial:
             raise LocalAgentError(f"{label} path changed while directory handles were acquired")
-        yield
+        yield handles[-1]
         _assert_path_chain_unchanged(target, initial, label)
     except LocalAgentError:
         raise
@@ -249,6 +268,153 @@ def _directory_chain_lease(
     finally:
         for handle in reversed(handles):
             kernel32.CloseHandle(handle)
+
+
+
+def _create_staged_file(parent: Path, target_name: str, parent_handle: Any) -> tuple[int, Path]:
+    """Create a unique same-directory staging file, directory-relative on POSIX."""
+    if os.name == "nt":
+        descriptor, name = tempfile.mkstemp(
+            prefix=f".{target_name}.", suffix=".botpyton-agent-tmp", dir=parent
+        )
+        return descriptor, Path(name)
+
+    flags = os.O_RDWR | os.O_CREAT | os.O_EXCL
+    flags |= getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_CLOEXEC", 0)
+    flags |= getattr(os, "O_BINARY", 0)
+    for _ in range(8):
+        name = f".{target_name}.{secrets.token_hex(12)}.botpyton-agent-tmp"
+        try:
+            descriptor = os.open(name, flags, 0o600, dir_fd=parent_handle)
+        except FileExistsError:
+            continue
+        return descriptor, parent / name
+    raise LocalAgentError("Could not allocate a unique staged file name")
+
+
+def _publish_staged_file(
+    temporary: Path,
+    target: Path,
+    parent_handle: Any,
+    *,
+    replace_existing: bool,
+) -> None:
+    """Atomically publish relative to an already-validated parent directory.
+
+    POSIX uses dir_fd-relative rename/link operations, avoiding a second
+    resolution of ancestor path names. Windows renames the staged file handle
+    with FILE_RENAME_INFO rooted at the open parent-directory handle.
+    """
+    if os.name != "nt":
+        if not isinstance(parent_handle, int):
+            raise LocalAgentError("Parent directory descriptor is missing; publication blocked")
+        try:
+            if replace_existing:
+                os.replace(
+                    temporary.name, target.name,
+                    src_dir_fd=parent_handle, dst_dir_fd=parent_handle,
+                )
+            else:
+                os.link(
+                    temporary.name, target.name,
+                    src_dir_fd=parent_handle, dst_dir_fd=parent_handle,
+                    follow_symlinks=False,
+                )
+                os.unlink(temporary.name, dir_fd=parent_handle)
+        except (OSError, NotImplementedError) as exc:
+            raise LocalAgentError(
+                f"Directory-relative atomic publication failed: {type(exc).__name__}"
+            ) from exc
+        return
+
+    import ctypes
+    from ctypes import wintypes
+
+    class _FileTime(ctypes.Structure):
+        _fields_ = [("low", wintypes.DWORD), ("high", wintypes.DWORD)]
+
+    class _ByHandleFileInformation(ctypes.Structure):
+        _fields_ = [
+            ("attributes", wintypes.DWORD),
+            ("creation_time", _FileTime),
+            ("last_access_time", _FileTime),
+            ("last_write_time", _FileTime),
+            ("size_high", wintypes.DWORD),
+            ("size_low", wintypes.DWORD),
+            ("volume_serial", wintypes.DWORD),
+            ("number_of_links", wintypes.DWORD),
+            ("file_index_high", wintypes.DWORD),
+            ("file_index_low", wintypes.DWORD),
+        ]
+
+    class _FileRenameInfo(ctypes.Structure):
+        _fields_ = [
+            ("flags", wintypes.DWORD),
+            ("root_directory", wintypes.HANDLE),
+            ("file_name_length", wintypes.DWORD),
+            ("file_name", wintypes.WCHAR * len(target.name)),
+        ]
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32.CreateFileW.argtypes = [
+        wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD, wintypes.LPVOID,
+        wintypes.DWORD, wintypes.DWORD, wintypes.HANDLE,
+    ]
+    kernel32.CreateFileW.restype = ctypes.c_void_p
+    kernel32.GetFileInformationByHandle.argtypes = [
+        ctypes.c_void_p, ctypes.POINTER(_ByHandleFileInformation),
+    ]
+    kernel32.GetFileInformationByHandle.restype = wintypes.BOOL
+    kernel32.SetFileInformationByHandle.argtypes = [
+        ctypes.c_void_p, wintypes.DWORD, wintypes.LPVOID, wintypes.DWORD,
+    ]
+    kernel32.SetFileInformationByHandle.restype = wintypes.BOOL
+    kernel32.CloseHandle.argtypes = [ctypes.c_void_p]
+    kernel32.CloseHandle.restype = wintypes.BOOL
+
+    delete_access = 0x00010000
+    file_read_attributes = 0x00000080
+    share_read_write_delete = 0x00000001 | 0x00000002 | 0x00000004
+    open_existing = 3
+    file_flag_open_reparse_point = 0x00200000
+    file_flag_sequential_scan = 0x08000000
+    file_attribute_directory = 0x00000010
+    file_attribute_reparse_point = 0x00000400
+    file_rename_info_class = 3
+    file_rename_flag_replace_if_exists = 0x00000001
+    invalid_handle = ctypes.c_void_p(-1).value
+
+    handle = kernel32.CreateFileW(
+        os.fspath(temporary), delete_access | file_read_attributes,
+        share_read_write_delete, None, open_existing,
+        file_flag_open_reparse_point | file_flag_sequential_scan, None,
+    )
+    if handle is None or handle == invalid_handle:
+        error = ctypes.get_last_error()
+        raise LocalAgentError(f"Could not open staged file handle: WinError {error}")
+
+    try:
+        info = _ByHandleFileInformation()
+        if not kernel32.GetFileInformationByHandle(handle, ctypes.byref(info)):
+            error = ctypes.get_last_error()
+            raise LocalAgentError(f"Could not inspect staged file handle: WinError {error}")
+        if info.attributes & file_attribute_reparse_point:
+            raise LocalAgentError("Staged file is a Windows reparse point; publication blocked")
+        if info.attributes & file_attribute_directory:
+            raise LocalAgentError("Staged write is a directory; publication blocked")
+
+        rename = _FileRenameInfo()
+        rename.flags = file_rename_flag_replace_if_exists if replace_existing else 0
+        rename.root_directory = parent_handle
+        rename.file_name_length = len(target.name.encode("utf-16-le"))
+        rename.file_name = target.name
+        if not kernel32.SetFileInformationByHandle(
+            handle, file_rename_info_class, ctypes.byref(rename), ctypes.sizeof(rename)
+        ):
+            error = ctypes.get_last_error()
+            raise LocalAgentError(f"Handle-relative atomic publication failed: WinError {error}")
+    finally:
+        kernel32.CloseHandle(handle)
 
 
 def _read_json_config(path: Path) -> Any:
