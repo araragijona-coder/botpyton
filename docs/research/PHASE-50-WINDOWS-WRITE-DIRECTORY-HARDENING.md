@@ -9,16 +9,16 @@
 
 ## Implemented
 
-- Add a Windows directory-chain lease that opens each existing directory component with FILE_FLAG_OPEN_REPARSE_POINT and FILE_FLAG_BACKUP_SEMANTICS, verifies directory/reparse attributes, file-index identity when the filesystem provides it, and path-chain identity, and deliberately omits FILE_SHARE_DELETE while the operation is active.
+- Add a Windows directory-chain handle guard that opens each existing directory component with FILE_FLAG_OPEN_REPARSE_POINT and FILE_FLAG_BACKUP_SEMANTICS, verifies directory/reparse attributes, file-index identity when the filesystem provides it, and path-chain identity, and deliberately omits FILE_SHARE_DELETE while the operation is active. This supports identity checking but is not a guaranteed rename lock.
 - Use that lease during directory enumeration and file staging/publication. If a path changes before the lease is acquired, a component is a reparse point, native identity verification fails, or a Windows handle cannot be safely opened, fail closed.
 - Check directory-chain identity after a listing and refuse to return data if the listed path was substituted while scanning.
 - Verify staged writes by regular-file status, size, and SHA-256; after publication, read the target within its configured byte limit and verify its SHA-256 again.
 - Preserve exclusive new-file publication, existing-target hash requirements, bounded I/O, root permissions, and audit events.
-- Add regressions for a directory replaced during listing, a write whose parent is replaced before acquiring the lease, and a Windows-only test that verifies the directory handle blocks rename while held.
+- Add regressions for a directory replaced during listing, a write whose parent is replaced before acquiring the lease, and a Windows-only test that exercises scoped file operations while the handle guard is active.
 
 ## Deliberate limitations
 
-- The directory lease constrains ordinary directory rename/reparse substitution while a Windows operation is active. It does not pin the target file leaf through replacement.
+- The directory handle guard verifies each component and checks path identity before/after an operation. Windows permits some rename patterns even when such handles are open, so this is race detection/defense in depth, not a kernel-enforced directory lease or handle-relative transaction. It does not pin the target file leaf through replacement.
 - Replacing an existing file still uses path-based atomic replacement after validating the target identity and expected hash. A hostile process may still race the target leaf between the final check and publication; replacing a file through a stable handle-relative transaction is not implemented here.
 - On non-Windows systems, path identity checks detect substitutions before/after the operation but do not hold kernel directory leases.
 - If post-publication verification or audit recording fails, the operation can return an error after the target has already changed. Inspect the target and audit log before retrying.
