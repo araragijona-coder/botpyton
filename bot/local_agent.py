@@ -229,7 +229,7 @@ def _directory_chain_lease(
             if (
                 int(info.volume_serial) != int(before.st_dev)
                 or native_index != int(before.st_ino)
-                or _signature(before) != _signature(after)
+                or (before.st_dev, before.st_ino, stat.S_IFMT(before.st_mode)) != (after.st_dev, after.st_ino, stat.S_IFMT(after.st_mode))
                 or _is_link_or_reparse(component)
             ):
                 raise LocalAgentError(f"{label} component changed while its directory handle was opened")
