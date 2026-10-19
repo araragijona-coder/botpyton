@@ -9,6 +9,7 @@ from bot.unknown_recovery import (
     MAX_LOG_BYTES,
     UnknownRecoveryError,
     investigate_failure,
+    _static_probes,
 )
 
 
@@ -132,6 +133,34 @@ class UnknownRecoveryTests(unittest.TestCase):
         second = investigate_failure(log, self.root, command="tool --safe", exit_code=9)
         for key in ("status", "category", "log_sha256", "static_evidence", "hypotheses", "missing_evidence"):
             self.assertEqual(first[key], second[key])
+
+    def test_static_scan_skips_candidate_removed_after_inventory(self):
+        source = self.root / "disappearing.py"
+        source.write_text("VALUE = 1\\n", encoding="utf-8")
+        scan = {
+            "entries_examined": 1,
+            "candidate_files": 1,
+            "scan_truncated": False,
+            "link_or_special_entries_skipped": 0,
+            "file_limit": 500,
+            "entry_limit": 5000,
+            "per_file_bytes_limit": 200_000,
+            "total_read_bytes_limit": 2 * 1024 * 1024,
+        }
+        original_lstat = Path.lstat
+
+        def disappear(path, *args, **kwargs):
+            if path == source:
+                raise FileNotFoundError("simulated concurrent removal")
+            return original_lstat(path, *args, **kwargs)
+
+        with patch("bot.unknown_recovery._project_files", return_value=([source], scan)):
+            with patch.object(Path, "lstat", new=disappear):
+                result = _static_probes(self.root)
+
+        self.assertEqual(result["python"]["files_checked"], 0)
+        self.assertEqual(result["python"]["syntax_errors"], [])
+        self.assertEqual(result["scan"]["files_skipped_for_budget"], 1)
 
 
 if __name__ == "__main__":

@@ -17,6 +17,7 @@ The existing recovery catalogue could classify known signatures and advise a hum
 1. Validate an existing project root and reject symbolic/reparse-point path components.
 2. Accept a UTF-8 log up to 64 KiB and record its SHA-256. Sanitize displayed log/context snippets for common credential patterns.
 3. Scan deterministically under hard limits: at most 5,000 directory entries, 500 candidate files, 200 KiB per file, and 2 MiB total bytes read. Skip generated/build/virtual-environment directories and symbolic/reparse entries.
+   Before static parsing, revalidate candidate identity and regular-file status. A file that disappears, becomes inaccessible, or changes into a link/reparse entry is skipped and counted instead of aborting the full investigation. A regression simulates removal after inventory.
 4. Run only static parsers: Python AST parse without import/execution; JSON decode; TOML parse for pyproject.toml. Detect explicit test-contract, timeout/resource, permission/lock, missing-module and external-connection signals from log text.
 5. Build a ranked hypothesis only when a concrete signal supports it. Each hypothesis includes evidence identifiers, one discriminating experiment, a condition that would refute it, and root_cause_confirmed=false.
 6. If no hypothesis has sufficient evidence, return needs_more_evidence and list required context. Invalid attempt budgets return blocked_attempt_limit. Automatic retry and source edit remain disabled.

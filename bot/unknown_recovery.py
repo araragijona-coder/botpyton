@@ -10,6 +10,7 @@ import hashlib
 import json
 import os
 import re
+import stat
 import sys
 import tomllib
 from pathlib import Path
@@ -171,12 +172,27 @@ def _static_probes(root: Path) -> dict[str, Any]:
         is_toml = path.name == "pyproject.toml"
         if (suffix not in SOURCE_SUFFIXES and suffix not in JSON_SUFFIXES and not is_toml):
             continue
-        if path.stat().st_size > MAX_FILE_BYTES:
-            files_skipped_for_budget += 1
-            continue
         try:
+            info = path.lstat()
+            if (
+                stat.S_ISLNK(info.st_mode)
+                or bool(getattr(info, "st_file_attributes", 0) & 0x400)
+                or not stat.S_ISREG(info.st_mode)
+            ):
+                files_skipped_for_budget += 1
+                continue
+            if info.st_size > MAX_FILE_BYTES:
+                files_skipped_for_budget += 1
+                continue
             raw = read_bounded_bytes(path, limit_bytes=MAX_FILE_BYTES, label="Investigation file")
-        except (OSError, BoundedReadError):
+            # The entry may have changed between inventory and read. Discard bytes
+            # if it became a symlink/reparse point or disappeared during the read.
+            if _is_link_or_reparse(path):
+                files_skipped_for_budget += 1
+                continue
+        except (OSError, BoundedReadError, ValueError):
+            # A concurrently removed, replaced, or inaccessible candidate is not
+            # reliable evidence; skip it and keep the partial-scan accounting.
             files_skipped_for_budget += 1
             continue
         if total_read + len(raw) > MAX_TOTAL_READ_BYTES:
