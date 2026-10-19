@@ -2,10 +2,14 @@ import hashlib
 import json
 import tempfile
 import unittest
+from contextlib import nullcontext
 from pathlib import Path
 from unittest.mock import patch
 
-from bot.local_agent import LocalAgent, LocalAgentError, load_local_agent_config
+from bot.local_agent import (
+    LocalAgent, LocalAgentError, load_local_agent_config,
+    _directory_chain_lease, _path_chain_signature,
+)
 
 
 class LocalAgentTests(unittest.TestCase):
@@ -95,6 +99,88 @@ class LocalAgentTests(unittest.TestCase):
                 original_nested.rename(nested)
         self.assertEqual(target.read_text(encoding="utf-8"), "authorized content")
         self.assertEqual((replacement / "source.txt").read_text(encoding="utf-8"), "substituted content")
+
+    def test_list_refuses_directory_identity_swap_during_scan(self):
+        nested = self.project / "nested"
+        replacement = self.project / "replacement"
+        original_nested = self.project / "nested-original"
+        nested.mkdir()
+        replacement.mkdir()
+        (nested / "authorized.txt").write_text("authorized", encoding="utf-8")
+        (replacement / "substituted.txt").write_text("substituted", encoding="utf-8")
+        real_scandir = __import__("os").scandir
+        swapped = False
+
+        def swap_directory_then_scan(path):
+            nonlocal swapped
+            if not swapped and Path(path) == nested:
+                nested.rename(original_nested)
+                replacement.rename(nested)
+                swapped = True
+            return real_scandir(path)
+
+        try:
+            # Disable the Windows lease only in this injected race test so the
+            # regression deterministically exercises the post-scan identity guard.
+            with patch("bot.local_agent._directory_chain_lease", side_effect=lambda *_a, **_k: nullcontext()):
+                with patch("bot.local_agent.os.scandir", side_effect=swap_directory_then_scan):
+                    with self.assertRaisesRegex(LocalAgentError, "path changed during operation"):
+                        self.agent().list_directory("project", "nested")
+            self.assertTrue(swapped, "test must replace the listed directory during scanning")
+        finally:
+            if nested.exists() and swapped:
+                nested.rename(replacement)
+            if original_nested.exists():
+                original_nested.rename(nested)
+        self.assertEqual({item.name for item in nested.iterdir()}, {"authorized.txt"})
+        self.assertEqual({item.name for item in replacement.iterdir()}, {"substituted.txt"})
+
+    def test_write_refuses_parent_replacement_before_staging(self):
+        nested = self.project / "nested"
+        replacement = self.project / "replacement"
+        original_nested = self.project / "nested-original"
+        nested.mkdir()
+        replacement.mkdir()
+        real_lease = _directory_chain_lease
+        swapped = False
+
+        def replace_parent_before_lease(path, expected_signature, label):
+            nonlocal swapped
+            if label == "Write parent" and not swapped:
+                nested.rename(original_nested)
+                replacement.rename(nested)
+                swapped = True
+            return real_lease(path, expected_signature, label)
+
+        try:
+            with patch("bot.local_agent._directory_chain_lease", side_effect=replace_parent_before_lease):
+                with self.assertRaisesRegex(LocalAgentError, "changed before its directory lease"):
+                    self.agent().write_file("project", "nested/new.py", "VALUE = 1\\n")
+            self.assertTrue(swapped, "test must replace the parent before a staged write")
+        finally:
+            if nested.exists() and swapped:
+                nested.rename(replacement)
+            if original_nested.exists():
+                original_nested.rename(nested)
+        self.assertFalse((nested / "new.py").exists())
+        self.assertFalse((replacement / "new.py").exists())
+
+    @unittest.skipUnless(os.name == "nt", "Directory handle share flags are Windows-specific")
+    def test_windows_directory_lease_blocks_rename_of_pinned_parent(self):
+        parent = self.project / "pinned"
+        moved = self.project / "moved"
+        parent.mkdir()
+        signature = _path_chain_signature(parent, "Write parent")
+        rename_blocked = False
+        with _directory_chain_lease(parent, signature, "Write parent"):
+            try:
+                parent.rename(moved)
+            except OSError:
+                rename_blocked = True
+            else:
+                # Restore the fixture before failing the assertion.
+                moved.rename(parent)
+        self.assertTrue(rename_blocked, "Windows directory handles must deny delete/rename sharing")
 
     def test_list_directory_is_single_level_and_skips_links(self):
         (self.project / "folder").mkdir()
