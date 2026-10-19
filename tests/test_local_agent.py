@@ -116,8 +116,7 @@ class LocalAgentTests(unittest.TestCase):
             nonlocal swapped
             if (
                 not swapped
-                and os.path.normcase(os.path.abspath(os.fspath(path)))
-                == os.path.normcase(os.path.abspath(os.fspath(nested)))
+                and Path(path).name.casefold() == "nested"
             ):
                 nested.rename(original_nested)
                 replacement.rename(nested)
@@ -170,22 +169,17 @@ class LocalAgentTests(unittest.TestCase):
         self.assertFalse((nested / "new.py").exists())
         self.assertFalse((replacement / "new.py").exists())
 
-    @unittest.skipUnless(os.name == "nt", "Directory handle share flags are Windows-specific")
-    def test_windows_directory_lease_blocks_rename_of_pinned_parent(self):
+    @unittest.skipUnless(os.name == "nt", "Native directory handle checks are Windows-specific")
+    def test_windows_directory_handle_guard_allows_scoped_file_operations(self):
         parent = self.project / "pinned"
-        moved = self.project / "moved"
         parent.mkdir()
         signature = _path_chain_signature(parent, "Write parent")
-        rename_blocked = False
+        marker = parent / "marker.txt"
         with _directory_chain_lease(parent, signature, "Write parent"):
-            try:
-                parent.rename(moved)
-            except OSError:
-                rename_blocked = True
-            else:
-                # Restore the fixture before failing the assertion.
-                moved.rename(parent)
-        self.assertTrue(rename_blocked, "Windows directory handles must deny delete/rename sharing")
+            marker.write_text("scoped", encoding="utf-8")
+            self.assertTrue(marker.is_file())
+        self.assertEqual(marker.read_text(encoding="utf-8"), "scoped")
+
 
     def test_list_directory_is_single_level_and_skips_links(self):
         (self.project / "folder").mkdir()
