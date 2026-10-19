@@ -964,8 +964,9 @@ class LocalAgent:
             current_hash = None
 
         temporary: str | None = None
+        parent_handle: Any = None
         try:
-            with _directory_chain_lease(parent, parent_signature, "Write parent"):
+            with _directory_chain_lease(parent, parent_signature, "Write parent") as parent_handle:
                 self._record("write", root_id, relative, "intent", f"sha256={_sha256(raw)}", len(raw))
                 # Revalidate path components and the file identity immediately before publish.
                 _reject_link_components(parent, "Write parent", allow_missing=False)
@@ -985,25 +986,29 @@ class LocalAgent:
                         raise LocalAgentError("Write target changed after authorization; no replacement was made")
                 elif target.exists():
                     raise LocalAgentError("A file appeared at the new destination; it was preserved")
-                descriptor, temporary = tempfile.mkstemp(
-                    prefix=f".{target.name}.", suffix=".botpyton-agent-tmp", dir=parent
-                )
-                with os.fdopen(descriptor, "wb") as stream:
+
+                descriptor, temporary_path = _create_staged_file(parent, target.name, parent_handle)
+                temporary = os.fspath(temporary_path)
+                with os.fdopen(descriptor, "w+b") as stream:
+                    opened = os.fstat(stream.fileno())
+                    if not stat.S_ISREG(opened.st_mode):
+                        raise LocalAgentError("Staged write handle is not a regular file")
                     stream.write(raw)
                     stream.flush()
                     os.fsync(stream.fileno())
+                    if opened.st_size > root["max_file_bytes"]:
+                        raise LocalAgentError("Staged write exceeded the configured file limit")
+                    stream.seek(0)
+                    staged_raw = stream.read(root["max_file_bytes"] + 1)
+                    if len(staged_raw) > root["max_file_bytes"] or _sha256(staged_raw) != _sha256(raw):
+                        raise LocalAgentError("Staged write content verification failed")
+
+                # Re-check the path before any path-based inspection; actual publication
+                # below is relative to the already-open parent directory.
+                _assert_path_chain_unchanged(parent, parent_signature, "Write parent")
                 staged = Path(temporary)
                 _reject_link_components(staged, "Staged write", allow_missing=False)
-                if not staged.is_file() or staged.stat().st_size != len(raw):
-                    raise LocalAgentError("Staged write failed regular-file or size verification")
-                if _sha256(read_bounded_bytes(
-                    staged, limit_bytes=root["max_file_bytes"], label="Staged write"
-                )) != _sha256(raw):
-                    raise LocalAgentError("Staged write content verification failed")
-                _assert_path_chain_unchanged(parent, parent_signature, "Write parent")
-                _reject_link_components(parent, "Write parent", allow_missing=False)
                 _reject_link_components(target, "Write target", allow_missing=True)
-                _assert_path_chain_unchanged(parent, parent_signature, "Write parent")
                 if exists:
                     _reject_link_components(target, "Write target", allow_missing=False)
                     if target_signature is None:
@@ -1013,15 +1018,13 @@ class LocalAgent:
                         target, limit_bytes=root["max_file_bytes"], label="Existing write target"
                     )) != current_hash:
                         raise LocalAgentError("Write target changed before publication; no replacement was made")
-                    _assert_path_chain_unchanged(parent, parent_signature, "Write parent")
                     _assert_path_chain_unchanged(target, target_signature, "Write target")
-                    os.replace(temporary, target)
-                    temporary = None
-                else:
-                    # Hard-link publication is exclusive: a competing destination is never overwritten.
-                    os.link(temporary, target)
-                    os.unlink(temporary)
-                    temporary = None
+
+                _assert_path_chain_unchanged(parent, parent_signature, "Write parent")
+                _publish_staged_file(
+                    staged, target, parent_handle, replace_existing=exists
+                )
+                temporary = None
 
                 _assert_path_chain_unchanged(parent, parent_signature, "Write parent")
                 _reject_link_components(target, "Published write", allow_missing=False)
@@ -1049,8 +1052,11 @@ class LocalAgent:
                 raise
             raise LocalAgentError(f"File write failed: {type(exc).__name__}") from exc
         finally:
-            if temporary and os.path.exists(temporary):
+            if temporary:
                 try:
-                    os.unlink(temporary)
+                    if os.name != "nt" and isinstance(parent_handle, int):
+                        os.unlink(Path(temporary).name, dir_fd=parent_handle)
+                    elif os.path.exists(temporary):
+                        os.unlink(temporary)
                 except OSError:
                     pass
