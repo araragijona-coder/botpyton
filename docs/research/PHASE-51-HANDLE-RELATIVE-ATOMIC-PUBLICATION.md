@@ -14,7 +14,7 @@
 - POSIX publication is relative to the open directory descriptor: os.replace(..., src_dir_fd=..., dst_dir_fd=...) for replacement, or os.link(..., src_dir_fd=..., dst_dir_fd=...) followed by relative unlink for exclusive creation.
 - Windows opens the staged file handle with DELETE access, rejects reparse-point/directory sources, and uses SetFileInformationByHandle(FileRenameInfo) with an absolute destination path and RootDirectory=NULL. Current Windows implementations can reject a non-NULL RootDirectory with ERROR_INVALID_PARAMETER, despite its documented relative-path semantics. ReplaceIfExists is set only for a target which was present and passed the existing exact-hash checks. This pins the source file handle and keeps the rename atomic, but Windows still resolves the destination path by name.
 - Read the published target back within the configured byte limit and confirm SHA-256. Keep current root permissions, audit sequence, exact expected hash, and no-auto-directory behavior.
-- Add a POSIX regression that renames/replaces the directory path after opening its descriptor and verifies publication remains anchored to the original directory object. Existing create/replace tests exercise the Windows native handle-relative publication through Windows CI.
+- Add a POSIX regression that renames/replaces the directory path after opening its descriptor and verifies publication remains anchored to the original directory object. Existing create/replace tests exercise Windows handle-based source renaming with an absolute destination path through Windows CI.
 
 ## Guarantees and boundaries
 
