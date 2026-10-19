@@ -965,8 +965,11 @@ class LocalAgent:
 
         temporary: str | None = None
         parent_handle: Any = None
+        cleanup_parent_handle: int | None = None
         try:
             with _directory_chain_lease(parent, parent_signature, "Write parent") as parent_handle:
+                if os.name != "nt" and isinstance(parent_handle, int):
+                    cleanup_parent_handle = os.dup(parent_handle)
                 self._record("write", root_id, relative, "intent", f"sha256={_sha256(raw)}", len(raw))
                 # Revalidate path components and the file identity immediately before publish.
                 _reject_link_components(parent, "Write parent", allow_missing=False)
@@ -1054,9 +1057,14 @@ class LocalAgent:
         finally:
             if temporary:
                 try:
-                    if os.name != "nt" and isinstance(parent_handle, int):
-                        os.unlink(Path(temporary).name, dir_fd=parent_handle)
+                    if os.name != "nt" and cleanup_parent_handle is not None:
+                        os.unlink(Path(temporary).name, dir_fd=cleanup_parent_handle)
                     elif os.path.exists(temporary):
                         os.unlink(temporary)
+                except OSError:
+                    pass
+            if cleanup_parent_handle is not None:
+                try:
+                    os.close(cleanup_parent_handle)
                 except OSError:
                     pass
