@@ -999,8 +999,13 @@ class LocalAgent:
                     stream.write(raw)
                     stream.flush()
                     os.fsync(stream.fileno())
-                    if opened.st_size > root["max_file_bytes"]:
-                        raise LocalAgentError("Staged write exceeded the configured file limit")
+                    staged_info = os.fstat(stream.fileno())
+                    if (
+                        not stat.S_ISREG(staged_info.st_mode)
+                        or staged_info.st_size != len(raw)
+                        or staged_info.st_size > root["max_file_bytes"]
+                    ):
+                        raise LocalAgentError("Staged write failed regular-file or size verification")
                     stream.seek(0)
                     staged_raw = stream.read(root["max_file_bytes"] + 1)
                     if len(staged_raw) > root["max_file_bytes"] or _sha256(staged_raw) != _sha256(raw):
