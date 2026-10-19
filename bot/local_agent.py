@@ -226,9 +226,12 @@ def _directory_chain_lease(
 
             native_index = (int(info.file_index_high) << 32) | int(info.file_index_low)
             after = component.lstat()
+            # Windows st_dev is not a portable alias for the Win32 volume
+            # serial. st_ino maps to the file index on ordinary local filesystems;
+            # filesystems that report it as zero cannot provide that comparison.
+            index_mismatch = bool(before.st_ino) and native_index != int(before.st_ino)
             if (
-                int(info.volume_serial) != int(before.st_dev)
-                or native_index != int(before.st_ino)
+                index_mismatch
                 or (before.st_dev, before.st_ino, stat.S_IFMT(before.st_mode)) != (after.st_dev, after.st_ino, stat.S_IFMT(after.st_mode))
                 or _is_link_or_reparse(component)
             ):
