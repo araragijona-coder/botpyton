@@ -129,6 +129,25 @@ class UnknownRecoveryTests(unittest.TestCase):
         self.assertLessEqual(report["static_evidence"]["scan"]["candidate_files"], 2)
 
 
+
+    def test_inaccessible_directory_is_reported_as_missing_evidence(self):
+        locked = self.root / "inaccessible"
+        locked.mkdir()
+        (self.root / "app.py").write_text("VALUE = 1\\n", encoding="utf-8")
+        locked_path = locked.resolve()
+        real_scandir = __import__("os").scandir
+
+        def deny_locked(path):
+            if Path(path) == locked_path:
+                raise PermissionError("simulated inaccessible directory")
+            return real_scandir(path)
+
+        with patch("bot.unknown_recovery.os.scandir", side_effect=deny_locked):
+            report = investigate_failure("OpaqueCompilerFailure: code Z-19", self.root)
+
+        self.assertEqual(report["static_evidence"]["scan"]["directories_unreadable"], 1)
+        self.assertIn("unreadable_static_directories", report["missing_evidence"])
+
     def test_scan_limit_counts_empty_directories(self):
         for number in range(4):
             (self.root / f"empty_{number}").mkdir()

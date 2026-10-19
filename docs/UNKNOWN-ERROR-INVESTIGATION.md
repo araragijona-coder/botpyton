@@ -34,7 +34,7 @@ Todos los campos de contexto son opcionales, pero aportarlos hace más útil la 
 
 ## Límites
 
-El log se limita a 64 KiB. El inventario se limita a 5.000 entradas y 500 archivos candidatos; cada archivo mide como máximo 200 KiB y el presupuesto total de lectura es 2 MiB. Se omiten directorios generados comunes, enlaces simbólicos y puntos de reanálisis detectados. Las comprobaciones de sintaxis Python no importan ni ejecutan el código del proyecto; los parsers JSON/TOML solo leen los bytes seleccionados.
+El log se limita a 64 KiB. El inventario se limita a 5.000 entradas (archivos y directorios) y 500 archivos candidatos; cada archivo mide como máximo 200 KiB y el presupuesto total de lectura es 2 MiB. El recorrido enumera entradas incrementalmente, sin acumular listas de directorios sin límite. Si una carpeta sobrepasa el presupuesto restante, se marca `scan_truncated` y no se analiza un subconjunto parcial dependiente del orden del sistema de archivos. Los directorios inaccesibles se contabilizan y añaden `unreadable_static_directories` a `missing_evidence`. Se omiten directorios generados comunes, enlaces simbólicos y puntos de reanálisis detectados. Las comprobaciones de sintaxis Python no importan ni ejecutan el código del proyecto; los parsers JSON/TOML solo leen los bytes seleccionados.
 
 El escaneo es local, secuencial, sin IA y sin llamadas de red. Nunca instala paquetes, reintenta una tarea, escribe código ni ejecuta builds/tests. El registro de causa raíz queda siempre como false. Si se identifica una anomalía estática, el siguiente paso es revisar el archivo exacto y escribir una prueba de regresión; el cambio se aplica mediante el flujo de parche aislado ya existente después de revisión humana.
 
