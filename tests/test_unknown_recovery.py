@@ -137,6 +137,7 @@ class UnknownRecoveryTests(unittest.TestCase):
     def test_static_scan_skips_candidate_removed_after_inventory(self):
         source = self.root / "disappearing.py"
         source.write_text("VALUE = 1\\n", encoding="utf-8")
+        source = source.resolve()
         scan = {
             "entries_examined": 1,
             "candidate_files": 1,
@@ -178,7 +179,7 @@ class UnknownRecoveryTests(unittest.TestCase):
             with patch("bot.unknown_recovery.read_bounded_bytes", side_effect=tracked_reader):
                 result = _static_probes(self.root)
 
-        self.assertEqual(read_paths, [first])
+        self.assertEqual(read_paths, [first.resolve()])
         self.assertEqual(result["scan"]["bytes_read"], 4)
         self.assertEqual(result["scan"]["files_skipped_for_budget"], 1)
 
