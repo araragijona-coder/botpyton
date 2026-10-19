@@ -230,6 +230,13 @@ class LocalAgentTests(unittest.TestCase):
         finally:
             __import__("os").close(parent_fd)
 
+    def test_failed_atomic_publication_cleans_staged_file(self):
+        with patch("bot.local_agent._publish_staged_file", side_effect=LocalAgentError("injected publish failure")):
+            with self.assertRaisesRegex(LocalAgentError, "injected publish failure"):
+                self.agent().write_file("project", "failed.py", "VALUE = 8\\n")
+        self.assertFalse((self.project / "failed.py").exists())
+        self.assertFalse(list(self.project.glob(".failed.py.*.botpyton-agent-tmp")))
+
     def test_new_file_write_is_exclusive_and_audited(self):
         result = self.agent().write_file("project", "new.py", "VALUE = 2\n")
         self.assertTrue(result["created"])
