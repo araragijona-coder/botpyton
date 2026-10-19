@@ -114,7 +114,11 @@ class LocalAgentTests(unittest.TestCase):
 
         def swap_directory_then_scan(path):
             nonlocal swapped
-            if not swapped and Path(path) == nested:
+            if (
+                not swapped
+                and os.path.normcase(os.path.abspath(os.fspath(path)))
+                == os.path.normcase(os.path.abspath(os.fspath(nested)))
+            ):
                 nested.rename(original_nested)
                 replacement.rename(nested)
                 swapped = True
