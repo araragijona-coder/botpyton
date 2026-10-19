@@ -303,7 +303,9 @@ def _publish_staged_file(
 
     POSIX uses dir_fd-relative rename/link operations, avoiding a second
     resolution of ancestor path names. Windows renames the staged file handle
-    with FILE_RENAME_INFO rooted at the open parent-directory handle.
+    with FILE_RENAME_INFO and an absolute destination path. RootDirectory is
+    deliberately NULL because current Windows implementations can reject a
+    non-NULL RootDirectory with ERROR_INVALID_PARAMETER.
     """
     if os.name != "nt":
         if not isinstance(parent_handle, int):
@@ -354,7 +356,7 @@ def _publish_staged_file(
             ("file_name_length", wintypes.DWORD),
             # FILE_RENAME_INFO expects a NUL-terminated name buffer; FileNameLength
             # itself excludes that terminator and is expressed in bytes.
-            ("file_name", wintypes.WCHAR * (len(target.name) + 1)),
+            ("file_name", wintypes.WCHAR * (len(os.fspath(target)) + 1)),
         ]
 
     kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
@@ -406,10 +408,11 @@ def _publish_staged_file(
             raise LocalAgentError("Staged write is a directory; publication blocked")
 
         rename = _FileRenameInfo()
+        destination_name = os.path.abspath(os.fspath(target))
         rename.flags = file_rename_flag_replace_if_exists if replace_existing else 0
-        rename.root_directory = parent_handle
-        rename.file_name_length = len(target.name.encode("utf-16-le"))
-        rename.file_name = target.name
+        rename.root_directory = None
+        rename.file_name_length = len(destination_name.encode("utf-16-le"))
+        rename.file_name = destination_name
         if not kernel32.SetFileInformationByHandle(
             handle, file_rename_info_class, ctypes.byref(rename), ctypes.sizeof(rename)
         ):
