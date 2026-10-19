@@ -1,4 +1,5 @@
 import hashlib
+import os
 import json
 import tempfile
 import unittest
