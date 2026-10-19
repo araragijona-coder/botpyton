@@ -218,6 +218,10 @@ class LocalAgentTests(unittest.TestCase):
         target = parent / "published.txt"
         staged = parent / ".published.txt.stage"
         staged.write_bytes(b"complete payload")
+        existing = parent / "existing.txt"
+        existing.write_bytes(b"previous payload")
+        existing_staged = parent / ".existing.txt.stage"
+        existing_staged.write_bytes(b"replacement payload")
         flags = __import__("os").O_RDONLY | getattr(__import__("os"), "O_DIRECTORY", 0)
         parent_fd = __import__("os").open(parent, flags)
         try:
@@ -225,8 +229,11 @@ class LocalAgentTests(unittest.TestCase):
             parent.rename(moved)
             parent.mkdir()
             _publish_staged_file(staged, target, parent_fd, replace_existing=False)
+            _publish_staged_file(existing_staged, existing, parent_fd, replace_existing=True)
             self.assertEqual((moved / "published.txt").read_bytes(), b"complete payload")
+            self.assertEqual((moved / "existing.txt").read_bytes(), b"replacement payload")
             self.assertFalse((parent / "published.txt").exists())
+            self.assertFalse((parent / "existing.txt").exists())
         finally:
             __import__("os").close(parent_fd)
 
