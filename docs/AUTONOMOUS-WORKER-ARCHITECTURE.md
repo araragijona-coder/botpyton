@@ -137,7 +137,7 @@ Este apartado distingue capacidades presentes de objetivos futuros; no declara B
 - Núcleo de agente local seguro disponible bajo demanda (Fase 46): raíces disjuntas y configuradas explícitamente, permisos list/read/write por raíz, límites por archivo, rechazo de rutas simbólicas/reparse y registro JSONL encadenado por SHA-256. Sigue pendiente validar el uso real en el PC del usuario y decidir si se necesita un instalador separado; no es un servicio remoto.
 - Mayor cobertura de herramientas, lenguajes, formatos y entornos de compilación.
 - Más estrategias de reparación experimental. El sistema ya extrae traceback acotado, redacta valores que parecen credenciales y propone experimentos para tipos de error comunes; todavía no repara de forma autónoma cualquier error desconocido.
-- Estrategias de experimentación para errores desconocidos. Hoy el sistema recopila evidencia y detiene la reparación automática cuando no hay una regla segura; no promete resolver cualquier error.
+- Planificador determinista de investigación de errores desconocidos (Fase 47): escaneo estático acotado, hipótesis falsables, experimentos discriminantes, datos que faltan y una puerta de parada. Sigue sin ejecutar código del proyecto ni aplicar reparaciones genéricas cuando la causa no está demostrada.
 - Flujo de promoción y revisión más completo para workspaces: el worktree inicial ya existe, pero todavía no hay integración automática de diffs, cherry-pick o merge.
 - Validación de los flujos reales de GitHub desde la cuenta local y pruebas de seguridad adicionales antes de habilitar cualquier escritura privilegiada.
 
@@ -151,3 +151,10 @@ Sin un modelo de IA, el núcleo no convierte cualquier frase libre en una soluci
 El agente local de archivos está implementado en bot/local_agent.py y se invoca mediante las opciones --local-agent-* de la CLI. Permite listar un directorio a un nivel, leer UTF-8 acotado y crear/reemplazar un archivo con permisos por raíz; no habilita shell, borrado, red, escalado de privilegios ni acceso fuera de las raíces configuradas. Las rutas de configuración y auditoría se mantienen fuera de las raíces. Las pruebas usan carpetas temporales y API de sistema simuladas cuando corresponde.
 
 La aceptación en CI demuestra las pruebas del repositorio, no que el usuario haya configurado permisos correctamente ni que el agente funcione sobre sus carpetas personales. La prueba local de instalación, RAM y permisos sigue pendiente.
+
+
+### Fase 47 — investigación de fallos sin firma conocida
+
+El módulo bot.unknown_recovery genera un informe JSON reproducible a partir de un log y el inventario estático limitado del proyecto. Contrasta señales directas (errores de parseo Python/JSON/TOML, conflictos de contrato observables y patrones explícitos del log) y devuelve hipótesis ordenadas con un experimento falsable y su condición de refutación. Si no hay señales suficientes, solicita datos específicos en vez de inventar una causa.
+
+La investigación no ejecuta pruebas ni el proyecto, no hace llamadas de red, no instala dependencias ni modifica archivos. Para ejecutar un perfil de prueba conocido sigue siendo obligatorio usar el flujo existente de descubrimiento y autorización explícita. Cada reintento necesita evidencia nueva; un límite agotado bloquea el ciclo.

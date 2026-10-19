@@ -159,6 +159,11 @@ def main(argv: list[str] | None = None) -> int:
                         help="validate a bounded JSON task object/array without queue mutation")
     parser.add_argument("--plan", metavar="PATH", help="validate and order a JSON array of tasks")
     parser.add_argument("--diagnose", metavar="PATH", help="classify a local error log and gather evidence")
+    parser.add_argument("--investigate-failure", metavar="PATH", help="build a bounded static-evidence and falsifiable-hypothesis plan from a failure log")
+    parser.add_argument("--investigation-command", metavar="TEXT", help="exact command and arguments that produced the failure (reported as sanitized text only)")
+    parser.add_argument("--investigation-exit-code", type=int, metavar="N", help="process exit code from the failed command")
+    parser.add_argument("--investigation-expected", metavar="TEXT", help="expected behavior or contract for the failed operation")
+    parser.add_argument("--investigation-observed", metavar="TEXT", help="observed behavior and reproducible failure summary")
     parser.add_argument("--enqueue", metavar="PATH", help="idempotently enqueue one task or a JSON array")
     parser.add_argument("--queue", action="store_true", help="list durable queue records")
     parser.add_argument("--claim-next", action="store_true", help="claim and print the next ready task")
@@ -624,6 +629,33 @@ def main(argv: list[str] | None = None) -> int:
                 raise PolicyError("Plan file must contain a JSON array")
             print("\n".join(task["id"] for task in order_tasks(tasks)))
             return 0
+        investigation_context_used = any(value is not None for value in (
+            args.investigation_command, args.investigation_exit_code,
+            args.investigation_expected, args.investigation_observed,
+        ))
+        if investigation_context_used and not args.investigate_failure:
+            raise OrchestrationError("Investigation context flags require --investigate-failure PATH")
+        if args.investigate_failure and args.diagnose:
+            raise OrchestrationError("Choose either --investigate-failure or --diagnose, not both")
+        if args.investigate_failure:
+            from .unknown_recovery import investigate_failure, _validate_root, MAX_LOG_BYTES
+            project_root = _validate_root(args.project_root)
+            try:
+                relative = validate_relative_path(args.investigate_failure)
+                log_path = project_root / relative
+                log_raw = read_bounded_bytes(log_path, limit_bytes=MAX_LOG_BYTES, label="Failure log")
+                log_text = log_raw.decode("utf-8")
+            except (BoundedReadError, UnicodeError) as exc:
+                raise OrchestrationError(str(exc)) from exc
+            result = investigate_failure(
+                log_text, project_root,
+                command=args.investigation_command,
+                exit_code=args.investigation_exit_code,
+                expected=args.investigation_expected,
+                observed=args.investigation_observed,
+            )
+            _print_json(result)
+            return 2 if result["status"] == "blocked_attempt_limit" else 0
         if args.diagnose:
             project_root = Path(args.project_root).expanduser().resolve()
             log_path = project_root / validate_relative_path(args.diagnose)

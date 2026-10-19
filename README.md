@@ -602,3 +602,14 @@ python -m bot.main --local-agent-config "C:\BOTPYTON\agent.json" --local-agent-a
 ~~~
 
 Este agente es una base local de archivos, no un servicio remoto ni un programador autónomo universal. La revisión de CI no reemplaza probar la configuración y los permisos en el PC del usuario.
+
+
+## Phase 47 — investigación de errores desconocidos
+
+La investigación local genera un plan reproducible de hipótesis falsables a partir del log y de evidencia estática acotada. Comprueba sintaxis Python y formatos JSON/TOML, detecta señales directas, ordena hipótesis por evidencia y señala qué datos faltan. No ejecuta el proyecto, no escribe archivos, no repite la tarea ni inventa una causa raíz. Si no hay evidencia suficiente, detiene el ciclo y pide la información precisa necesaria.
+
+~~~powershell
+python -m bot.main --investigate-failure "reports/failure.log" --project-root "C:\projects\mi-app" --investigation-command "python -m unittest" --investigation-exit-code 1 --investigation-expected "la prueba pasa" --investigation-observed "la prueba falla con error Z-19"
+~~~
+
+El log debe ser un archivo relativo al proyecto y no superar 64 KiB. El escaneo estático omite directorios generados, limita la cantidad/tamaño de archivos y no ejecuta código del proyecto. Revisá el informe antes de decidir una modificación. Guía: [investigación de errores desconocidos](docs/UNKNOWN-ERROR-INVESTIGATION.md) y [auditoría técnica Fase 47](docs/research/PHASE-47-UNKNOWN-ERROR-RECOVERY.md).
