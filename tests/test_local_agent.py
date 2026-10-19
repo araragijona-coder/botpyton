@@ -77,7 +77,7 @@ class LocalAgentTests(unittest.TestCase):
 
         def swap_directory_then_read(path, *, limit_bytes, label="Input file"):
             nonlocal swapped
-            if not swapped and Path(path) == target:
+            if not swapped and Path(path).name == target.name and Path(path).parent.name == "nested":
                 nested.rename(original_nested)
                 replacement.rename(nested)
                 swapped = True
