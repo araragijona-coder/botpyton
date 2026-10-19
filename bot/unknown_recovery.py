@@ -181,10 +181,15 @@ def _static_probes(root: Path) -> dict[str, Any]:
             ):
                 files_skipped_for_budget += 1
                 continue
-            if info.st_size > MAX_FILE_BYTES:
+            remaining_bytes = MAX_TOTAL_READ_BYTES - total_read
+            if remaining_bytes <= 0:
                 files_skipped_for_budget += 1
                 continue
-            raw = read_bounded_bytes(path, limit_bytes=MAX_FILE_BYTES, label="Investigation file")
+            read_limit = min(MAX_FILE_BYTES, remaining_bytes)
+            if info.st_size > read_limit:
+                files_skipped_for_budget += 1
+                continue
+            raw = read_bounded_bytes(path, limit_bytes=read_limit, label="Investigation file")
             # The entry may have changed between inventory and read. Discard bytes
             # if it became a symlink/reparse point or disappeared during the read.
             if _is_link_or_reparse(path):
@@ -193,9 +198,6 @@ def _static_probes(root: Path) -> dict[str, Any]:
         except (OSError, BoundedReadError, ValueError):
             # A concurrently removed, replaced, or inaccessible candidate is not
             # reliable evidence; skip it and keep the partial-scan accounting.
-            files_skipped_for_budget += 1
-            continue
-        if total_read + len(raw) > MAX_TOTAL_READ_BYTES:
             files_skipped_for_budget += 1
             continue
         total_read += len(raw)

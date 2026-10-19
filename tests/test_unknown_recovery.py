@@ -162,6 +162,26 @@ class UnknownRecoveryTests(unittest.TestCase):
         self.assertEqual(result["python"]["syntax_errors"], [])
         self.assertEqual(result["scan"]["files_skipped_for_budget"], 1)
 
+    def test_static_scan_enforces_total_read_budget_before_reading_next_file(self):
+        first = self.root / "a.py"
+        second = self.root / "b.py"
+        first.write_bytes(b"x=1\\n")
+        second.write_bytes(b"y=2\\n")
+        original_reader = __import__("bot.unknown_recovery", fromlist=["read_bounded_bytes"]).read_bounded_bytes
+        read_paths = []
+
+        def tracked_reader(path, **kwargs):
+            read_paths.append(Path(path))
+            return original_reader(path, **kwargs)
+
+        with patch("bot.unknown_recovery.MAX_TOTAL_READ_BYTES", 4):
+            with patch("bot.unknown_recovery.read_bounded_bytes", side_effect=tracked_reader):
+                result = _static_probes(self.root)
+
+        self.assertEqual(read_paths, [first])
+        self.assertEqual(result["scan"]["bytes_read"], 4)
+        self.assertEqual(result["scan"]["files_skipped_for_budget"], 1)
+
 
 if __name__ == "__main__":
     unittest.main()
