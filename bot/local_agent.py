@@ -7,6 +7,7 @@ import os
 import re
 import stat
 import tempfile
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 from typing import Any
@@ -118,6 +119,132 @@ def _assert_path_chain_unchanged(
     """Fail closed when any path component was replaced during an operation."""
     if _path_chain_signature(path, label) != expected:
         raise LocalAgentError(f"{label} path changed during operation; access blocked")
+
+
+@contextmanager
+def _directory_chain_lease(
+    path: str | Path,
+    expected_signature: tuple[tuple[Any, ...], ...],
+    label: str,
+):
+    """Hold directory handles without FILE_SHARE_DELETE while a path is in use.
+
+    On Windows, pin every existing directory component from the filesystem
+    anchor through path. This prevents ordinary rename/reparse substitution
+    of those directory components while path-based work is staged and published.
+    The target file leaf is not pinned by this helper. This is defense in depth,
+    not a hostile same-user sandbox.
+    """
+    target = Path(os.path.abspath(os.fspath(Path(path).expanduser())))
+    initial = _path_chain_signature(target, label)
+    if initial != expected_signature:
+        raise LocalAgentError(f"{label} path changed before its directory lease; access blocked")
+
+    if os.name != "nt":
+        try:
+            yield
+        finally:
+            _assert_path_chain_unchanged(target, initial, label)
+        return
+
+    import ctypes
+    from ctypes import wintypes
+
+    class _FileTime(ctypes.Structure):
+        _fields_ = [("low", wintypes.DWORD), ("high", wintypes.DWORD)]
+
+    class _ByHandleFileInformation(ctypes.Structure):
+        _fields_ = [
+            ("attributes", wintypes.DWORD),
+            ("creation_time", _FileTime),
+            ("last_access_time", _FileTime),
+            ("last_write_time", _FileTime),
+            ("size_high", wintypes.DWORD),
+            ("size_low", wintypes.DWORD),
+            ("volume_serial", wintypes.DWORD),
+            ("number_of_links", wintypes.DWORD),
+            ("file_index_high", wintypes.DWORD),
+            ("file_index_low", wintypes.DWORD),
+        ]
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32.CreateFileW.argtypes = [
+        wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD, wintypes.LPVOID,
+        wintypes.DWORD, wintypes.DWORD, wintypes.HANDLE,
+    ]
+    kernel32.CreateFileW.restype = ctypes.c_void_p
+    kernel32.GetFileInformationByHandle.argtypes = [
+        ctypes.c_void_p, ctypes.POINTER(_ByHandleFileInformation),
+    ]
+    kernel32.GetFileInformationByHandle.restype = wintypes.BOOL
+    kernel32.CloseHandle.argtypes = [ctypes.c_void_p]
+    kernel32.CloseHandle.restype = wintypes.BOOL
+
+    file_read_attributes = 0x00000080
+    share_read_write = 0x00000001 | 0x00000002  # deliberately omit FILE_SHARE_DELETE
+    open_existing = 3
+    file_flag_open_reparse_point = 0x00200000
+    file_flag_backup_semantics = 0x02000000
+    file_attribute_directory = 0x00000010
+    file_attribute_reparse_point = 0x00000400
+    invalid_handle = ctypes.c_void_p(-1).value
+    handles: list[int] = []
+    chain = [*reversed(target.parents), target]
+
+    try:
+        for component in chain:
+            before = component.lstat()
+            if (
+                not stat.S_ISDIR(before.st_mode)
+                or stat.S_ISLNK(before.st_mode)
+                or _is_link_or_reparse(component)
+            ):
+                raise LocalAgentError(f"{label} contains a non-directory or reparse component")
+
+            handle = kernel32.CreateFileW(
+                os.fspath(component),
+                file_read_attributes,
+                share_read_write,
+                None,
+                open_existing,
+                file_flag_open_reparse_point | file_flag_backup_semantics,
+                None,
+            )
+            if handle is None or handle == invalid_handle:
+                error = ctypes.get_last_error()
+                raise OSError(error, ctypes.FormatError(error), os.fspath(component))
+            handles.append(handle)
+
+            info = _ByHandleFileInformation()
+            if not kernel32.GetFileInformationByHandle(handle, ctypes.byref(info)):
+                error = ctypes.get_last_error()
+                raise OSError(error, ctypes.FormatError(error), os.fspath(component))
+            if info.attributes & file_attribute_reparse_point:
+                raise LocalAgentError(f"{label} contains a Windows reparse point")
+            if not info.attributes & file_attribute_directory:
+                raise LocalAgentError(f"{label} contains a component that is not a directory")
+
+            native_index = (int(info.file_index_high) << 32) | int(info.file_index_low)
+            after = component.lstat()
+            if (
+                int(info.volume_serial) != int(before.st_dev)
+                or native_index != int(before.st_ino)
+                or _signature(before) != _signature(after)
+                or _is_link_or_reparse(component)
+            ):
+                raise LocalAgentError(f"{label} component changed while its directory handle was opened")
+
+        if _path_chain_signature(target, label) != initial:
+            raise LocalAgentError(f"{label} path changed while directory handles were acquired")
+        yield
+        _assert_path_chain_unchanged(target, initial, label)
+    except LocalAgentError:
+        raise
+    except OSError as exc:
+        raise LocalAgentError(f"{label} directory lease failed: {type(exc).__name__}") from exc
+    finally:
+        for handle in reversed(handles):
+            kernel32.CloseHandle(handle)
 
 
 def _read_json_config(path: Path) -> Any:
@@ -531,34 +658,37 @@ class LocalAgent:
         if not target.is_dir():
             self._record("list", root_id, relative, "denied", "not_a_directory")
             raise LocalAgentError("Requested path is not a directory")
+        target_signature = _path_chain_signature(target, "Directory")
         self._record("list", root_id, relative, "intent", "directory_listing_started")
         items: list[dict[str, Any]] = []
         skipped_links = 0
         truncated = False
         try:
-            _reject_link_components(target, "Directory", allow_missing=False)
-            with os.scandir(target) as entries:
-                for index, entry in enumerate(entries):
-                    if index >= MAX_DIRECTORY_ITEMS:
-                        truncated = True
-                        break
-                    try:
-                        info = entry.stat(follow_symlinks=False)
-                        if entry.is_symlink() or _is_link_or_reparse(Path(entry.path)):
+            with _directory_chain_lease(target, target_signature, "Directory"):
+                _reject_link_components(target, "Directory", allow_missing=False)
+                with os.scandir(target) as entries:
+                    for index, entry in enumerate(entries):
+                        if index >= MAX_DIRECTORY_ITEMS:
+                            truncated = True
+                            break
+                        try:
+                            info = entry.stat(follow_symlinks=False)
+                            if entry.is_symlink() or _is_link_or_reparse(Path(entry.path)):
+                                skipped_links += 1
+                                continue
+                            if stat.S_ISDIR(info.st_mode):
+                                kind = "directory"
+                                size = None
+                            elif stat.S_ISREG(info.st_mode):
+                                kind = "file"
+                                size = info.st_size
+                            else:
+                                skipped_links += 1
+                                continue
+                            items.append({"name": entry.name, "type": kind, "size_bytes": size})
+                        except OSError:
                             skipped_links += 1
-                            continue
-                        if stat.S_ISDIR(info.st_mode):
-                            kind = "directory"
-                            size = None
-                        elif stat.S_ISREG(info.st_mode):
-                            kind = "file"
-                            size = info.st_size
-                        else:
-                            skipped_links += 1
-                            continue
-                        items.append({"name": entry.name, "type": kind, "size_bytes": size})
-                    except OSError:
-                        skipped_links += 1
+            _assert_path_chain_unchanged(target, target_signature, "Directory")
             items.sort(key=lambda item: item["name"].casefold())
             self._record("list", root_id, relative, "success", "directory_listing_completed", len(items))
             return {
@@ -663,61 +793,83 @@ class LocalAgent:
                 raise LocalAgentError("expected_sha256 must be omitted when creating a new file")
             current_hash = None
 
-        self._record("write", root_id, relative, "intent", f"sha256={_sha256(raw)}", len(raw))
         temporary: str | None = None
         try:
-            # Revalidate path components and the file identity immediately before publish.
-            _reject_link_components(parent, "Write parent", allow_missing=False)
-            current_target = _resolve_under_root(
-                root["path_object"], relative, allow_missing_leaf=True
-            )
-            if current_target != target:
-                raise LocalAgentError("Write target path changed during the operation")
-            if exists:
-                _reject_link_components(target, "Write target", allow_missing=False)
-                if not target.is_file() or _sha256(read_bounded_bytes(
-                    target, limit_bytes=root["max_file_bytes"], label="Existing write target"
-                )) != current_hash:
-                    raise LocalAgentError("Write target changed after authorization; no replacement was made")
-            elif target.exists():
-                raise LocalAgentError("A file appeared at the new destination; it was preserved")
-            descriptor, temporary = tempfile.mkstemp(
-                prefix=f".{target.name}.", suffix=".botpyton-agent-tmp", dir=parent
-            )
-            with os.fdopen(descriptor, "wb") as stream:
-                stream.write(raw)
-                stream.flush()
-                os.fsync(stream.fileno())
-            _assert_path_chain_unchanged(parent, parent_signature, "Write parent")
-            _reject_link_components(parent, "Write parent", allow_missing=False)
-            _reject_link_components(target, "Write target", allow_missing=True)
-            _assert_path_chain_unchanged(parent, parent_signature, "Write parent")
-            if exists:
-                _reject_link_components(target, "Write target", allow_missing=False)
-                if target_signature is None:
-                    raise LocalAgentError("Write target identity was not captured; replacement blocked")
-                _assert_path_chain_unchanged(target, target_signature, "Write target")
-                if not target.is_file() or _sha256(read_bounded_bytes(
-                    target, limit_bytes=root["max_file_bytes"], label="Existing write target"
-                )) != current_hash:
-                    raise LocalAgentError("Write target changed before publication; no replacement was made")
+            with _directory_chain_lease(parent, parent_signature, "Write parent"):
+                self._record("write", root_id, relative, "intent", f"sha256={_sha256(raw)}", len(raw))
+                # Revalidate path components and the file identity immediately before publish.
+                _reject_link_components(parent, "Write parent", allow_missing=False)
+                current_target = _resolve_under_root(
+                    root["path_object"], relative, allow_missing_leaf=True
+                )
+                if current_target != target:
+                    raise LocalAgentError("Write target path changed during the operation")
+                if exists:
+                    _reject_link_components(target, "Write target", allow_missing=False)
+                    if target_signature is None:
+                        raise LocalAgentError("Write target identity was not captured; replacement blocked")
+                    _assert_path_chain_unchanged(target, target_signature, "Write target")
+                    if not target.is_file() or _sha256(read_bounded_bytes(
+                        target, limit_bytes=root["max_file_bytes"], label="Existing write target"
+                    )) != current_hash:
+                        raise LocalAgentError("Write target changed after authorization; no replacement was made")
+                elif target.exists():
+                    raise LocalAgentError("A file appeared at the new destination; it was preserved")
+                descriptor, temporary = tempfile.mkstemp(
+                    prefix=f".{target.name}.", suffix=".botpyton-agent-tmp", dir=parent
+                )
+                with os.fdopen(descriptor, "wb") as stream:
+                    stream.write(raw)
+                    stream.flush()
+                    os.fsync(stream.fileno())
+                staged = Path(temporary)
+                _reject_link_components(staged, "Staged write", allow_missing=False)
+                if not staged.is_file() or staged.stat().st_size != len(raw):
+                    raise LocalAgentError("Staged write failed regular-file or size verification")
+                if _sha256(read_bounded_bytes(
+                    staged, limit_bytes=root["max_file_bytes"], label="Staged write"
+                )) != _sha256(raw):
+                    raise LocalAgentError("Staged write content verification failed")
                 _assert_path_chain_unchanged(parent, parent_signature, "Write parent")
-                _assert_path_chain_unchanged(target, target_signature, "Write target")
-                os.replace(temporary, target)
-                temporary = None
-            else:
-                # Link-based publication will not overwrite a destination created concurrently.
-                os.link(temporary, target)
-                os.unlink(temporary)
-                temporary = None
-            self._record("write", root_id, relative, "success", f"sha256={_sha256(raw)}", len(raw))
-            return {
-                "status": "completed", "root_id": root_id, "relative_path": relative,
-                "created": not exists, "size_bytes": len(raw), "sha256": _sha256(raw),
-                "files_written": True, "backup_created": False,
-                "network_used": False, "ai_enabled": False,
-                "note": "Existing files are replaced only with matching expected_sha256. Directories and deletes are not supported.",
-            }
+                _reject_link_components(parent, "Write parent", allow_missing=False)
+                _reject_link_components(target, "Write target", allow_missing=True)
+                _assert_path_chain_unchanged(parent, parent_signature, "Write parent")
+                if exists:
+                    _reject_link_components(target, "Write target", allow_missing=False)
+                    if target_signature is None:
+                        raise LocalAgentError("Write target identity was not captured; replacement blocked")
+                    _assert_path_chain_unchanged(target, target_signature, "Write target")
+                    if not target.is_file() or _sha256(read_bounded_bytes(
+                        target, limit_bytes=root["max_file_bytes"], label="Existing write target"
+                    )) != current_hash:
+                        raise LocalAgentError("Write target changed before publication; no replacement was made")
+                    _assert_path_chain_unchanged(parent, parent_signature, "Write parent")
+                    _assert_path_chain_unchanged(target, target_signature, "Write target")
+                    os.replace(temporary, target)
+                    temporary = None
+                else:
+                    # Hard-link publication is exclusive: a competing destination is never overwritten.
+                    os.link(temporary, target)
+                    os.unlink(temporary)
+                    temporary = None
+
+                _assert_path_chain_unchanged(parent, parent_signature, "Write parent")
+                _reject_link_components(target, "Published write", allow_missing=False)
+                if not target.is_file():
+                    raise LocalAgentError("Published write is not a regular file")
+                published = read_bounded_bytes(
+                    target, limit_bytes=root["max_file_bytes"], label="Published write"
+                )
+                if _sha256(published) != _sha256(raw):
+                    raise LocalAgentError("Published file content verification failed")
+                self._record("write", root_id, relative, "success", f"sha256={_sha256(raw)}", len(raw))
+                return {
+                    "status": "completed", "root_id": root_id, "relative_path": relative,
+                    "created": not exists, "size_bytes": len(raw), "sha256": _sha256(raw),
+                    "files_written": True, "backup_created": False,
+                    "network_used": False, "ai_enabled": False,
+                    "note": "Existing files require matching expected_sha256. Directory and delete operations are not supported.",
+                }
         except Exception as exc:
             try:
                 self._record("write", root_id, relative, "error", type(exc).__name__)
