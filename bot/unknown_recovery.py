@@ -159,6 +159,8 @@ def _project_files(root: Path) -> tuple[list[Path], dict[str, Any]]:
 
 
 def _static_probes(root: Path) -> dict[str, Any]:
+    # Normalize once so Windows short-path aliases and resolved inventory paths agree.
+    root = root.resolve()
     files, scan = _project_files(root)
     python_findings: list[dict[str, Any]] = []
     json_findings: list[dict[str, Any]] = []
