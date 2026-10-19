@@ -62,6 +62,40 @@ class LocalAgentTests(unittest.TestCase):
         self.assertIn('"outcome":"intent"', raw_audit)
         self.assertIn('"outcome":"success"', raw_audit)
 
+    def test_read_refuses_directory_identity_swap_during_io(self):
+        nested = self.project / "nested"
+        replacement = self.project / "replacement"
+        original_nested = self.project / "nested-original"
+        nested.mkdir()
+        replacement.mkdir()
+        target = nested / "source.txt"
+        target.write_text("authorized content", encoding="utf-8")
+        (replacement / "source.txt").write_text("substituted content", encoding="utf-8")
+        agent = self.agent()
+        real_read = __import__("bot.local_agent", fromlist=["read_bounded_bytes"]).read_bounded_bytes
+        swapped = False
+
+        def swap_directory_then_read(path, *, limit_bytes, label="Input file"):
+            nonlocal swapped
+            if not swapped and Path(path) == target:
+                nested.rename(original_nested)
+                replacement.rename(nested)
+                swapped = True
+            return real_read(path, limit_bytes=limit_bytes, label=label)
+
+        try:
+            with patch("bot.local_agent.read_bounded_bytes", side_effect=swap_directory_then_read):
+                with self.assertRaisesRegex(LocalAgentError, "path changed during operation"):
+                    agent.read_file("project", "nested/source.txt")
+            self.assertTrue(swapped, "test must replace the directory during the read")
+        finally:
+            if nested.exists() and swapped:
+                nested.rename(replacement)
+            if original_nested.exists():
+                original_nested.rename(nested)
+        self.assertEqual(target.read_text(encoding="utf-8"), "authorized content")
+        self.assertEqual((replacement / "source.txt").read_text(encoding="utf-8"), "substituted content")
+
     def test_list_directory_is_single_level_and_skips_links(self):
         (self.project / "folder").mkdir()
         (self.project / "one.txt").write_text("one", encoding="utf-8")

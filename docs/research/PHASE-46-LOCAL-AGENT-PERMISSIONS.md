@@ -26,11 +26,11 @@ The baseline blocks common project control directories and names/extensions used
 
 Each list/read/write request records an intent and a result in JSONL. Events include an increasing sequence, UTC timestamp, operation, root ID, relative path, outcome, bounded detail, optional byte count, previous event SHA-256 and their own SHA-256. The complete log is schema-checked and hash-chain-verified before append. Failed/corrupt/full audit blocks access. Content is not stored in audit events. Audit size is capped at 2 MiB and the event count at 5,000; there is no automatic rotation.
 
-The hash chain detects many accidental or partial edits; it does not withstand a local administrator or an attacker who can rewrite both the application and log. A concurrent hostile process manipulating path components can still create a filesystem race between checks and access. The agent is not suitable for untrusted roots in a hostile same-user environment.
+The hash chain detects many accidental or partial edits; it does not withstand a local administrator or an attacker who can rewrite both the application and log. Phase 48 captures device/inode/type identities for existing path components, rejects link/reparse components, checks that the chain remains stable after bounded reads, and rechecks parent/target identities around write publication. This detects path substitutions that persist across those checks, but the remaining path-based operations are not an atomic handle-relative sandbox: a narrow race can still exist between the final check and filesystem operation, especially on Windows. Do not use the agent with untrusted roots in a hostile same-user environment.
 
 ## Regression coverage
 
-Temporary-directory tests cover configuration validation, non-overlapping roots, audit destination boundaries, read/list/write permissions, replacement hashes, traversal, protected names, symlinks when available, per-file limits, failed/tampered audit logs, and CLI/stdin behavior. The Windows low-memory workflow exercises the Windows code path where supported; neither CI workflow accesses the user's personal folders.
+Temporary-directory tests cover configuration validation, non-overlapping roots, audit destination boundaries, read/list/write permissions, replacement hashes, traversal, protected names, symlinks when available, per-file limits, a simulated directory-identity swap during read, failed/tampered audit logs, and CLI/stdin behavior. The Windows low-memory workflow exercises the Windows code path where supported; neither CI workflow accesses the user's personal folders.
 
 ## Acceptance gate
 

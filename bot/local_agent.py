@@ -84,6 +84,42 @@ def _reject_link_components(path: str | Path, label: str, *, allow_missing: bool
         current = parent
 
 
+def _path_chain_signature(path: str | Path, label: str) -> tuple[tuple[Any, ...], ...]:
+    """Capture existing path-component identities without following links.
+
+    This is a best-effort race detector for path-based operations, not a
+    substitute for handle-relative filesystem APIs or a security boundary
+    against a hostile process running as the same user.
+    """
+    target = Path(os.path.abspath(os.fspath(Path(path).expanduser())))
+    chain = [*reversed(target.parents), target]
+    signature: list[tuple[Any, ...]] = []
+    for component in chain:
+        try:
+            info = component.lstat()
+        except OSError as exc:
+            raise LocalAgentError(f"Could not safely inspect {label} path components") from exc
+        if stat.S_ISLNK(info.st_mode) or _is_link_or_reparse(component):
+            raise LocalAgentError(f"{label} cannot include a symlink or Windows reparse point")
+        signature.append((
+            os.path.normcase(str(component)),
+            info.st_dev,
+            info.st_ino,
+            stat.S_IFMT(info.st_mode),
+        ))
+    return tuple(signature)
+
+
+def _assert_path_chain_unchanged(
+    path: str | Path,
+    expected: tuple[tuple[Any, ...], ...],
+    label: str,
+) -> None:
+    """Fail closed when any path component was replaced during an operation."""
+    if _path_chain_signature(path, label) != expected:
+        raise LocalAgentError(f"{label} path changed during operation; access blocked")
+
+
 def _read_json_config(path: Path) -> Any:
     try:
         _reject_link_components(path, "Agent config", allow_missing=False)
@@ -553,9 +589,11 @@ class LocalAgent:
         self._record("read", root_id, relative, "intent", "file_read_started")
         try:
             _reject_link_components(target, "Read target", allow_missing=False)
+            path_signature = _path_chain_signature(target, "Read target")
             raw = read_bounded_bytes(
                 target, limit_bytes=root["max_file_bytes"], label="Local-agent file"
             )
+            _assert_path_chain_unchanged(target, path_signature, "Read target")
             content = raw.decode("utf-8")
             self._record("read", root_id, relative, "success", f"sha256={_sha256(raw)}", len(raw))
             return {
@@ -596,7 +634,9 @@ class LocalAgent:
             self._record("write", root_id, relative, "denied", "parent_not_directory")
             raise LocalAgentError("Parent directory must already exist; the agent never creates directories")
         _reject_link_components(parent, "Write parent", allow_missing=False)
+        parent_signature = _path_chain_signature(parent, "Write parent")
         exists = target.exists()
+        target_signature: tuple[tuple[Any, ...], ...] | None = None
         if exists:
             if not target.is_file():
                 self._record("write", root_id, relative, "denied", "target_not_regular_file")
@@ -616,6 +656,7 @@ class LocalAgent:
             if not isinstance(expected_sha256, str) or not _SHA256.fullmatch(expected_sha256) or expected_sha256 != current_hash:
                 self._record("write", root_id, relative, "denied", "expected_sha256_mismatch")
                 raise LocalAgentError("Replacing an existing file requires its exact current expected_sha256")
+            target_signature = _path_chain_signature(target, "Write target")
         else:
             if expected_sha256 is not None:
                 self._record("write", root_id, relative, "denied", "hash_supplied_for_missing_target")
@@ -647,14 +688,21 @@ class LocalAgent:
                 stream.write(raw)
                 stream.flush()
                 os.fsync(stream.fileno())
+            _assert_path_chain_unchanged(parent, parent_signature, "Write parent")
             _reject_link_components(parent, "Write parent", allow_missing=False)
             _reject_link_components(target, "Write target", allow_missing=True)
+            _assert_path_chain_unchanged(parent, parent_signature, "Write parent")
             if exists:
                 _reject_link_components(target, "Write target", allow_missing=False)
+                if target_signature is None:
+                    raise LocalAgentError("Write target identity was not captured; replacement blocked")
+                _assert_path_chain_unchanged(target, target_signature, "Write target")
                 if not target.is_file() or _sha256(read_bounded_bytes(
                     target, limit_bytes=root["max_file_bytes"], label="Existing write target"
                 )) != current_hash:
                     raise LocalAgentError("Write target changed before publication; no replacement was made")
+                _assert_path_chain_unchanged(parent, parent_signature, "Write parent")
+                _assert_path_chain_unchanged(target, target_signature, "Write target")
                 os.replace(temporary, target)
                 temporary = None
             else:
