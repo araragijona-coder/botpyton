@@ -127,13 +127,14 @@ def _directory_chain_lease(
     expected_signature: tuple[tuple[Any, ...], ...],
     label: str,
 ):
-    """Hold directory handles without FILE_SHARE_DELETE while a path is in use.
+    """Hold and verify handles for a directory path while path-based work runs.
 
-    On Windows, pin every existing directory component from the filesystem
-    anchor through path. This prevents ordinary rename/reparse substitution
-    of those directory components while path-based work is staged and published.
-    The target file leaf is not pinned by this helper. This is defense in depth,
-    not a hostile same-user sandbox.
+    On Windows, open every directory component from the filesystem anchor
+    through path with conservative sharing and reject reparse points or identity
+    mismatches. Check the path again when the operation ends. Windows may still
+    permit some rename patterns despite these handles, so this is identity-based
+    race detection, not an atomic handle-relative filesystem transaction.
+    The target file leaf is not pinned by this helper.
     """
     target = Path(os.path.abspath(os.fspath(Path(path).expanduser())))
     initial = _path_chain_signature(target, label)
