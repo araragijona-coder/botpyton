@@ -352,7 +352,9 @@ def _publish_staged_file(
             ("flags", wintypes.DWORD),
             ("root_directory", wintypes.HANDLE),
             ("file_name_length", wintypes.DWORD),
-            ("file_name", wintypes.WCHAR * len(target.name)),
+            # FILE_RENAME_INFO expects a NUL-terminated name buffer; FileNameLength
+            # itself excludes that terminator and is expressed in bytes.
+            ("file_name", wintypes.WCHAR * (len(target.name) + 1)),
         ]
 
     kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
