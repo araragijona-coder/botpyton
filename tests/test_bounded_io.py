@@ -1,3 +1,4 @@
+import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -39,6 +40,21 @@ class BoundedIOTests(unittest.TestCase):
             with patch("bot.bounded_io.Path.stat", return_value=fake_before):
                 with self.assertRaisesRegex(BoundedReadError, "changed while it was being opened"):
                     read_bounded_bytes(path, limit_bytes=100)
+
+    @unittest.skipUnless(os.name == "nt", "Windows handle flags are specific to Windows")
+    def test_windows_read_refuses_reparse_point_leaf_when_symlink_is_available(self):
+        with tempfile.TemporaryDirectory() as temp:
+            base = Path(temp)
+            source = base / "source.txt"
+            alias = base / "alias.txt"
+            source.write_bytes(b"must not be read through the link")
+            try:
+                alias.symlink_to(source)
+            except (OSError, NotImplementedError) as exc:
+                self.skipTest(f"Windows symlink creation is unavailable: {exc}")
+            with self.assertRaisesRegex(BoundedReadError, "reparse point"):
+                read_bounded_bytes(alias, limit_bytes=100)
+            self.assertEqual(source.read_bytes(), b"must not be read through the link")
 
     def test_rejects_excessive_json_depth(self):
         value = 0
