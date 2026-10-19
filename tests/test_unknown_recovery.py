@@ -165,8 +165,8 @@ class UnknownRecoveryTests(unittest.TestCase):
     def test_static_scan_enforces_total_read_budget_before_reading_next_file(self):
         first = self.root / "a.py"
         second = self.root / "b.py"
-        first.write_bytes(b"x=1\\n")
-        second.write_bytes(b"y=2\\n")
+        first.write_bytes(b"1234")
+        second.write_bytes(b"5678")
         original_reader = __import__("bot.unknown_recovery", fromlist=["read_bounded_bytes"]).read_bounded_bytes
         read_paths = []
 
