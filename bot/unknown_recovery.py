@@ -100,57 +100,86 @@ def _validate_root(root: str | Path) -> Path:
 
 
 def _project_files(root: Path) -> tuple[list[Path], dict[str, Any]]:
-    """Find a deterministic, bounded file set without following directory links."""
+    """Find a deterministic file set with bounded directory-entry buffering."""
     selected: list[Path] = []
     entries_seen = 0
     skipped_links = 0
+    directories_unreadable = 0
     truncated = False
     base = root.resolve()
-    for directory, dirnames, filenames in os.walk(base, topdown=True, followlinks=False):
-        current = Path(directory)
-        kept = []
-        for name in sorted(dirnames):
-            child = current / name
-            if name in SKIP_DIRS:
-                continue
-            try:
-                if _is_link_or_reparse(child):
-                    skipped_links += 1
-                    continue
-            except OSError:
-                skipped_links += 1
-                continue
-            kept.append(name)
-        dirnames[:] = kept
-        filenames.sort()
-        for name in filenames:
-            entries_seen += 1
-            if entries_seen > MAX_SCAN_ENTRIES or len(selected) >= MAX_SCAN_FILES:
-                truncated = True
-                break
+    pending = [base]
+
+    # Traverse in lexical depth-first order. Do not let os.walk materialize an
+    # arbitrarily large dirnames/filenames list before enforcing the scan bound.
+    while pending:
+        current = pending.pop()
+        names: list[str] = []
+        try:
+            with os.scandir(current) as iterator:
+                for entry in iterator:
+                    # Read at most the remaining budget plus a one-entry
+                    # lookahead. If a directory is oversized, fail closed on
+                    # that directory rather than select a filesystem-order
+                    # dependent subset of its contents.
+                    if entries_seen + len(names) >= MAX_SCAN_ENTRIES:
+                        truncated = True
+                        break
+                    names.append(entry.name)
+        except OSError:
+            directories_unreadable += 1
+            entries_seen = min(MAX_SCAN_ENTRIES, entries_seen + len(names))
+            continue
+
+        if truncated:
+            entries_seen = MAX_SCAN_ENTRIES
+            break
+
+        entries_seen += len(names)
+        names.sort()
+        child_directories: list[Path] = []
+        for name in names:
             path = current / name
             try:
                 info = path.lstat()
-                if _is_link_or_reparse(path) or not path.is_file():
+                if (
+                    stat.S_ISLNK(info.st_mode)
+                    or bool(getattr(info, "st_file_attributes", 0) & 0x400)
+                ):
+                    skipped_links += 1
+                    continue
+                if stat.S_ISDIR(info.st_mode):
+                    if name not in SKIP_DIRS:
+                        child_directories.append(path)
+                    continue
+                if not stat.S_ISREG(info.st_mode):
                     skipped_links += 1
                     continue
                 relative = path.relative_to(base).as_posix()
             except (OSError, ValueError):
                 skipped_links += 1
                 continue
+
             suffix = path.suffix.lower()
             if suffix in SOURCE_SUFFIXES or suffix in JSON_SUFFIXES or path.name == "pyproject.toml" or relative in {
                 "package.json", "tsconfig.json",
             }:
+                if len(selected) >= MAX_SCAN_FILES:
+                    truncated = True
+                    break
                 selected.append(path)
+
         if truncated:
             break
+        # Reverse before pushing so the lexically first directory is visited first.
+        pending.extend(reversed(child_directories))
+
     selected.sort(key=lambda path: path.relative_to(base).as_posix())
     return selected, {
         "entries_examined": min(entries_seen, MAX_SCAN_ENTRIES),
         "candidate_files": len(selected),
         "scan_truncated": truncated,
         "link_or_special_entries_skipped": skipped_links,
+        "directories_unreadable": directories_unreadable,
         "file_limit": MAX_SCAN_FILES,
         "entry_limit": MAX_SCAN_ENTRIES,
         "per_file_bytes_limit": MAX_FILE_BYTES,
@@ -421,6 +450,8 @@ def investigate_failure(
         missing.append("observed_behavior_and_reproduction_steps")
     if probes["scan"]["scan_truncated"]:
         missing.append("remaining_static_scan_scope")
+    if probes["scan"].get("directories_unreadable", 0):
+        missing.append("unreadable_static_directories")
     if not hypotheses:
         missing.extend([
             "complete_unsanitized_log_kept_locally_for_manual_review",

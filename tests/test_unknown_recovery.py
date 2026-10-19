@@ -9,6 +9,7 @@ from bot.unknown_recovery import (
     MAX_LOG_BYTES,
     UnknownRecoveryError,
     investigate_failure,
+    _project_files,
     _static_probes,
 )
 
@@ -126,6 +127,16 @@ class UnknownRecoveryTests(unittest.TestCase):
         self.assertTrue(report["static_evidence"]["scan"]["scan_truncated"])
         self.assertIn("remaining_static_scan_scope", report["missing_evidence"])
         self.assertLessEqual(report["static_evidence"]["scan"]["candidate_files"], 2)
+
+
+    def test_scan_limit_counts_empty_directories(self):
+        for number in range(4):
+            (self.root / f"empty_{number}").mkdir()
+        with patch("bot.unknown_recovery.MAX_SCAN_ENTRIES", 2):
+            files, scan = _project_files(self.root)
+        self.assertEqual(files, [])
+        self.assertTrue(scan["scan_truncated"])
+        self.assertEqual(scan["entries_examined"], 2)
 
     def test_result_is_deterministic_except_for_no_time_fields(self):
         log = "VendorEngine: failure 0xABCD"
