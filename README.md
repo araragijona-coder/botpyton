@@ -1,6 +1,6 @@
 # BotPyton — deterministic GitHub worker without AI
 
-BotPyton's core worker is deterministic and does not require AI models, inference APIs, or AI service credentials. Its task engine combines a JSON queue with strict allowlists. Task descriptions are data, never commands. A separate architecture-advice command is optional and makes a remote AI request only after explicit user consent; it is not part of normal task execution.
+BotPyton's local worker is deterministic and does not require AI models, inference APIs, AI credentials, or network access for local planning, inspection, tests, and repair workflows. Task descriptions are data, never commands. The former remote architecture adviser has been removed and all legacy adviser flags fail closed under the strict offline policy. Explicit GitHub publication commands remain a separate opt-in mode and require GitHub access by design.
 
 ## Capabilities
 
@@ -10,7 +10,7 @@ BotPyton's core worker is deterministic and does not require AI models, inferenc
 - Bounded autonomous cycle: run fixed tests, apply at most one exact known repair after a failure, rerun tests, verify Python/JSON files, and persist per-attempt evidence.
 - Conservative diagnostics plus two exact source repairs: a uniquely located JSON trailing comma and a supported one-line Python compound-header colon.
 - Declarative GitHub operations: create an isolated bot branch, create one commit containing the declared paths, and open a draft pull request for review.
-- No automatic merge, no arbitrary shell commands, and no automatic package installation. The normal worker does not call AI APIs; the optional architecture adviser is isolated, explicitly authorized, and described below.
+- No automatic merge, no arbitrary shell commands, and no automatic package installation. No model provider or AI adviser is integrated. Local architecture planning uses deterministic rules; explicit GitHub publication is separate and is not an offline operation.
 
 ## Interfaz de escritorio
 
@@ -47,36 +47,17 @@ The recovery policy no longer automatically retries a known or unknown task fail
 
 See [docs/research/PHASE-24-EVIDENCE-BASED-RECOVERY.md](docs/research/PHASE-24-EVIDENCE-BASED-RECOVERY.md). The registry runs locally and does not install tools, change permissions, or make network/API calls.
 
-## Phase 25: optional free-model architecture adviser
+## Phase 25–26 — Remote architecture adviser retired
 
-BOTPYTON supports a separate, opt-in second opinion for software architecture through OpenRouter's free-model router. The base architecture planner remains offline and deterministic. The remote adviser does not run code, write files, issue commands, change the queue, or create pull requests. Source code is not sent by default; uploading selected files requires a second, separate consent.
+The previous OpenRouter-backed adviser and the source-context/failure-report upload paths have been retired under the Phase 59 offline policy. The CLI keeps its old flag names only for compatibility: passing any of them returns `disabled_offline_policy` before reading the selected brief/source/report, importing network clients, or making a request. No provider endpoint or AI service credential is required.
 
-Current free-router limits published by OpenRouter are **50 requests/day and 20 requests/minute**; the free model router prices input and output at $0. The selected underlying model can change, and availability/limits are not guaranteed. BOTPYTON makes one request, sets a maximum output token count, enforces payload/response/time limits, and never retries a failed request. See [the detailed setup, consent, privacy, and limits](docs/ARCHITECT-AI-ADVISOR.md).
-
-Configure `BOTPYTON_OPENROUTER_API_KEY` in your Windows user environment. Then review your structured brief and explicitly allow external processing:
-
-```powershell
-python -m bot.main --architect-ai .cerebro/examples/architect-design-brief.json --allow-external-ai
-```
-
-Without `--allow-external-ai`, no request is sent. For the entirely local workflow, continue to use:
+Use the deterministic local planner instead:
 
 ```powershell
 python -m bot.main --architect-plan .cerebro/examples/architect-design-brief.json
 ```
 
-Only selected brief fields and the local plan's high-level steps/questions are sent by default; the local project path and repository inventory are excluded. Any sensitive text pasted into brief fields can still be sent, so remove credentials and private source details before consent. To provide actual code evidence, choose up to four relative file paths under project_root, such as --architect-ai-context bot/queue.py --architect-ai-context tests/test_queue.py, and add --send-source-context. Without that second flag no source text is uploaded. Each file is capped at 16 KB, total source context at 40 KB, and the full request at 70 KB; common secret-like values and link/reparse paths are rejected, though the scanner cannot guarantee that every secret is detected. The model reply is advice for human review, not executable instructions. This does not make BOTPYTON an autonomous general-purpose programmer.
-
-## Phase 26: selected source context for the optional architecture adviser
-
-The adviser can now use actual code evidence rather than infer from the task description. Source text is still excluded by default. Choose no more than four exact paths under `project_root`, and add a separate consent flag:
-
-```powershell
-python -m bot.main --architect-ai .cerebro/examples/architect-design-brief.json --allow-external-ai --architect-ai-context bot/queue.py --architect-ai-context tests/test_queue.py --send-source-context
-```
-
-Each selected file is capped at 16 KB, all selected source at 40 KB, and the complete serialized request at 70 KB. The loader rejects traversal, symbolic/reparse links, unsupported extensions, generated/private folders, binary/non-UTF-8 content, and common secret patterns. This filter cannot guarantee every secret is detected; review the selected files yourself. When source context is provided, the adviser can also propose a unified diff marked `BORRADOR DE PARCHE (NO APLICADO)`, limited to selected paths. The draft is never applied or executed automatically and must be reviewed and tested separately. The bot is still not a general-purpose autonomous programmer. See [Phase 26 research and constraints](docs/research/PHASE-26-EXPLICIT-SOURCE-CONTEXT.md).
-Sources: [OpenRouter free model router](https://openrouter.ai/openrouter/free) · [official pricing and limits](https://openrouter.ai/pricing).
+The offline guarantee applies to local planning, inspection, and deterministic task operations. Explicit GitHub write/publication commands are a separate, intentional network mode; they do not invoke an AI model.
 
 ## Phase 27: isolated reviewed-patch cycle
 
@@ -103,9 +84,9 @@ Sources: [Git apply](https://git-scm.com/docs/git-apply) · [Python subprocess](
 
 ## Next limitations to address
 
-- The planner still uses deterministic heuristics; a general natural-language architecture brain requires the separately consented remote adviser or an independently supplied patch proposal.
-- The patch cycle does not extract or apply a diff straight from an AI response. Review the proposal and save the diff explicitly.
-- A failed candidate produces diagnostic guidance but does not autonomously ask the model for another patch. The next safe step is an evidence-aware, bounded repair iteration with explicit external-AI consent, preserved baseline/candidate logs, and a hard stop after a small number of attempts.
+- The planner is intentionally deterministic; ambiguous goals still require clearer acceptance criteria or an independently supplied, human-reviewed patch.
+- The patch cycle accepts a patch file that a human has reviewed; there is no model-generated patch endpoint.
+- A failed candidate produces local diagnostic guidance. The worker stops when evidence is insufficient and does not contact a model provider or upload failure evidence.
 
 ## Quick start
 
@@ -471,26 +452,11 @@ The current feature gap against CCleaner is documented in [`docs/CCLEANER-PARITY
 Run `python -m bot.main --pc-startup-advisor` or select **W** in `BOTPYTON.bat`. The advisor reads Windows Run/RunOnce entries and startup-folder items, extracts only a recognized executable/script target, checks whether that target exists, and never returns registry command arguments. It does not disable entries, launch commands, measure actual boot impact, or label a program unnecessary. Results can include local paths; inspect them before sharing.
 
 
-## Phase 28: evidence-guided repair feedback
+## Phases 28–29 — Former remote repair feedback (disabled)
 
-When a reviewed patch fails in Phase 27, BOTPYTON can now give the optional architecture adviser the **sanitized failure evidence** from that patch cycle. This reduces the need to manually summarize the failing test and helps the adviser revise its hypothesis. It is still advice, not an autonomous retry loop.
+Older releases documented sending selected source files and sanitized patch-failure reports to a remote adviser. Phase 59 removes that runtime path. The legacy flags `--architect-ai`, `--architect-ai-context`, `--send-source-context`, `--architect-ai-failure-report`, `--send-failure-report`, and `--allow-external-ai` now return `disabled_offline_policy`. They do not open, sanitize, or upload the named files or reports. Local patch validation and diagnostics remain available through the reviewed-patch workflow.
 
-Save the complete JSON output from a failed `--apply-reviewed-patch` run as `repair-result.json`. Review the exact files and report first, then provide the same explicitly selected source context used for the patch proposal:
-
-```powershell
-python -m bot.main --architect-ai .cerebro/examples/architect-design-brief.json --allow-external-ai --architect-ai-context src/parser.py --architect-ai-context tests/test_parser.py --send-source-context --architect-ai-failure-report repair-result.json --send-failure-report
-```
-
-The separate `--send-failure-report` flag is required in addition to `--allow-external-ai`; source contents still require the independent `--send-source-context` flag. The report is field-filtered and size-limited, absolute workspace paths and arbitrary JSON fields are excluded, and common secret patterns are rejected before any request. The scanner cannot guarantee that every secret is detected, so inspect the report before consenting. See [Phase 28 repair feedback](docs/ARCHITECT-REPAIR-FEEDBACK.md).
-
-BOTPYTON does not apply the suggested revision automatically. Review and save the new diff, then run the Phase 27 isolated patch cycle again. If evidence is ambiguous, ask for clarification rather than repeating an unchanged patch.
-
-
-## Phase 29: redacción de rutas locales en evidencia de reparación
-
-Antes de compartir el informe de una reparación con el asesor remoto, BOTPYTON ahora sustituye patrones comunes de rutas absolutas locales que aparezcan dentro de los logs, tracebacks y textos de diagnóstico. La fase anterior ya omitía campos enteros de ubicación, pero una ruta también podía venir incrustada en el texto de un error. Se cubren rutas Windows citadas y sin comillas, y raíces Unix frecuentes como `/home`, `/Users`, `/tmp`, `/runner` y `/workspace`. Las URL web no se deben confundir con rutas locales.
-
-La redacción es una defensa por capas, no un detector universal de datos privados: otras rutas, nombres de usuario, secretos con formatos desconocidos y datos incluidos en el brief o en los archivos fuente seleccionados pueden seguir siendo sensibles. Inspeccioná el informe antes de usar `--send-failure-report`. No cambia el consentimiento externo ni el ciclo aislado de parches.
+See [the archived adviser note](docs/ARCHITECT-AI-ADVISOR.md) and [the Phase 59 offline policy](docs/research/PHASE-59-STRICT-OFFLINE-NO-AI.md).
 
 
 ## Phase 32 — portable package publication safety
