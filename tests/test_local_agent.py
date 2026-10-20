@@ -1,5 +1,7 @@
 import hashlib
 import os
+import threading
+from concurrent.futures import ThreadPoolExecutor
 import json
 import tempfile
 import unittest
@@ -249,6 +251,72 @@ class LocalAgentTests(unittest.TestCase):
         self.assertTrue(result["created"])
         self.assertEqual((self.project / "new.py").read_text(encoding="utf-8"), "VALUE = 2\n")
         self.assertEqual(self.agent().verify_audit()["event_count"], 2)
+
+    def test_concurrent_replacements_with_same_expected_hash_allow_only_one_writer(self):
+        target = self.project / "shared.txt"
+        target.write_bytes(b"starting value")
+        expected = hashlib.sha256(b"starting value").hexdigest()
+        barrier = threading.Barrier(2)
+
+        def replace(content):
+            barrier.wait(timeout=5)
+            try:
+                LocalAgent(self.config_path).write_file(
+                    "project", "shared.txt", content, expected_sha256=expected
+                )
+                return ("success", content)
+            except LocalAgentError as exc:
+                return ("conflict", str(exc))
+
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            outcomes = list(pool.map(replace, ("writer one", "writer two")))
+
+        successes = [value for status, value in outcomes if status == "success"]
+        conflicts = [value for status, value in outcomes if status == "conflict"]
+        self.assertEqual(len(successes), 1, outcomes)
+        self.assertEqual(len(conflicts), 1, outcomes)
+        self.assertIn("expected_sha256", conflicts[0])
+        self.assertEqual(target.read_bytes(), successes[0].encode("utf-8"))
+        audit = LocalAgent(self.config_path).verify_audit()
+        self.assertEqual(audit["status"], "valid")
+        records = [json.loads(line) for line in self.audit_path.read_text(encoding="utf-8").splitlines()]
+        self.assertEqual(sum(record["outcome"] == "success" and record["operation"] == "write" for record in records), 1)
+        self.assertEqual(sum(record["outcome"] == "denied" and record["operation"] == "write" for record in records), 1)
+
+    def test_concurrent_new_file_creation_never_overwrites_the_first_writer(self):
+        target = self.project / "brand-new.txt"
+        barrier = threading.Barrier(2)
+
+        def create(content):
+            barrier.wait(timeout=5)
+            try:
+                LocalAgent(self.config_path).write_file("project", "brand-new.txt", content)
+                return ("success", content)
+            except LocalAgentError as exc:
+                return ("conflict", str(exc))
+
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            outcomes = list(pool.map(create, ("first payload", "second payload")))
+
+        successes = [value for status, value in outcomes if status == "success"]
+        conflicts = [value for status, value in outcomes if status == "conflict"]
+        self.assertEqual(len(successes), 1, outcomes)
+        self.assertEqual(len(conflicts), 1, outcomes)
+        self.assertIn("expected_sha256", conflicts[0])
+        self.assertEqual(target.read_bytes(), successes[0].encode("utf-8"))
+
+    def test_internal_root_write_lock_is_hidden_and_protected(self):
+        self.agent().write_file("project", "one.txt", "one")
+        lock_files = list(self.project.glob(".botpyton-write-*.lock"))
+        self.assertEqual(len(lock_files), 1)
+        lock_name = lock_files[0].name
+
+        listing = self.agent().list_directory("project")
+        self.assertNotIn(lock_name, {item["name"] for item in listing["items"]})
+        with self.assertRaisesRegex(LocalAgentError, "protected"):
+            self.agent().read_file("project", lock_name)
+        with self.assertRaisesRegex(LocalAgentError, "protected"):
+            self.agent().write_file("project", lock_name, "do not overwrite lock")
 
     def test_existing_file_replacement_requires_read_permission_and_exact_hash(self):
         target = self.project / "app.py"
