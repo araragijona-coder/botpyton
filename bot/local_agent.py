@@ -559,15 +559,15 @@ def _restore_previous_content_if_unchanged(
             )
             if _sha256(restored) != _sha256(previous_content):
                 raise LocalAgentError("Recovered target failed SHA-256 verification")
-    finally:
-        if staged_path is not None:
-            try:
-                if os.name != "nt" and isinstance(parent_handle, int):
-                    os.unlink(staged_path.name, dir_fd=parent_handle)
-                elif staged_path.exists():
-                    staged_path.unlink()
-            except OSError:
-                pass
+        finally:
+            if staged_path is not None:
+                try:
+                    if os.name != "nt" and isinstance(parent_handle, int):
+                        os.unlink(staged_path.name, dir_fd=parent_handle)
+                    elif staged_path.exists():
+                        staged_path.unlink()
+                except OSError:
+                    pass
 
 
 def _read_json_config(path: Path) -> Any:
