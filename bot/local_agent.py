@@ -421,8 +421,10 @@ def _publish_staged_file(
     file_flag_sequential_scan = 0x08000000
     file_attribute_directory = 0x00000010
     file_attribute_reparse_point = 0x00000400
-    file_rename_info_class = 3
+    # FileRenameInfoEx supports POSIX replacement semantics for open target handles.
+    file_rename_info_class = 22
     file_rename_flag_replace_if_exists = 0x00000001
+    file_rename_flag_posix_semantics = 0x00000002
     invalid_handle = ctypes.c_void_p(-1).value
 
     handle = kernel32.CreateFileW(
@@ -446,7 +448,7 @@ def _publish_staged_file(
 
         rename = _FileRenameInfo()
         destination_name = os.path.abspath(os.fspath(target))
-        rename.flags = file_rename_flag_replace_if_exists if replace_existing else 0
+        rename.flags = (file_rename_flag_replace_if_exists | file_rename_flag_posix_semantics) if replace_existing else 0
         rename.root_directory = None
         rename.file_name_length = len(destination_name.encode("utf-16-le"))
         rename.file_name = destination_name

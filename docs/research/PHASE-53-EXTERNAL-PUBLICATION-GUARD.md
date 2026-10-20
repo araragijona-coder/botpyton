@@ -15,7 +15,7 @@ Phase 52 serializes cooperating BOTPYTON writers and rechecks expected_sha256 af
 
 - Pass the expected existing-content SHA-256, captured path-chain identity, and per-root size limit into the publication helper.
 - Revalidate the destination path identity and bounded content hash at the platform publication boundary. A detected change aborts before publication and preserves the external content.
-- On Windows, open an existing destination with a handle that shares read and delete but not write while the last validation and native rename are performed. Incompatible existing writer handles or new write opens make the operation fail closed. Delete sharing remains necessary for rename-based replacement.
+- On Windows, open an existing destination with a handle that shares read and delete but not write while the last validation and native rename are performed. Use FileRenameInfoEx with FILE_RENAME_REPLACE_IF_EXISTS and FILE_RENAME_POSIX_SEMANTICS so the rename can replace the entry while that read guard remains open. Incompatible existing writer handles or new write opens make the operation fail closed. If the filesystem does not support the rename class/flags, the operation fails closed rather than degrading to an unguarded rename.
 - Add deterministic regressions that inject an external in-place edit, a replacement of the target path, and a competing creator immediately before the publication helper is entered. The target's external bytes are asserted to survive.
 - Update operator documentation with platform-specific guarantees and limits.
 
@@ -24,7 +24,7 @@ Phase 52 serializes cooperating BOTPYTON writers and rechecks expected_sha256 af
 - Changes observable when the publication helper performs its final check are rejected; BOTPYTON does not replace that changed destination.
 - New-file publication remains exclusive (link on POSIX; rename without replace on Windows), so a competing file creation cannot be overwritten.
 - The final check is not a universal compare-and-swap. POSIX has no portable mechanism here to prevent an uncooperative process writing the same inode in the last check-to-syscall interval.
-- On Windows, the no-write-share destination handle blocks incompatible open-for-write operations during the critical section when acquired successfully. FILE_SHARE_DELETE must remain enabled to support the atomic rename, so an external rename/replacement of the path can still race. A process with a compatible pre-existing mechanism outside the normal open-sharing protocol is not claimed to be sandboxed by this layer.
+- On Windows, the no-write-share destination handle blocks incompatible open-for-write operations during the critical section when acquired successfully. FileRenameInfoEx with FILE_RENAME_POSIX_SEMANTICS permits replacement while the old destination handle remains open, but FILE_SHARE_DELETE must remain enabled; an external rename/replacement of the path can still race. Filesystems that reject this API/flag combination fail closed. A process with a compatible pre-existing mechanism outside the normal open-sharing protocol is not claimed to be sandboxed by this layer.
 - A post-publication verification or audit failure can still be reported after the file changed; inspect the target and audit before retrying.
 - CI validates the implementation and injected regressions, not the user's own folder ACLs, filesystem drivers, security software, or external writer patterns on their PC.
 
