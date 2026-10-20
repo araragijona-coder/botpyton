@@ -382,3 +382,10 @@ python -m bot.main --pc-cleanup-restore "C:\\path\\to\\BOTPYTON\\Quarantine\\ses
 - Add a POSIX regression for consecutive unlink failures. Verify the audit chain remains valid and the leftover alias is observable in a disposable test directory; preserve the cleanup warning if a surrounding write rolls back.
 - The post-publication state is not rolled back automatically; caller must inspect the audit directory before retrying.
 - Required gate: foundation tests and Windows low-memory smoke pass on the same final SHA. No `main` changes, PR creation, or merge.
+
+# Phase 57 — Pre-publication staging cleanup disclosure
+
+- If audit staging fails and the remaining staging alias cannot be removed, disclose both the original failure and cleanup failure, and mark the audit publication as not committed.
+- If a local write fails before publication and its staging cleanup also fails, surface the cleanup problem while preserving the original failure as the exception cause.
+- Add regressions for both pre-publication paths; verify no destination publication, valid audit state, and observable temporary aliases in disposable test roots.
+- Required gate: foundation tests and Windows low-memory smoke pass on the same final SHA. No `main` changes, PR creation, or merge.

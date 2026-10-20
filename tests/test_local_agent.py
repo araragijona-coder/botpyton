@@ -674,6 +674,91 @@ class LocalAgentTests(unittest.TestCase):
         self.assertEqual(len(aliases), 1, "a leftover alias must be explicitly observable in this isolated test")
         aliases[0].unlink()
 
+
+    def test_audit_prepublication_failure_discloses_staging_cleanup_failure(self):
+        agent = self.agent()
+        real_write = os.write
+        real_unlink = os.unlink
+        writes = 0
+        cleanup_injected = False
+
+        def partial_then_fail(descriptor, data):
+            nonlocal writes
+            if writes == 0:
+                writes += 1
+                return real_write(descriptor, data[:min(7, len(data))])
+            raise OSError("injected audit staging write failure")
+
+        def fail_audit_staging_cleanup(path, *args, **kwargs):
+            nonlocal cleanup_injected
+            name = Path(path).name
+            if (
+                not cleanup_injected
+                and name.startswith(".audit.jsonl.")
+                and name.endswith(".botpyton-agent-tmp")
+            ):
+                cleanup_injected = True
+                raise PermissionError("injected pre-publication audit alias cleanup failure")
+            return real_unlink(path, *args, **kwargs)
+
+        original_audit = self.audit_path.read_bytes() if self.audit_path.exists() else b""
+        with patch("bot.local_agent.os.write", side_effect=partial_then_fail):
+            with patch("bot.local_agent.os.unlink", side_effect=fail_audit_staging_cleanup):
+                with self.assertRaises(AuditStagingCleanupError) as raised:
+                    agent._record(
+                        "read", "project", "seed.txt", "success", "injected pre-publication fault"
+                    )
+
+        self.assertGreater(writes, 0, "the staged audit writer must fail after a partial write")
+        self.assertTrue(cleanup_injected, "the staging alias cleanup failure must be injected")
+        self.assertFalse(raised.exception.published, "an event that failed staging must not be reported as published")
+        self.assertIn("Audit staging failed: OSError", str(raised.exception))
+        self.assertIn("cleanup failed before publication", str(raised.exception))
+        self.assertEqual(
+            self.audit_path.read_bytes() if self.audit_path.exists() else b"", original_audit
+        )
+        self.assertEqual(agent.verify_audit()["status"], "valid")
+        aliases = list(self.audit_dir.glob(".audit.jsonl.*.botpyton-agent-tmp"))
+        self.assertEqual(len(aliases), 1, "the injected leftover alias must be visible in the isolated fixture")
+        aliases[0].unlink()
+
+    def test_write_prepublication_failure_discloses_staging_cleanup_failure(self):
+        agent = self.agent()
+        target = self.project / "cleanup-prepublication.txt"
+        real_unlink = os.unlink
+        cleanup_injected = False
+
+        def fail_write_staging_cleanup(path, *args, **kwargs):
+            nonlocal cleanup_injected
+            name = Path(path).name
+            if (
+                not cleanup_injected
+                and name.startswith(".cleanup-prepublication.txt.")
+                and name.endswith(".botpyton-agent-tmp")
+            ):
+                cleanup_injected = True
+                raise PermissionError("injected write staging alias cleanup failure")
+            return real_unlink(path, *args, **kwargs)
+
+        with patch(
+            "bot.local_agent._publish_staged_file",
+            side_effect=LocalAgentError("injected pre-publication write failure"),
+        ):
+            with patch("bot.local_agent.os.unlink", side_effect=fail_write_staging_cleanup):
+                with self.assertRaisesRegex(
+                    LocalAgentError, "Write staging-alias cleanup also failed"
+                ) as raised:
+                    agent.write_file("project", "cleanup-prepublication.txt", "unpublished bytes")
+
+        self.assertTrue(cleanup_injected, "the write staging cleanup failure must be injected")
+        self.assertIsNotNone(raised.exception.__cause__)
+        self.assertIn("injected pre-publication write failure", str(raised.exception.__cause__))
+        self.assertFalse(target.exists(), "the destination must remain unpublished")
+        self.assertEqual(agent.verify_audit()["status"], "valid")
+        aliases = list(self.project.glob(".cleanup-prepublication.txt.*.botpyton-agent-tmp"))
+        self.assertEqual(len(aliases), 1, "the injected leftover alias must be visible in the isolated fixture")
+        aliases[0].unlink()
+
     def test_audit_corruption_is_fail_closed_before_write(self):
         (self.project / "new.py").write_text("original", encoding="utf-8")
         self.agent().read_file("project", "new.py")

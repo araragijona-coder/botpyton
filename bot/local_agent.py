@@ -7,6 +7,7 @@ import os
 import re
 import secrets
 import stat
+import sys
 import tempfile
 from contextlib import contextmanager
 from datetime import datetime, timezone
@@ -48,7 +49,11 @@ class LocalAgentError(ValueError):
 
 
 class AuditStagingCleanupError(LocalAgentError):
-    """The audit event was published, but its temporary staging alias remains."""
+    """A staging alias could not be removed; published reports whether commit occurred."""
+
+    def __init__(self, message: str, *, published: bool = True):
+        self.published = published
+        super().__init__(message)
 
 
 def _canonical_json(value: Any) -> bytes:
@@ -931,6 +936,7 @@ class LocalAgent:
         cleanup_parent_handle: int | None = None
         record_result: dict[str, Any] | None = None
         cleanup_failed = False
+        cleanup_error: OSError | None = None
         try:
             with exclusive_file_lock(lock):
                 parent = self.audit_path.parent
@@ -1037,6 +1043,7 @@ class LocalAgent:
         except (OSError, RuntimeError, ValueError) as exc:
             raise LocalAgentError(f"Audit publication failed: {type(exc).__name__}") from exc
         finally:
+            pending_error = sys.exc_info()[1]
             if descriptor is not None:
                 try:
                     os.close(descriptor)
@@ -1049,13 +1056,28 @@ class LocalAgent:
                     elif os.path.exists(staged_path):
                         staged_path.unlink()
                     staged_path = None
-                except OSError:
+                except OSError as exc:
                     cleanup_failed = True
+                    cleanup_error = exc
             if cleanup_parent_handle is not None:
                 try:
                     os.close(cleanup_parent_handle)
                 except OSError:
                     pass
+            # Do not let a staging-cleanup error disappear behind a pre-publication
+            # exception. Preserve the original failure as the cause and make the
+            # publication state explicit; this differs from the post-publish warning.
+            if cleanup_failed and record_result is None:
+                warning = (
+                    "Audit staging-alias cleanup failed before publication; "
+                    "inspect the audit directory before retrying"
+                )
+                if pending_error is not None:
+                    raise AuditStagingCleanupError(
+                        f"{pending_error}; {warning}", published=False
+                    ) from pending_error
+                if cleanup_error is not None:
+                    raise AuditStagingCleanupError(warning, published=False) from cleanup_error
 
         if record_result is not None and cleanup_failed:
             raise AuditStagingCleanupError(
@@ -1442,6 +1464,7 @@ class LocalAgent:
                 raise
             raise LocalAgentError(f"File write failed: {type(exc).__name__}") from exc
         finally:
+            pending_error = sys.exc_info()[1]
             if temporary:
                 try:
                     if os.name != "nt" and cleanup_parent_handle is not None:
@@ -1451,9 +1474,17 @@ class LocalAgent:
                     temporary = None
                     if operation_result is not None:
                         operation_result.pop("staging_cleanup", None)
-                except OSError:
+                except OSError as cleanup_exc:
                     if operation_result is not None:
                         operation_result["staging_cleanup"] = "failed"
+                    else:
+                        warning = (
+                            "Write staging-alias cleanup also failed; inspect the authorized "
+                            "root before retrying"
+                        )
+                        if pending_error is not None:
+                            raise LocalAgentError(f"{pending_error}; {warning}") from pending_error
+                        raise LocalAgentError(warning) from cleanup_exc
             if cleanup_parent_handle is not None:
                 try:
                     os.close(cleanup_parent_handle)
