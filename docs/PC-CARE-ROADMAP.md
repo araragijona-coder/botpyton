@@ -397,3 +397,12 @@ python -m bot.main --pc-cleanup-restore "C:\\path\\to\\BOTPYTON\\Quarantine\\ses
 - Add static regressions for job gates and minimum permissions. Keep PR emitters disabled, actions SHA-pinned, checkouts credential-free, and no write-token permissions.
 - Governance note: API returned no repository rulesets; branch protection could not be verified by the connected integration and remains an administrator-side acceptance check.
 - Required gate: foundation tests and Windows low-memory smoke pass on the same final SHA. No `main` changes, PR creation, or merge.
+
+# Phase 59 — Strict offline policy and external AI removal
+
+- Remove the OpenRouter/model-provider HTTP client and credential handling from `bot/architect_ai.py`; retain only a fail-closed compatibility shim that never inspects content or uses the network.
+- Reject every legacy AI/source-upload/failure-report flag before reading any supplied file. The result states `disabled_offline_policy`, `network_used: false`, no uploads, no code execution, and no file writes.
+- Keep deterministic `--architect-plan` available and test that it requires no network.
+- Update README and legacy adviser/source-context/repair-feedback guides so they no longer offer active remote upload instructions.
+- Scope clarification: local planning/diagnostics are offline; explicit GitHub publish operations remain separate opt-in network operations and do not use AI.
+- Foundation tests and Windows low-memory smoke must pass on the same final SHA. No `main` changes, PR creation, or merge.
