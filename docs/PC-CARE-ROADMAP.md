@@ -389,3 +389,11 @@ python -m bot.main --pc-cleanup-restore "C:\\path\\to\\BOTPYTON\\Quarantine\\ses
 - If a local write fails before publication and its staging cleanup also fails, surface the cleanup problem while preserving the original failure as the exception cause.
 - Add regressions for both pre-publication paths; verify no destination publication, valid audit state, and observable temporary aliases in disposable test roots.
 - Required gate: foundation tests and Windows low-memory smoke pass on the same final SHA. No `main` changes, PR creation, or merge.
+
+# Phase 58 — GitHub worker trust boundary
+
+- Block persistent worker input-validation and execution jobs when dispatched from `main`; block advisory GitHub plan validation from `main` as well.
+- Declare the worker token's minimum permissions at job level (`actions: read`, `contents: read`) and preserve the validator's `contents: read` only.
+- Add static regressions for job gates and minimum permissions. Keep PR emitters disabled, actions SHA-pinned, checkouts credential-free, and no write-token permissions.
+- Governance note: API returned no repository rulesets; branch protection could not be verified by the connected integration and remains an administrator-side acceptance check.
+- Required gate: foundation tests and Windows low-memory smoke pass on the same final SHA. No `main` changes, PR creation, or merge.

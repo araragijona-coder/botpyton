@@ -38,6 +38,8 @@ concurrency:
 
 jobs:
   validate-inputs:
+    # Never execute worker code or process task input from the default integration branch.
+    if: github.ref != 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
@@ -104,9 +106,14 @@ jobs:
           python -m bot.main --github-plans "$RUNNER_TEMP/botpyton-change-plans.json"
 
   worker:
+    # Keep manual dispatches on main from reaching the task executor.
+    if: github.ref != 'refs/heads/main'
     needs: validate-inputs
     runs-on: ubuntu-latest
     timeout-minutes: 12
+    permissions:
+      actions: read
+      contents: read
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

@@ -70,6 +70,45 @@ class PrivilegedWorkflowSecurityTests(unittest.TestCase):
                 self.assertRegex(source, r"(?m)^permissions:\n(?:  [a-z-]+: read\n?)+")
 
 
+
+    def test_worker_execution_jobs_are_blocked_on_main(self):
+        cases = {
+            ".github/workflows/botpyton-worker.yml": ("validate-inputs", "worker"),
+            ".github/workflows/botpyton-github-ops.yml": ("validate-plan",),
+        }
+        for relative, job_names in cases.items():
+            source = (ROOT / relative).read_text(encoding="utf-8")
+            for job_name in job_names:
+                with self.subTest(workflow=relative, job=job_name):
+                    match = re.search(
+                        rf"(?ms)^  {re.escape(job_name)}:\n(.*?)(?=^  [A-Za-z0-9_-]+:\n|\Z)",
+                        source,
+                    )
+                    self.assertIsNotNone(match, f"job block not found: {job_name}")
+                    self.assertRegex(
+                        match.group(1),
+                        r"(?m)^    if: github\.ref != ['\\\"]refs/heads/main['\\\"]\\s*$",
+                        "worker and plan-validation jobs must fail closed on main",
+                    )
+
+    def test_worker_job_declares_minimum_permissions_explicitly(self):
+        source = (ROOT / ".github/workflows/botpyton-worker.yml").read_text(encoding="utf-8")
+        worker_job = re.search(
+            r"(?ms)^  worker:\n(.*?)(?=^  [A-Za-z0-9_-]+:\n|\Z)",
+            source,
+        )
+        self.assertIsNotNone(worker_job, "worker job block must exist")
+        self.assertIn(
+            "    permissions:\n      actions: read\n      contents: read\n",
+            worker_job.group(1),
+            "worker permissions must be explicitly read-only and limited to artifact/repository reads",
+        )
+        self.assertNotRegex(
+            worker_job.group(1),
+            r"(?m)^      [a-z-]+: write\\s*$",
+            "worker must never get write permissions",
+        )
+
     def test_external_actions_are_pinned_to_full_commit_shas(self):
         workflows = (
             ".github/workflows/bot-tests.yml",

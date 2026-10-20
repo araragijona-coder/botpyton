@@ -26,6 +26,8 @@ concurrency:
 
 jobs:
   validate-plan:
+    # Plan validation is advisory and deliberately unavailable from main.
+    if: github.ref != 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
