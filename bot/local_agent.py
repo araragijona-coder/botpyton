@@ -1264,15 +1264,23 @@ class LocalAgent:
             if publication_completed:
                 if exists and original is not None and published_target_signature is not None:
                     try:
-                        _restore_previous_content_if_unchanged(
-                            parent, parent_signature, target, original, _sha256(raw),
-                            published_target_signature, root["max_file_bytes"],
+                        _assert_existing_target_unchanged(
+                            target, _sha256(raw), published_target_signature,
+                            root["max_file_bytes"],
                         )
-                        recovery_status = "previous_version_restored"
                     except Exception:
-                        # A mismatched hash/identity is a conflict, not permission to
-                        # overwrite. It is deliberately not retried through a weaker path.
-                        recovery_status = "rollback_skipped_or_failed"
+                        # A mismatch is an external conflict/unverifiable state, not
+                        # permission to overwrite. Never retry through a weaker path.
+                        recovery_status = "external_change_preserved"
+                    else:
+                        try:
+                            _restore_previous_content_if_unchanged(
+                                parent, parent_signature, target, original, _sha256(raw),
+                                published_target_signature, root["max_file_bytes"],
+                            )
+                            recovery_status = "previous_version_restored"
+                        except Exception:
+                            recovery_status = "rollback_failed"
                 elif published_target_signature is not None:
                     # There was no prior version. Never delete a possibly newer external
                     # file to make the operation appear rolled back.
@@ -1299,10 +1307,10 @@ class LocalAgent:
                 raise LocalAgentError(
                     "Write failed after publication; the previous file version was conditionally restored"
                 ) from exc
-            if recovery_status == "rollback_skipped_or_failed":
+            if recovery_status == "rollback_failed":
                 raise LocalAgentError(
-                    "Write failed after publication; automatic rollback was skipped or failed because "
-                    "the target could not be proven unchanged. Preserve and inspect the target before retrying"
+                    "Write failed after publication; the destination still matched BOTPYTON's published version, "
+                    "but conditional restoration failed. Inspect the target and audit before retrying"
                 ) from exc
             if recovery_status == "external_change_preserved":
                 raise LocalAgentError(
