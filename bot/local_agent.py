@@ -987,10 +987,10 @@ class LocalAgent:
         target_signature: tuple[tuple[Any, ...], ...] | None = None
         if exists:
             if not target.is_file():
-                self._record("write", root_id, relative, "denied", "target_not_regular_file")
+                self._record("write", root["id"], relative, "denied", "target_not_regular_file")
                 raise LocalAgentError("Existing write target must be a regular file")
             if "read" not in root["permission_set"]:
-                self._record("write", root_id, relative, "denied", "read_permission_required_to_replace")
+                self._record("write", root["id"], relative, "denied", "read_permission_required_to_replace")
                 raise LocalAgentError("Replacing an existing file also requires read permission and its exact SHA-256")
             _reject_link_components(target, "Write target", allow_missing=False)
             try:
@@ -998,16 +998,16 @@ class LocalAgent:
                     target, limit_bytes=root["max_file_bytes"], label="Existing write target"
                 )
             except (BoundedReadError, OSError) as exc:
-                self._record("write", root_id, relative, "denied", "existing_target_unreadable")
+                self._record("write", root["id"], relative, "denied", "existing_target_unreadable")
                 raise LocalAgentError("Existing target cannot be safely checked") from exc
             current_hash = _sha256(original)
             if not isinstance(expected_sha256, str) or not _SHA256.fullmatch(expected_sha256) or expected_sha256 != current_hash:
-                self._record("write", root_id, relative, "denied", "expected_sha256_mismatch")
+                self._record("write", root["id"], relative, "denied", "expected_sha256_mismatch")
                 raise LocalAgentError("Replacing an existing file requires its exact current expected_sha256")
             target_signature = _path_chain_signature(target, "Write target")
         else:
             if expected_sha256 is not None:
-                self._record("write", root_id, relative, "denied", "hash_supplied_for_missing_target")
+                self._record("write", root["id"], relative, "denied", "hash_supplied_for_missing_target")
                 raise LocalAgentError("expected_sha256 must be omitted when creating a new file")
             current_hash = None
 
@@ -1018,7 +1018,7 @@ class LocalAgent:
             with _directory_chain_lease(parent, parent_signature, "Write parent") as parent_handle:
                 if os.name != "nt" and isinstance(parent_handle, int):
                     cleanup_parent_handle = os.dup(parent_handle)
-                self._record("write", root_id, relative, "intent", f"sha256={_sha256(raw)}", len(raw))
+                self._record("write", root["id"], relative, "intent", f"sha256={_sha256(raw)}", len(raw))
                 # Revalidate path components and the file identity immediately before publish.
                 _reject_link_components(parent, "Write parent", allow_missing=False)
                 current_target = _resolve_under_root(
@@ -1091,9 +1091,9 @@ class LocalAgent:
                 )
                 if _sha256(published) != _sha256(raw):
                     raise LocalAgentError("Published file content verification failed")
-                self._record("write", root_id, relative, "success", f"sha256={_sha256(raw)}", len(raw))
+                self._record("write", root["id"], relative, "success", f"sha256={_sha256(raw)}", len(raw))
                 return {
-                    "status": "completed", "root_id": root_id, "relative_path": relative,
+                    "status": "completed", "root_id": root["id"], "relative_path": relative,
                     "created": not exists, "size_bytes": len(raw), "sha256": _sha256(raw),
                     "files_written": True, "backup_created": False,
                     "network_used": False, "ai_enabled": False,
@@ -1101,7 +1101,7 @@ class LocalAgent:
                 }
         except Exception as exc:
             try:
-                self._record("write", root_id, relative, "error", type(exc).__name__)
+                self._record("write", root["id"], relative, "error", type(exc).__name__)
             except LocalAgentError:
                 pass
             if isinstance(exc, LocalAgentError):
