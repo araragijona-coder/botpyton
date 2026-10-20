@@ -305,6 +305,76 @@ class LocalAgentTests(unittest.TestCase):
         self.assertIn("expected_sha256", conflicts[0])
         self.assertEqual(target.read_bytes(), successes[0].encode("utf-8"))
 
+    def test_external_in_place_change_at_publication_boundary_is_preserved(self):
+        target = self.project / "shared.txt"
+        target.write_bytes(b"authorized starting value")
+        expected = hashlib.sha256(b"authorized starting value").hexdigest()
+        real_publish = _publish_staged_file
+
+        def external_change_then_publish(*args, **kwargs):
+            target.write_bytes(b"external process update")
+            return real_publish(*args, **kwargs)
+
+        with patch(
+            "bot.local_agent._publish_staged_file",
+            side_effect=external_change_then_publish,
+        ):
+            with self.assertRaisesRegex(LocalAgentError, "changed at publication boundary"):
+                self.agent().write_file(
+                    "project", "shared.txt", "BOTPYTON replacement",
+                    expected_sha256=expected,
+                )
+
+        self.assertEqual(target.read_bytes(), b"external process update")
+        self.assertFalse(list(self.project.glob(".shared.txt.*.botpyton-agent-tmp")))
+        self.assertEqual(self.agent().verify_audit()["status"], "valid")
+
+    def test_external_path_replacement_at_publication_boundary_is_preserved(self):
+        target = self.project / "shared.txt"
+        displaced = self.project / "external-original.txt"
+        target.write_bytes(b"authorized starting value")
+        expected = hashlib.sha256(b"authorized starting value").hexdigest()
+        real_publish = _publish_staged_file
+
+        def external_swap_then_publish(*args, **kwargs):
+            target.rename(displaced)
+            target.write_bytes(b"external replacement file")
+            return real_publish(*args, **kwargs)
+
+        with patch(
+            "bot.local_agent._publish_staged_file",
+            side_effect=external_swap_then_publish,
+        ):
+            with self.assertRaisesRegex(LocalAgentError, "path changed during operation"):
+                self.agent().write_file(
+                    "project", "shared.txt", "BOTPYTON replacement",
+                    expected_sha256=expected,
+                )
+
+        self.assertEqual(displaced.read_bytes(), b"authorized starting value")
+        self.assertEqual(target.read_bytes(), b"external replacement file")
+        self.assertFalse(list(self.project.glob(".shared.txt.*.botpyton-agent-tmp")))
+        self.assertEqual(self.agent().verify_audit()["status"], "valid")
+
+    def test_external_creation_at_publication_boundary_is_never_overwritten(self):
+        target = self.project / "raced-create.txt"
+        real_publish = _publish_staged_file
+
+        def external_create_then_publish(*args, **kwargs):
+            target.write_bytes(b"external first writer")
+            return real_publish(*args, **kwargs)
+
+        with patch(
+            "bot.local_agent._publish_staged_file",
+            side_effect=external_create_then_publish,
+        ):
+            with self.assertRaises(LocalAgentError):
+                self.agent().write_file("project", "raced-create.txt", "BOTPYTON payload")
+
+        self.assertEqual(target.read_bytes(), b"external first writer")
+        self.assertFalse(list(self.project.glob(".raced-create.txt.*.botpyton-agent-tmp")))
+        self.assertEqual(self.agent().verify_audit()["status"], "valid")
+
     def test_internal_root_write_lock_is_hidden_and_protected(self):
         self.agent().write_file("project", "one.txt", "one")
         lock_files = list(self.project.glob(".botpyton-write-*.lock"))

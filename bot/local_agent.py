@@ -292,12 +292,45 @@ def _create_staged_file(parent: Path, target_name: str, parent_handle: Any) -> t
     raise LocalAgentError("Could not allocate a unique staged file name")
 
 
+def _assert_existing_target_unchanged(
+    target: Path,
+    expected_sha256: str | None,
+    expected_signature: tuple[tuple[Any, ...], ...] | None,
+    max_file_bytes: int,
+) -> None:
+    """Recheck an authorized existing destination at the publication boundary.
+
+    This narrows the last path/hash TOCTOU window; it is not a portable filesystem
+    compare-and-swap against arbitrary, non-cooperating writers.
+    """
+    if (
+        not isinstance(expected_sha256, str)
+        or not _SHA256.fullmatch(expected_sha256)
+        or expected_signature is None
+    ):
+        raise LocalAgentError("Expected destination hash and identity are required for guarded replacement")
+    _reject_link_components(target, "Write target", allow_missing=False)
+    _assert_path_chain_unchanged(target, expected_signature, "Write target")
+    try:
+        current = read_bounded_bytes(
+            target, limit_bytes=max_file_bytes, label="Write target at publication boundary"
+        )
+    except (BoundedReadError, OSError) as exc:
+        raise LocalAgentError("Write target could not be safely rechecked at publication boundary") from exc
+    if _sha256(current) != expected_sha256:
+        raise LocalAgentError("Write target changed at publication boundary; no replacement was made")
+    _assert_path_chain_unchanged(target, expected_signature, "Write target")
+
+
 def _publish_staged_file(
     temporary: Path,
     target: Path,
     parent_handle: Any,
     *,
     replace_existing: bool,
+    expected_existing_sha256: str | None = None,
+    expected_target_signature: tuple[tuple[Any, ...], ...] | None = None,
+    max_file_bytes: int = MAX_FILE_BYTES,
 ) -> None:
     """Atomically publish relative to an already-validated parent directory.
 
@@ -312,6 +345,10 @@ def _publish_staged_file(
             raise LocalAgentError("Parent directory descriptor is missing; publication blocked")
         try:
             if replace_existing:
+                if expected_existing_sha256 is not None:
+                    _assert_existing_target_unchanged(
+                        target, expected_existing_sha256, expected_target_signature, max_file_bytes
+                    )
                 os.replace(
                     temporary.name, target.name,
                     src_dir_fd=parent_handle, dst_dir_fd=parent_handle,
@@ -413,11 +450,52 @@ def _publish_staged_file(
         rename.root_directory = None
         rename.file_name_length = len(destination_name.encode("utf-16-le"))
         rename.file_name = destination_name
-        if not kernel32.SetFileInformationByHandle(
-            handle, file_rename_info_class, ctypes.byref(rename), ctypes.sizeof(rename)
-        ):
-            error = ctypes.get_last_error()
-            raise LocalAgentError(f"Native atomic publication failed: WinError {error}")
+        target_guard = None
+        try:
+            if replace_existing and expected_existing_sha256 is not None:
+                # Omit FILE_SHARE_WRITE while retaining FILE_SHARE_DELETE: fail closed
+                # if an incompatible writer is open, but permit atomic replacement.
+                target_guard = kernel32.CreateFileW(
+                    os.fspath(target),
+                    0x80000000 | file_read_attributes,
+                    0x00000001 | 0x00000004,
+                    None,
+                    open_existing,
+                    file_flag_open_reparse_point | file_flag_sequential_scan,
+                    None,
+                )
+                if target_guard is None or target_guard == invalid_handle:
+                    error = ctypes.get_last_error()
+                    raise LocalAgentError(
+                        f"Could not acquire existing target publication guard: WinError {error}"
+                    )
+                target_info = _ByHandleFileInformation()
+                if not kernel32.GetFileInformationByHandle(
+                    target_guard, ctypes.byref(target_info)
+                ):
+                    error = ctypes.get_last_error()
+                    raise LocalAgentError(
+                        f"Could not inspect existing target publication guard: WinError {error}"
+                    )
+                if target_info.attributes & file_attribute_reparse_point:
+                    raise LocalAgentError("Existing target is a Windows reparse point; publication blocked")
+                if target_info.attributes & file_attribute_directory:
+                    raise LocalAgentError("Existing target is a directory; publication blocked")
+                _assert_existing_target_unchanged(
+                    target, expected_existing_sha256, expected_target_signature, max_file_bytes
+                )
+                path_info = target.lstat()
+                target_index = (int(target_info.file_index_high) << 32) | int(target_info.file_index_low)
+                if path_info.st_ino and target_index != int(path_info.st_ino):
+                    raise LocalAgentError("Existing target handle identity changed before publication")
+            if not kernel32.SetFileInformationByHandle(
+                handle, file_rename_info_class, ctypes.byref(rename), ctypes.sizeof(rename)
+            ):
+                error = ctypes.get_last_error()
+                raise LocalAgentError(f"Native atomic publication failed: WinError {error}")
+        finally:
+            if target_guard is not None and target_guard != invalid_handle:
+                kernel32.CloseHandle(target_guard)
     finally:
         kernel32.CloseHandle(handle)
 
@@ -1078,7 +1156,10 @@ class LocalAgent:
 
                 _assert_path_chain_unchanged(parent, parent_signature, "Write parent")
                 _publish_staged_file(
-                    staged, target, parent_handle, replace_existing=exists
+                    staged, target, parent_handle, replace_existing=exists,
+                    expected_existing_sha256=current_hash,
+                    expected_target_signature=target_signature,
+                    max_file_bytes=root["max_file_bytes"],
                 )
                 temporary = None
 
