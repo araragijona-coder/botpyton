@@ -47,6 +47,10 @@ class LocalAgentError(ValueError):
     """Raised when local-agent configuration, policy, or I/O validation fails."""
 
 
+class AuditStagingCleanupError(LocalAgentError):
+    """The audit event was published, but its temporary staging alias remains."""
+
+
 def _canonical_json(value: Any) -> bytes:
     return json.dumps(
         value, ensure_ascii=False, sort_keys=True, separators=(",", ":")
@@ -1054,7 +1058,7 @@ class LocalAgent:
                     pass
 
         if record_result is not None and cleanup_failed:
-            raise LocalAgentError(
+            raise AuditStagingCleanupError(
                 "Audit event was published, but staging-alias cleanup failed; "
                 "inspect the audit directory before retrying"
             )
@@ -1369,6 +1373,10 @@ class LocalAgent:
                     operation_result["staging_cleanup"] = "pending"
                 return operation_result
         except Exception as exc:
+            audit_cleanup_warning = (
+                "; audit staging-alias cleanup also failed; inspect the audit directory before retrying"
+                if isinstance(exc, AuditStagingCleanupError) else ""
+            )
             if publication_completed:
                 if exists and original is not None and published_target_signature is not None:
                     try:
@@ -1413,22 +1421,22 @@ class LocalAgent:
 
             if recovery_status == "previous_version_restored":
                 raise LocalAgentError(
-                    "Write failed after publication; the previous file version was conditionally restored"
+                    "Write failed after publication; the previous file version was conditionally restored" + audit_cleanup_warning
                 ) from exc
             if recovery_status == "rollback_failed":
                 raise LocalAgentError(
                     "Write failed after publication; the destination still matched BOTPYTON's published version, "
-                    "but conditional restoration failed. Inspect the target and audit before retrying"
+                    "but conditional restoration failed. Inspect the target and audit before retrying" + audit_cleanup_warning
                 ) from exc
             if recovery_status == "external_change_preserved":
                 raise LocalAgentError(
                     "Write failed after publication; the destination changed externally, so automatic "
-                    "rollback was skipped to preserve the external version"
+                    "rollback was skipped to preserve the external version" + audit_cleanup_warning
                 ) from exc
             if recovery_status == "new_file_left_in_place":
                 raise LocalAgentError(
                     "Write failed after publishing a new file; no previous version existed, so the file "
-                    "was not automatically deleted. Inspect the target and audit before retrying"
+                    "was not automatically deleted. Inspect the target and audit before retrying" + audit_cleanup_warning
                 ) from exc
             if isinstance(exc, LocalAgentError):
                 raise

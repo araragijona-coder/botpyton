@@ -14,8 +14,10 @@ On POSIX, creating a new audit log publishes it with an exclusive hard link and 
 ## Change
 
 - Delay returning the new audit record until the staging cleanup attempt has completed.
-- If the audit record was published but its staging alias still cannot be removed after the retry, raise a specific `LocalAgentError` stating that publication occurred and cleanup failed. Do not delete the published audit record or claim that publication was rolled back.
+- If the audit record was published but its staging alias still cannot be removed after the retry, raise a specific `AuditStagingCleanupError` stating that publication occurred and cleanup failed. Do not delete the published audit record or claim that publication was rolled back.
+- Preserve that cleanup warning when a surrounding write operation conditionally restores the prior file version; the caller must see both the recovery result and the audit-directory cleanup problem.
 - Add a POSIX regression that injects two alias-unlink failures, verifies the call reports the post-publication condition, confirms the published audit chain is still valid, and confirms that the leftover alias is observable in the isolated fixture before test cleanup.
+- Add a regression that simulates a cleanup error after the success audit event commits, verifies conditional rollback of an existing file, and confirms the returned failure still discloses the cleanup problem.
 
 ## Safety boundaries
 

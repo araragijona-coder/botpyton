@@ -379,6 +379,6 @@ python -m bot.main --pc-cleanup-restore "C:\\path\\to\\BOTPYTON\\Quarantine\\ses
 # Phase 56 — Explicit audit staging cleanup failure
 
 - Report when a newly published audit record still has a temporary hard-link alias after cleanup retries; do not return success while leaving that state undisclosed.
-- Add a POSIX regression for consecutive unlink failures. Verify the audit chain remains valid and the leftover alias is observable in a disposable test directory.
+- Add a POSIX regression for consecutive unlink failures. Verify the audit chain remains valid and the leftover alias is observable in a disposable test directory; preserve the cleanup warning if a surrounding write rolls back.
 - The post-publication state is not rolled back automatically; caller must inspect the audit directory before retrying.
 - Required gate: foundation tests and Windows low-memory smoke pass on the same final SHA. No `main` changes, PR creation, or merge.

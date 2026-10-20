@@ -10,7 +10,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from bot.local_agent import (
-    LocalAgent, LocalAgentError, load_local_agent_config,
+    AuditStagingCleanupError, LocalAgent, LocalAgentError, load_local_agent_config,
     _directory_chain_lease, _path_chain_signature, _publish_staged_file,
 )
 
@@ -399,6 +399,41 @@ class LocalAgentTests(unittest.TestCase):
         self.assertTrue(injected, "test must edit the file after publication")
         self.assertEqual(target.read_bytes(), b"newer external version")
         self.assertEqual(self.agent().verify_audit()["status"], "valid")
+
+    def test_post_publish_audit_cleanup_warning_survives_conditional_rollback(self):
+        target = self.project / "shared.txt"
+        target.write_bytes(b"previous stable version")
+        expected = hashlib.sha256(b"previous stable version").hexdigest()
+        agent = self.agent()
+        real_record = agent._record
+        injected = False
+
+        def fail_after_published_success(operation, root_id, relative, outcome, detail, byte_count=None):
+            nonlocal injected
+            if operation == "write" and outcome == "success" and not injected:
+                # Model the real cleanup failure boundary: the success audit record is
+                # already durable, then the publisher reports its remaining alias.
+                real_record(operation, root_id, relative, outcome, detail, byte_count)
+                injected = True
+                raise AuditStagingCleanupError(
+                    "Audit event was published, but staging-alias cleanup failed; "
+                    "inspect the audit directory before retrying"
+                )
+            return real_record(operation, root_id, relative, outcome, detail, byte_count)
+
+        with patch.object(agent, "_record", side_effect=fail_after_published_success):
+            with self.assertRaisesRegex(
+                LocalAgentError,
+                "previous file version was conditionally restored; audit staging-alias cleanup also failed",
+            ):
+                agent.write_file(
+                    "project", "shared.txt", "BOTPYTON temporary version",
+                    expected_sha256=expected,
+                )
+
+        self.assertTrue(injected)
+        self.assertEqual(target.read_bytes(), b"previous stable version")
+        self.assertEqual(agent.verify_audit()["status"], "valid")
 
     def test_post_publish_audit_failure_restores_previous_version_conditionally(self):
         target = self.project / "shared.txt"
