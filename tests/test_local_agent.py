@@ -451,6 +451,33 @@ class LocalAgentTests(unittest.TestCase):
         self.assertEqual(target.read_bytes(), b"external update to newly created file")
         self.assertEqual(self.agent().verify_audit()["status"], "valid")
 
+    @unittest.skipIf(os.name == "nt", "POSIX hard-link publication is specific to non-Windows")
+    def test_new_file_link_cleanup_failure_keeps_truthful_publication_state(self):
+        target = self.project / "new-link-cleanup.txt"
+        real_unlink = os.unlink
+        injected = False
+
+        def fail_first_alias_cleanup(path, *args, **kwargs):
+            nonlocal injected
+            if (
+                not injected
+                and "new-link-cleanup.txt." in str(path)
+                and kwargs.get("dir_fd") is not None
+            ):
+                injected = True
+                raise PermissionError("injected alias cleanup failure after link publication")
+            return real_unlink(path, *args, **kwargs)
+
+        with patch("bot.local_agent.os.unlink", side_effect=fail_first_alias_cleanup):
+            result = self.agent().write_file("project", "new-link-cleanup.txt", "published bytes")
+
+        self.assertTrue(injected, "test must fail cleanup after the destination link has succeeded")
+        self.assertEqual(result["status"], "completed")
+        self.assertEqual(target.read_bytes(), b"published bytes")
+        self.assertNotIn("staging_cleanup", result, "final cleanup should retry and remove the alias")
+        self.assertFalse(list(self.project.glob(".new-link-cleanup.txt.*.botpyton-agent-tmp")))
+        self.assertEqual(self.agent().verify_audit()["status"], "valid")
+
     def test_internal_root_write_lock_is_hidden_and_protected(self):
         self.agent().write_file("project", "one.txt", "one")
         lock_files = list(self.project.glob(".botpyton-write-*.lock"))
@@ -560,6 +587,30 @@ class LocalAgentTests(unittest.TestCase):
         with self.assertRaises(LocalAgentError):
             self.agent().write_file("project", "missing/new.py", "VALUE = 1\n")
         self.assertFalse((self.project / "missing").exists())
+
+    def test_partial_audit_staging_write_preserves_previous_valid_log(self):
+        (self.project / "audit-seed.txt").write_text("seed", encoding="utf-8")
+        agent = self.agent()
+        agent.read_file("project", "audit-seed.txt")
+        original_audit = self.audit_path.read_bytes()
+        real_write = os.write
+        calls = 0
+
+        def partial_then_fail(descriptor, data):
+            nonlocal calls
+            if calls == 0:
+                calls += 1
+                return real_write(descriptor, data[:min(7, len(data))])
+            raise OSError("injected failure after a partial staging write")
+
+        with patch("bot.local_agent.os.write", side_effect=partial_then_fail):
+            with self.assertRaisesRegex(LocalAgentError, "Audit publication failed: OSError"):
+                agent._record("read", "project", "audit-seed.txt", "success", "injected")
+
+        self.assertGreater(calls, 0, "the staging writer must partially write before failing")
+        self.assertEqual(self.audit_path.read_bytes(), original_audit)
+        self.assertEqual(agent.verify_audit()["status"], "valid")
+        self.assertFalse(list(self.audit_dir.glob(".*.botpyton-agent-tmp")))
 
     def test_audit_corruption_is_fail_closed_before_write(self):
         (self.project / "new.py").write_text("original", encoding="utf-8")

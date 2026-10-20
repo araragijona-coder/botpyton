@@ -331,7 +331,7 @@ def _publish_staged_file(
     expected_existing_sha256: str | None = None,
     expected_target_signature: tuple[tuple[Any, ...], ...] | None = None,
     max_file_bytes: int = MAX_FILE_BYTES,
-) -> None:
+) -> bool:
     """Atomically publish relative to an already-validated parent directory.
 
     POSIX uses dir_fd-relative rename/link operations, avoiding a second
@@ -353,18 +353,23 @@ def _publish_staged_file(
                     temporary.name, target.name,
                     src_dir_fd=parent_handle, dst_dir_fd=parent_handle,
                 )
-            else:
-                os.link(
-                    temporary.name, target.name,
-                    src_dir_fd=parent_handle, dst_dir_fd=parent_handle,
-                    follow_symlinks=False,
-                )
+                return True
+            os.link(
+                temporary.name, target.name,
+                src_dir_fd=parent_handle, dst_dir_fd=parent_handle,
+                follow_symlinks=False,
+            )
+            try:
                 os.unlink(temporary.name, dir_fd=parent_handle)
+            except OSError:
+                # The destination already exists and references the staged inode.
+                # Report committed publication separately from alias cleanup.
+                return False
+            return True
         except (OSError, NotImplementedError) as exc:
             raise LocalAgentError(
                 f"Directory-relative atomic publication failed: {type(exc).__name__}"
             ) from exc
-        return
 
     import ctypes
     from ctypes import wintypes
@@ -500,6 +505,8 @@ def _publish_staged_file(
                 kernel32.CloseHandle(target_guard)
     finally:
         kernel32.CloseHandle(handle)
+    return True
+
 
 
 def _restore_previous_content_if_unchanged(
@@ -819,21 +826,25 @@ class LocalAgent:
             "ai_enabled": False,
         }
 
-    def _load_audit_unlocked(self) -> list[dict[str, Any]]:
+    def _read_audit_bytes_unlocked(self) -> bytes:
+        """Read the complete bounded audit log without changing it."""
         _reject_link_components(self.audit_path, "Audit log", allow_missing=True)
         if not self.audit_path.exists():
-            return []
+            return b""
         try:
             info = self.audit_path.stat()
             if not stat.S_ISREG(info.st_mode) or info.st_size > MAX_AUDIT_BYTES:
                 raise LocalAgentError("Audit log is not a regular file or exceeds its size limit")
-            raw = read_bounded_bytes(
+            return read_bounded_bytes(
                 self.audit_path, limit_bytes=MAX_AUDIT_BYTES, label="Audit log"
             )
         except LocalAgentError:
             raise
         except (BoundedReadError, OSError) as exc:
             raise LocalAgentError("Could not read audit log safely") from exc
+
+    def _parse_audit_bytes(self, raw: bytes) -> list[dict[str, Any]]:
+        """Validate a complete log snapshot, including each event and the hash chain."""
         if not raw:
             return []
         if not raw.endswith(b"\n"):
@@ -878,6 +889,9 @@ class LocalAgent:
             records.append(record)
         return records
 
+    def _load_audit_unlocked(self) -> list[dict[str, Any]]:
+        return self._parse_audit_bytes(self._read_audit_bytes_unlocked())
+
     def verify_audit(self) -> dict[str, Any]:
         try:
             # Verification is read-only: do not create a sidecar lock just to inspect the log.
@@ -901,63 +915,129 @@ class LocalAgent:
         outcome: str, detail: str, byte_count: int | None = None,
     ) -> dict[str, Any]:
         lock = self.audit_path.with_name(f".{self.audit_path.name}.lock")
+        staged_path: Path | None = None
+        descriptor: int | None = None
+        cleanup_parent_handle: int | None = None
         try:
             with exclusive_file_lock(lock):
-                records = self._load_audit_unlocked()
-                event_reserve = 1 if outcome == "intent" else 0
-                if len(records) >= MAX_AUDIT_EVENTS - event_reserve:
-                    raise LocalAgentError("Audit event limit reached; no new operation is allowed")
-                event = {
-                    "sequence": len(records) + 1,
-                    "timestamp": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-                    "operation": operation,
-                    "root_id": root_id[:32] if isinstance(root_id, str) else None,
-                    "path": relative[:512] if isinstance(relative, str) else None,
-                    "outcome": outcome,
-                    "detail": detail[:120],
-                    "byte_count": byte_count,
-                    "previous_sha256": records[-1]["sha256"] if records else ZERO_SHA256,
-                }
-                record = {**event, "sha256": _sha256(_canonical_json(event))}
-                encoded = _canonical_json(record) + b"\n"
-                current_size = self.audit_path.stat().st_size if self.audit_path.exists() else 0
-                reserve = 1024 if outcome == "intent" else 0
-                if current_size + len(encoded) + reserve > MAX_AUDIT_BYTES:
-                    raise LocalAgentError("Audit byte limit reached; no new operation is allowed")
-                _reject_link_components(self.audit_path.parent, "Audit parent", allow_missing=False)
-                if self.audit_path.exists():
-                    _reject_link_components(self.audit_path, "Audit log", allow_missing=False)
-                    before = self.audit_path.lstat()
-                    flags = os.O_WRONLY | os.O_APPEND | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_BINARY", 0)
-                    descriptor = os.open(self.audit_path, flags)
-                else:
-                    before = None
-                    flags = (
-                        os.O_WRONLY | os.O_APPEND | os.O_CREAT | os.O_EXCL
-                        | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_BINARY", 0)
+                parent = self.audit_path.parent
+                _reject_link_components(parent, "Audit parent", allow_missing=False)
+                parent_signature = _path_chain_signature(parent, "Audit parent")
+                with _directory_chain_lease(parent, parent_signature, "Audit parent") as parent_handle:
+                    if os.name != "nt" and isinstance(parent_handle, int):
+                        cleanup_parent_handle = os.dup(parent_handle)
+                    _assert_path_chain_unchanged(parent, parent_signature, "Audit parent")
+                    _reject_link_components(self.audit_path, "Audit log", allow_missing=True)
+                    exists = self.audit_path.exists()
+                    prior_signature: tuple[tuple[Any, ...], ...] | None = None
+                    if exists:
+                        _reject_link_components(self.audit_path, "Audit log", allow_missing=False)
+                        prior_signature = _path_chain_signature(self.audit_path, "Audit log")
+                        prior_raw = read_bounded_bytes(
+                            self.audit_path, limit_bytes=MAX_AUDIT_BYTES, label="Audit log"
+                        )
+                        _assert_path_chain_unchanged(self.audit_path, prior_signature, "Audit log")
+                    else:
+                        prior_raw = b""
+
+                    # Validate the exact bytes that will become the prefix of the next log.
+                    records = self._parse_audit_bytes(prior_raw)
+                    event_reserve = 1 if outcome == "intent" else 0
+                    if len(records) >= MAX_AUDIT_EVENTS - event_reserve:
+                        raise LocalAgentError("Audit event limit reached; no new operation is allowed")
+                    event = {
+                        "sequence": len(records) + 1,
+                        "timestamp": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+                        "operation": operation,
+                        "root_id": root_id[:32] if isinstance(root_id, str) else None,
+                        "path": relative[:512] if isinstance(relative, str) else None,
+                        "outcome": outcome,
+                        "detail": detail[:120],
+                        "byte_count": byte_count,
+                        "previous_sha256": records[-1]["sha256"] if records else ZERO_SHA256,
+                    }
+                    record = {**event, "sha256": _sha256(_canonical_json(event))}
+                    encoded = _canonical_json(record) + b"\n"
+                    reserve = 1024 if outcome == "intent" else 0
+                    if len(prior_raw) + len(encoded) + reserve > MAX_AUDIT_BYTES:
+                        raise LocalAgentError("Audit byte limit reached; no new operation is allowed")
+                    next_raw = prior_raw + encoded
+
+                    descriptor, staged_path = _create_staged_file(
+                        parent, self.audit_path.name, parent_handle
                     )
-                    descriptor = os.open(self.audit_path, flags, 0o600)
-                try:
-                    opened = os.fstat(descriptor)
-                    current = self.audit_path.lstat()
-                    if (
-                        not stat.S_ISREG(opened.st_mode) or not stat.S_ISREG(current.st_mode)
-                        or _is_link_or_reparse(self.audit_path)
-                        or (opened.st_dev, opened.st_ino) != (current.st_dev, current.st_ino)
-                        or (before is not None and (opened.st_dev, opened.st_ino) != (before.st_dev, before.st_ino))
-                    ):
-                        raise LocalAgentError("Audit log identity changed; operation blocked")
-                    offset = 0
-                    while offset < len(encoded):
-                        offset += os.write(descriptor, encoded[offset:])
-                    os.fsync(descriptor)
-                finally:
-                    os.close(descriptor)
-                return record
+                    try:
+                        opened = os.fstat(descriptor)
+                        if not stat.S_ISREG(opened.st_mode):
+                            raise LocalAgentError("Audit staging handle is not a regular file")
+                        offset = 0
+                        while offset < len(next_raw):
+                            written = os.write(descriptor, next_raw[offset:])
+                            if written <= 0:
+                                raise LocalAgentError("Audit staging write made no progress")
+                            offset += written
+                        os.fsync(descriptor)
+                        staged_info = os.fstat(descriptor)
+                        if (
+                            not stat.S_ISREG(staged_info.st_mode)
+                            or staged_info.st_size != len(next_raw)
+                            or staged_info.st_size > MAX_AUDIT_BYTES
+                        ):
+                            raise LocalAgentError("Audit staging file failed size or type verification")
+                        os.lseek(descriptor, 0, os.SEEK_SET)
+                        staged_bytes = bytearray()
+                        while len(staged_bytes) <= MAX_AUDIT_BYTES:
+                            chunk = os.read(
+                                descriptor, min(64 * 1024, MAX_AUDIT_BYTES + 1 - len(staged_bytes))
+                            )
+                            if not chunk:
+                                break
+                            staged_bytes.extend(chunk)
+                        if bytes(staged_bytes) != next_raw:
+                            raise LocalAgentError("Audit staging content verification failed")
+                        self._parse_audit_bytes(bytes(staged_bytes))
+                    finally:
+                        if descriptor is not None:
+                            os.close(descriptor)
+                            descriptor = None
+
+                    _assert_path_chain_unchanged(parent, parent_signature, "Audit parent")
+                    cleanup_complete = _publish_staged_file(
+                        staged_path, self.audit_path, parent_handle,
+                        replace_existing=exists,
+                        expected_existing_sha256=_sha256(prior_raw) if exists else None,
+                        expected_target_signature=prior_signature,
+                        max_file_bytes=MAX_AUDIT_BYTES,
+                    )
+                    # False means the new destination was atomically published via a
+                    # POSIX link but its temporary alias could not be removed. The audit
+                    # event is committed; finally retries alias cleanup.
+                    if cleanup_complete:
+                        staged_path = None
+                    return record
         except LocalAgentError:
             raise
         except (OSError, RuntimeError, ValueError) as exc:
-            raise LocalAgentError(f"Audit write failed; requested action was not started: {type(exc).__name__}") from exc
+            raise LocalAgentError(f"Audit publication failed: {type(exc).__name__}") from exc
+        finally:
+            if descriptor is not None:
+                try:
+                    os.close(descriptor)
+                except OSError:
+                    pass
+            if staged_path is not None:
+                try:
+                    if os.name != "nt" and cleanup_parent_handle is not None:
+                        os.unlink(staged_path.name, dir_fd=cleanup_parent_handle)
+                    elif os.path.exists(staged_path):
+                        staged_path.unlink()
+                except OSError:
+                    pass
+            if cleanup_parent_handle is not None:
+                try:
+                    os.close(cleanup_parent_handle)
+                except OSError:
+                    pass
 
     def _authorize(self, operation: str, root_id: str, raw_path: str, permission: str, *, allow_root: bool = False) -> tuple[dict[str, Any], str]:
         root = self.roots.get(root_id) if isinstance(root_id, str) else None
@@ -1163,6 +1243,7 @@ class LocalAgent:
         parent_handle: Any = None
         cleanup_parent_handle: int | None = None
         publication_completed = False
+        operation_result: dict[str, Any] | None = None
         published_target_signature: tuple[tuple[Any, ...], ...] | None = None
         recovery_status: str | None = None
         try:
@@ -1234,14 +1315,15 @@ class LocalAgent:
                     os.path.normcase(str(target)),
                     staged_leaf[1], staged_leaf[2], staged_leaf[3],
                 ),)
-                _publish_staged_file(
+                staging_alias_removed = _publish_staged_file(
                     staged, target, parent_handle, replace_existing=exists,
                     expected_existing_sha256=current_hash,
                     expected_target_signature=target_signature,
                     max_file_bytes=root["max_file_bytes"],
                 )
                 publication_completed = True
-                temporary = None
+                if staging_alias_removed:
+                    temporary = None
 
                 _assert_path_chain_unchanged(parent, parent_signature, "Write parent")
                 _reject_link_components(target, "Published write", allow_missing=False)
@@ -1253,13 +1335,16 @@ class LocalAgent:
                 if _sha256(published) != _sha256(raw):
                     raise LocalAgentError("Published file content verification failed")
                 self._record("write", root["id"], relative, "success", f"sha256={_sha256(raw)}", len(raw))
-                return {
+                operation_result = {
                     "status": "completed", "root_id": root["id"], "relative_path": relative,
                     "created": not exists, "size_bytes": len(raw), "sha256": _sha256(raw),
                     "files_written": True, "backup_created": False,
                     "network_used": False, "ai_enabled": False,
                     "note": "Existing files require matching expected_sha256. Directory and delete operations are not supported.",
                 }
+                if temporary is not None:
+                    operation_result["staging_cleanup"] = "pending"
+                return operation_result
         except Exception as exc:
             if publication_completed:
                 if exists and original is not None and published_target_signature is not None:
@@ -1332,8 +1417,12 @@ class LocalAgent:
                         os.unlink(Path(temporary).name, dir_fd=cleanup_parent_handle)
                     elif os.path.exists(temporary):
                         os.unlink(temporary)
+                    temporary = None
+                    if operation_result is not None:
+                        operation_result.pop("staging_cleanup", None)
                 except OSError:
-                    pass
+                    if operation_result is not None:
+                        operation_result["staging_cleanup"] = "failed"
             if cleanup_parent_handle is not None:
                 try:
                     os.close(cleanup_parent_handle)

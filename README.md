@@ -613,3 +613,8 @@ python -m bot.main --investigate-failure "reports/failure.log" --project-root "C
 ~~~
 
 El log debe ser un archivo relativo al proyecto y no superar 64 KiB. El escaneo estático omite directorios generados, limita la cantidad/tamaño de archivos y no ejecuta código del proyecto. Revisá el informe antes de decidir una modificación. Guía: [investigación de errores desconocidos](docs/UNKNOWN-ERROR-INVESTIGATION.md) y [auditoría técnica Fase 47](docs/research/PHASE-47-UNKNOWN-ERROR-RECOVERY.md).
+
+## Phase 55 — Atomic audit publication and post-link cleanup
+
+The local agent now builds the next bounded audit log as a fully verified same-directory staged file and publishes it atomically, so a partial staging write does not corrupt the previous audit. POSIX new-file publication also reports separately when the destination link succeeds but cleanup of its temporary alias fails. The operation retries alias cleanup and discloses a persistent leftover instead of pretending publication never occurred. See [Phase 55 research](docs/research/PHASE-55-ATOMIC-AUDIT-PUBLICATION.md). CI passes are not target-PC validation; no changes are made to `main` automatically.
+
