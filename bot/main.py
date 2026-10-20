@@ -94,17 +94,17 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--architect-plan", metavar="BRIEF_JSON",
                         help="turn a bounded programming brief into a deterministic reviewable architecture plan; no code executed")
     parser.add_argument("--architect-ai", metavar="BRIEF_JSON",
-                        help="request optional second-opinion architecture advice from OpenRouter's free-model router")
+                        help="retired: remote model advice is disabled by BOTPYTON's offline policy")
     parser.add_argument("--allow-external-ai", action="store_true",
-                        help="consent to send selected brief fields to OpenRouter; required with --architect-ai")
+                        help="retired compatibility flag; external AI/API requests are disabled")
     parser.add_argument("--architect-ai-context", action="append", metavar="RELATIVE_PATH",
-                        help="select one source file under brief.project_root for the remote adviser; repeat up to 4 files")
+                        help="retired compatibility flag; source-context upload is disabled")
     parser.add_argument("--send-source-context", action="store_true",
-                        help="additional explicit consent to upload the selected source files with --architect-ai")
+                        help="retired compatibility flag; source-context upload is disabled")
     parser.add_argument("--architect-ai-failure-report", metavar="REPORT_JSON",
-                        help="select a BOTPYTON reviewed-patch failure report for evidence-based follow-up advice")
+                        help="retired compatibility flag; external failure-report upload is disabled")
     parser.add_argument("--send-failure-report", action="store_true",
-                        help="additional explicit consent to upload the selected, sanitized failure evidence with --architect-ai")
+                        help="retired compatibility flag; external failure-report upload is disabled")
     parser.add_argument("--system-profile", action="store_true", help="report available RAM, disk space and a conservative child-process memory budget")
     parser.add_argument("--doctor", action="store_true", help="run read-only preflight and show concrete next steps for common setup/resource problems")
     parser.add_argument("--pc-check", action="store_true", help="run the read-only, offline local PC-care audit")
@@ -196,11 +196,25 @@ def main(argv: list[str] | None = None) -> int:
                         help="seconds per fixed test attempt for --autonomous-cycle (hard maximum: 120)")
     parser.add_argument("--memory", default=".cerebro/memory/state.json", help="memory file path")
     args = parser.parse_args(argv)
-    if (args.architect_ai or args.allow_external_ai or args.architect_ai_context or args.send_source_context
-            or args.architect_ai_failure_report or args.send_failure_report):
-        # Load urllib/TLS only for this explicit feature; normal local BOTPYTON startup
-        # should not pay the import/memory cost of an optional remote API.
-        from .architect_ai import ArchitectAIError, request_architecture_advice
+    if (
+        args.architect_ai or args.allow_external_ai or args.architect_ai_context
+        or args.send_source_context or args.architect_ai_failure_report or args.send_failure_report
+    ):
+        _print_json({
+            "status": "disabled_offline_policy",
+            "error": "External AI and model-provider requests are disabled by BOTPYTON's strict offline policy.",
+            "next_step": "Use --architect-plan for deterministic local architecture planning. Legacy adviser flags do not read selected files or reports.",
+            "safety": {
+                "network_used": False,
+                "external_ai_enabled": False,
+                "project_files_uploaded": False,
+                "failure_report_uploaded": False,
+                "project_code_executed": False,
+                "commands_executed": False,
+                "files_written": False,
+            },
+        })
+        return 2
     try:
         if args.apply_reviewed_patch and (
             args.architect_ai or args.architect_ai_failure_report or args.send_failure_report
@@ -210,92 +224,6 @@ def main(argv: list[str] | None = None) -> int:
             raise ValueError("--apply-reviewed-patch must be used as a separate operation")
         if (args.patch_task_id or args.patch_check) and not args.apply_reviewed_patch:
             raise ValueError("--patch-task-id and --patch-check require --apply-reviewed-patch")
-        if args.allow_external_ai and not args.architect_ai:
-            raise ValueError("--allow-external-ai requires --architect-ai")
-        if args.architect_ai_context and not args.architect_ai:
-            raise ValueError("--architect-ai-context requires --architect-ai")
-        if args.send_source_context and not args.architect_ai:
-            raise ValueError("--send-source-context requires --architect-ai")
-        if args.send_source_context and not args.architect_ai_context:
-            raise ValueError("--send-source-context requires at least one --architect-ai-context path")
-        if args.architect_ai_failure_report and not args.architect_ai:
-            raise ValueError("--architect-ai-failure-report requires --architect-ai")
-        if args.send_failure_report and not args.architect_ai:
-            raise ValueError("--send-failure-report requires --architect-ai")
-        if args.send_failure_report and not args.architect_ai_failure_report:
-            raise ValueError("--send-failure-report requires --architect-ai-failure-report")
-        if args.architect_ai and args.architect_plan:
-            raise ValueError("Choose either --architect-ai or --architect-plan, not both")
-        if args.architect_ai:
-            if args.architect_ai_failure_report and not args.send_failure_report:
-                _print_json({
-                    "status": "failure_report_consent_required",
-                    "provider": "OpenRouter",
-                    "model": "openrouter/free",
-                    "note": "No API request was sent. Review the report and add --send-failure-report only if you consent to upload its sanitized diagnostic/test excerpts.",
-                    "safety": {
-                        "network_used": False,
-                        "failure_report_uploaded": False,
-                        "project_code_executed": False,
-                        "commands_executed": False,
-                        "files_written": False,
-                    },
-                })
-                return 2
-            if args.architect_ai_context and not args.send_source_context:
-                _print_json({
-                    "status": "source_consent_required",
-                    "provider": "OpenRouter",
-                    "model": "openrouter/free",
-                    "note": "No API request was sent. Review each exact file path and add --send-source-context only if you consent to uploading those file contents.",
-                    "selected_paths": args.architect_ai_context,
-                    "safety": {
-                        "network_used": False,
-                        "project_files_uploaded": False,
-                        "project_code_executed": False,
-                        "commands_executed": False,
-                        "files_written": False,
-                    },
-                })
-                return 2
-            if not args.allow_external_ai:
-                _print_json({
-                    "status": "consent_required",
-                    "provider": "OpenRouter",
-                    "model": "openrouter/free",
-                    "note": "No API request was sent. Add --allow-external-ai only after reviewing the brief and consenting to send its selected fields to the provider.",
-                    "safety": {"network_used": False, "project_code_executed": False, "files_written": False},
-                })
-                return 2
-            brief = _read_bounded_json(args.architect_ai, limit_bytes=50_000)
-            failure_report = (
-                _read_bounded_json(args.architect_ai_failure_report, limit_bytes=16_000)
-                if args.architect_ai_failure_report and args.send_failure_report else None
-            )
-            try:
-                result = request_architecture_advice(
-                    brief,
-                    context_paths=args.architect_ai_context,
-                    send_source_context=args.send_source_context,
-                    failure_report=failure_report,
-                    send_failure_report=args.send_failure_report,
-                )
-            except ArchitectAIError as exc:
-                _print_json({
-                    "status": "error",
-                    "provider": "OpenRouter",
-                    "model": "openrouter/free",
-                    "error": str(exc),
-                    "safety": {
-                        "network_used": exc.network_used,
-                        "project_code_executed": False,
-                        "commands_executed": False,
-                        "files_written": False,
-                    },
-                })
-                return 2
-            _print_json(result)
-            return 0 if result["status"] == "advice_received" else 2
         if args.doctor:
             result = run_preflight(args.project_root)
             _print_json(result)
