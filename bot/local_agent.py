@@ -583,6 +583,20 @@ def _canonical_relative_path(raw: str, *, allow_root: bool = False) -> str:
     return candidate.as_posix()
 
 
+def _write_lock_path(root: str | Path) -> Path:
+    """Return one stable cooperative write lock per authorized root."""
+    normalized = os.path.normcase(
+        os.path.normpath(os.path.abspath(os.fspath(Path(root).resolve())))
+    )
+    digest = hashlib.sha256(normalized.encode("utf-8")).hexdigest()[:32]
+    return Path(root) / f".botpyton-write-{digest}.lock"
+
+
+def _is_internal_write_lock(name: str) -> bool:
+    normalized = name.casefold()
+    return normalized.startswith(".botpyton-write-") and normalized.endswith(".lock")
+
+
 def _is_protected(relative: str) -> bool:
     parts = [part.lower() for part in PurePosixPath(relative).parts]
     if any(part in _BLOCKED_COMPONENTS for part in parts):
@@ -591,6 +605,7 @@ def _is_protected(relative: str) -> bool:
     return (
         name in _BLOCKED_NAMES
         or name.startswith(".env.")
+        or _is_internal_write_lock(name)
         or Path(name).suffix.lower() in _BLOCKED_SUFFIXES
     )
 
@@ -848,6 +863,9 @@ class LocalAgent:
                             break
                         try:
                             info = entry.stat(follow_symlinks=False)
+                            if _is_internal_write_lock(entry.name):
+                                skipped_links += 1
+                                continue
                             if entry.is_symlink() or _is_link_or_reparse(Path(entry.path)):
                                 skipped_links += 1
                                 continue
@@ -940,6 +958,31 @@ class LocalAgent:
             raise LocalAgentError("Parent directory must already exist; the agent never creates directories")
         _reject_link_components(parent, "Write parent", allow_missing=False)
         parent_signature = _path_chain_signature(parent, "Write parent")
+        # Serialize all writes inside this configured root. A single stable sidecar
+        # lock is shared across threads and processes; it is intentionally persistent.
+        lock_path = _write_lock_path(root["path_object"])
+        try:
+            with exclusive_file_lock(lock_path):
+                _assert_path_chain_unchanged(parent, parent_signature, "Write parent")
+                return self._write_file_locked(
+                    root, relative, raw, expected_sha256, target, parent, parent_signature
+                )
+        except LocalAgentError:
+            raise
+        except OSError as exc:
+            raise LocalAgentError("Could not safely acquire the root write lock") from exc
+
+    def _write_file_locked(
+        self,
+        root: dict[str, Any],
+        relative: str,
+        raw: bytes,
+        expected_sha256: str | None,
+        target: Path,
+        parent: Path,
+        parent_signature: tuple[tuple[Any, ...], ...],
+    ) -> dict[str, Any]:
+        _assert_path_chain_unchanged(parent, parent_signature, "Write parent")
         exists = target.exists()
         target_signature: tuple[tuple[Any, ...], ...] | None = None
         if exists:
