@@ -604,7 +604,7 @@ class LocalAgentTests(unittest.TestCase):
             raise OSError("injected failure after a partial staging write")
 
         with patch("bot.local_agent.os.write", side_effect=partial_then_fail):
-            with self.assertRaisesRegex(LocalAgentError, "Audit publication failed: OSError"):
+            with self.assertRaisesRegex(LocalAgentError, "Audit staging failed: OSError"):
                 agent._record("read", "project", "audit-seed.txt", "success", "injected")
 
         self.assertGreater(calls, 0, "the staging writer must partially write before failing")

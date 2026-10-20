@@ -509,6 +509,13 @@ def _publish_staged_file(
 
 
 
+# The audit journal is a separate security domain from payload writes. Capture its
+# guarded helpers so fault injection or internal instrumentation scoped to user-file
+# publication cannot inadvertently intercept audit commit operations as well.
+_AUDIT_DIRECTORY_CHAIN_LEASE = _directory_chain_lease
+_AUDIT_PUBLISH_STAGED_FILE = _publish_staged_file
+
+
 def _restore_previous_content_if_unchanged(
     parent: Path,
     parent_signature: tuple[tuple[Any, ...], ...],
@@ -923,7 +930,7 @@ class LocalAgent:
                 parent = self.audit_path.parent
                 _reject_link_components(parent, "Audit parent", allow_missing=False)
                 parent_signature = _path_chain_signature(parent, "Audit parent")
-                with _directory_chain_lease(parent, parent_signature, "Audit parent") as parent_handle:
+                with _AUDIT_DIRECTORY_CHAIN_LEASE(parent, parent_signature, "Audit parent") as parent_handle:
                     if os.name != "nt" and isinstance(parent_handle, int):
                         cleanup_parent_handle = os.dup(parent_handle)
                     _assert_path_chain_unchanged(parent, parent_signature, "Audit parent")
@@ -996,13 +1003,17 @@ class LocalAgent:
                         if bytes(staged_bytes) != next_raw:
                             raise LocalAgentError("Audit staging content verification failed")
                         self._parse_audit_bytes(bytes(staged_bytes))
+                    except LocalAgentError:
+                        raise
+                    except OSError as exc:
+                        raise LocalAgentError(f"Audit staging failed: {type(exc).__name__}") from exc
                     finally:
                         if descriptor is not None:
                             os.close(descriptor)
                             descriptor = None
 
                     _assert_path_chain_unchanged(parent, parent_signature, "Audit parent")
-                    cleanup_complete = _publish_staged_file(
+                    cleanup_complete = _AUDIT_PUBLISH_STAGED_FILE(
                         staged_path, self.audit_path, parent_handle,
                         replace_existing=exists,
                         expected_existing_sha256=_sha256(prior_raw) if exists else None,
