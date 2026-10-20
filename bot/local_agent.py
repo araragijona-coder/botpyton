@@ -925,6 +925,8 @@ class LocalAgent:
         staged_path: Path | None = None
         descriptor: int | None = None
         cleanup_parent_handle: int | None = None
+        record_result: dict[str, Any] | None = None
+        cleanup_failed = False
         try:
             with exclusive_file_lock(lock):
                 parent = self.audit_path.parent
@@ -1025,7 +1027,7 @@ class LocalAgent:
                     # event is committed; finally retries alias cleanup.
                     if cleanup_complete:
                         staged_path = None
-                    return record
+                    record_result = record
         except LocalAgentError:
             raise
         except (OSError, RuntimeError, ValueError) as exc:
@@ -1042,13 +1044,23 @@ class LocalAgent:
                         os.unlink(staged_path.name, dir_fd=cleanup_parent_handle)
                     elif os.path.exists(staged_path):
                         staged_path.unlink()
+                    staged_path = None
                 except OSError:
-                    pass
+                    cleanup_failed = True
             if cleanup_parent_handle is not None:
                 try:
                     os.close(cleanup_parent_handle)
                 except OSError:
                     pass
+
+        if record_result is not None and cleanup_failed:
+            raise LocalAgentError(
+                "Audit event was published, but staging-alias cleanup failed; "
+                "inspect the audit directory before retrying"
+            )
+        if record_result is None:
+            raise LocalAgentError("Audit publication produced no record")
+        return record_result
 
     def _authorize(self, operation: str, root_id: str, raw_path: str, permission: str, *, allow_root: bool = False) -> tuple[dict[str, Any], str]:
         root = self.roots.get(root_id) if isinstance(root_id, str) else None

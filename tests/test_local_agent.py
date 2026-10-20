@@ -612,6 +612,33 @@ class LocalAgentTests(unittest.TestCase):
         self.assertEqual(agent.verify_audit()["status"], "valid")
         self.assertFalse(list(self.audit_dir.glob(".*.botpyton-agent-tmp")))
 
+    @unittest.skipIf(os.name == "nt", "POSIX hard-link publication is specific to non-Windows")
+    def test_audit_publication_discloses_persistent_staging_alias_cleanup_failure(self):
+        agent = self.agent()
+        real_unlink = os.unlink
+        failed_attempts = 0
+
+        def fail_audit_alias_cleanup(path, *args, **kwargs):
+            nonlocal failed_attempts
+            if str(path).endswith(".botpyton-agent-tmp") and "dir_fd" in kwargs:
+                failed_attempts += 1
+                if failed_attempts <= 2:
+                    raise PermissionError("injected audit staging-alias cleanup failure")
+            return real_unlink(path, *args, **kwargs)
+
+        with patch("bot.local_agent.os.unlink", side_effect=fail_audit_alias_cleanup):
+            with self.assertRaisesRegex(
+                LocalAgentError,
+                "Audit event was published, but staging-alias cleanup failed",
+            ):
+                agent._record("read", "project", "seed.txt", "success", "injected cleanup failure")
+
+        self.assertEqual(failed_attempts, 2)
+        self.assertEqual(agent.verify_audit()["status"], "valid")
+        aliases = list(self.audit_dir.glob(".*.botpyton-agent-tmp"))
+        self.assertEqual(len(aliases), 1, "a leftover alias must be explicitly observable in this isolated test")
+        aliases[0].unlink()
+
     def test_audit_corruption_is_fail_closed_before_write(self):
         (self.project / "new.py").write_text("original", encoding="utf-8")
         self.agent().read_file("project", "new.py")
