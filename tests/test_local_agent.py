@@ -375,6 +375,82 @@ class LocalAgentTests(unittest.TestCase):
         self.assertFalse(list(self.project.glob(".raced-create.txt.*.botpyton-agent-tmp")))
         self.assertEqual(self.agent().verify_audit()["status"], "valid")
 
+    def test_post_publish_external_change_is_preserved_without_rollback(self):
+        target = self.project / "shared.txt"
+        target.write_bytes(b"previous stable version")
+        expected = hashlib.sha256(b"previous stable version").hexdigest()
+        real_read = __import__("bot.local_agent", fromlist=["read_bounded_bytes"]).read_bounded_bytes
+        injected = False
+
+        def external_edit_after_publication(path, *, limit_bytes, label="Input file"):
+            nonlocal injected
+            if label == "Published write" and not injected:
+                target.write_bytes(b"newer external version")
+                injected = True
+            return real_read(path, limit_bytes=limit_bytes, label=label)
+
+        with patch("bot.local_agent.read_bounded_bytes", side_effect=external_edit_after_publication):
+            with self.assertRaisesRegex(LocalAgentError, "changed externally.*preserve the external version"):
+                self.agent().write_file(
+                    "project", "shared.txt", "BOTPYTON version",
+                    expected_sha256=expected,
+                )
+
+        self.assertTrue(injected, "test must edit the file after publication")
+        self.assertEqual(target.read_bytes(), b"newer external version")
+        self.assertEqual(self.agent().verify_audit()["status"], "valid")
+
+    def test_post_publish_audit_failure_restores_previous_version_conditionally(self):
+        target = self.project / "shared.txt"
+        target.write_bytes(b"previous audited version")
+        expected = hashlib.sha256(b"previous audited version").hexdigest()
+        agent = self.agent()
+        real_record = agent._record
+        injected = False
+
+        def fail_success_record(operation, root_id, relative, outcome, detail, byte_count=None):
+            nonlocal injected
+            if operation == "write" and outcome == "success" and not injected:
+                injected = True
+                raise LocalAgentError("injected post-publication audit failure")
+            return real_record(operation, root_id, relative, outcome, detail, byte_count)
+
+        with patch.object(agent, "_record", side_effect=fail_success_record):
+            with self.assertRaisesRegex(LocalAgentError, "previous file version was conditionally restored"):
+                agent.write_file(
+                    "project", "shared.txt", "temporary BOTPYTON version",
+                    expected_sha256=expected,
+                )
+
+        self.assertTrue(injected, "failure must occur after the destination was published")
+        self.assertEqual(target.read_bytes(), b"previous audited version")
+        audit = self.agent().verify_audit()
+        self.assertEqual(audit["status"], "valid")
+        records = [json.loads(line) for line in self.audit_path.read_text(encoding="utf-8").splitlines()]
+        errors = [record for record in records if record["operation"] == "write" and record["outcome"] == "error"]
+        self.assertTrue(errors)
+        self.assertIn("previous_version_restored", errors[-1]["detail"])
+
+    def test_post_publish_new_file_is_not_deleted_as_recovery(self):
+        target = self.project / "new-after-publish.txt"
+        real_read = __import__("bot.local_agent", fromlist=["read_bounded_bytes"]).read_bounded_bytes
+        injected = False
+
+        def external_edit_after_publication(path, *, limit_bytes, label="Input file"):
+            nonlocal injected
+            if label == "Published write" and not injected:
+                target.write_bytes(b"external update to newly created file")
+                injected = True
+            return real_read(path, limit_bytes=limit_bytes, label=label)
+
+        with patch("bot.local_agent.read_bounded_bytes", side_effect=external_edit_after_publication):
+            with self.assertRaisesRegex(LocalAgentError, "changed externally.*preserve the external version"):
+                self.agent().write_file("project", "new-after-publish.txt", "BOTPYTON new file")
+
+        self.assertTrue(injected)
+        self.assertEqual(target.read_bytes(), b"external update to newly created file")
+        self.assertEqual(self.agent().verify_audit()["status"], "valid")
+
     def test_internal_root_write_lock_is_hidden_and_protected(self):
         self.agent().write_file("project", "one.txt", "one")
         lock_files = list(self.project.glob(".botpyton-write-*.lock"))

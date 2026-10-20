@@ -502,6 +502,74 @@ def _publish_staged_file(
         kernel32.CloseHandle(handle)
 
 
+def _restore_previous_content_if_unchanged(
+    parent: Path,
+    parent_signature: tuple[tuple[Any, ...], ...],
+    target: Path,
+    previous_content: bytes,
+    published_sha256: str,
+    published_target_signature: tuple[tuple[Any, ...], ...],
+    max_file_bytes: int,
+) -> None:
+    """Conditionally restore an old version without overwriting a newer writer.
+
+    Recovery is only attempted when both the destination's captured identity and
+    the bytes BOTPYTON published still match. If either check fails, the caller
+    must preserve the destination and report that rollback was skipped.
+    """
+    _assert_existing_target_unchanged(
+        target, published_sha256, published_target_signature, max_file_bytes
+    )
+    staged_path: Path | None = None
+    with _directory_chain_lease(parent, parent_signature, "Recovery parent") as parent_handle:
+        _assert_path_chain_unchanged(parent, parent_signature, "Recovery parent")
+        _assert_existing_target_unchanged(
+            target, published_sha256, published_target_signature, max_file_bytes
+        )
+        descriptor, staged_path = _create_staged_file(parent, target.name, parent_handle)
+        try:
+            with os.fdopen(descriptor, "w+b") as stream:
+                stream.write(previous_content)
+                stream.flush()
+                os.fsync(stream.fileno())
+                staged_info = os.fstat(stream.fileno())
+                if (
+                    not stat.S_ISREG(staged_info.st_mode)
+                    or staged_info.st_size != len(previous_content)
+                    or staged_info.st_size > max_file_bytes
+                ):
+                    raise LocalAgentError("Recovery stage failed size or file-type validation")
+                stream.seek(0)
+                staged_raw = stream.read(max_file_bytes + 1)
+                if (
+                    len(staged_raw) != len(previous_content)
+                    or _sha256(staged_raw) != _sha256(previous_content)
+                ):
+                    raise LocalAgentError("Recovery stage failed SHA-256 verification")
+            _publish_staged_file(
+                staged_path, target, parent_handle, replace_existing=True,
+                expected_existing_sha256=published_sha256,
+                expected_target_signature=published_target_signature,
+                max_file_bytes=max_file_bytes,
+            )
+            staged_path = None
+            _assert_path_chain_unchanged(parent, parent_signature, "Recovery parent")
+            restored = read_bounded_bytes(
+                target, limit_bytes=max_file_bytes, label="Recovered write target"
+            )
+            if _sha256(restored) != _sha256(previous_content):
+                raise LocalAgentError("Recovered target failed SHA-256 verification")
+    finally:
+        if staged_path is not None:
+            try:
+                if os.name != "nt" and isinstance(parent_handle, int):
+                    os.unlink(staged_path.name, dir_fd=parent_handle)
+                elif staged_path.exists():
+                    staged_path.unlink()
+            except OSError:
+                pass
+
+
 def _read_json_config(path: Path) -> Any:
     try:
         _reject_link_components(path, "Agent config", allow_missing=False)
@@ -1094,6 +1162,9 @@ class LocalAgent:
         temporary: str | None = None
         parent_handle: Any = None
         cleanup_parent_handle: int | None = None
+        publication_completed = False
+        published_target_signature: tuple[tuple[Any, ...], ...] | None = None
+        recovery_status: str | None = None
         try:
             with _directory_chain_lease(parent, parent_signature, "Write parent") as parent_handle:
                 if os.name != "nt" and isinstance(parent_handle, int):
@@ -1157,12 +1228,19 @@ class LocalAgent:
                     _assert_path_chain_unchanged(target, target_signature, "Write target")
 
                 _assert_path_chain_unchanged(parent, parent_signature, "Write parent")
+                staged_signature = _path_chain_signature(staged, "Staged write")
+                staged_leaf = staged_signature[-1]
+                published_target_signature = staged_signature[:-1] + ((
+                    os.path.normcase(str(target)),
+                    staged_leaf[1], staged_leaf[2], staged_leaf[3],
+                ),)
                 _publish_staged_file(
                     staged, target, parent_handle, replace_existing=exists,
                     expected_existing_sha256=current_hash,
                     expected_target_signature=target_signature,
                     max_file_bytes=root["max_file_bytes"],
                 )
+                publication_completed = True
                 temporary = None
 
                 _assert_path_chain_unchanged(parent, parent_signature, "Write parent")
@@ -1183,10 +1261,59 @@ class LocalAgent:
                     "note": "Existing files require matching expected_sha256. Directory and delete operations are not supported.",
                 }
         except Exception as exc:
+            if publication_completed:
+                if exists and original is not None and published_target_signature is not None:
+                    try:
+                        _restore_previous_content_if_unchanged(
+                            parent, parent_signature, target, original, _sha256(raw),
+                            published_target_signature, root["max_file_bytes"],
+                        )
+                        recovery_status = "previous_version_restored"
+                    except Exception:
+                        # A mismatched hash/identity is a conflict, not permission to
+                        # overwrite. It is deliberately not retried through a weaker path.
+                        recovery_status = "rollback_skipped_or_failed"
+                elif published_target_signature is not None:
+                    # There was no prior version. Never delete a possibly newer external
+                    # file to make the operation appear rolled back.
+                    try:
+                        _assert_existing_target_unchanged(
+                            target, _sha256(raw), published_target_signature,
+                            root["max_file_bytes"],
+                        )
+                        recovery_status = "new_file_left_in_place"
+                    except Exception:
+                        recovery_status = "external_change_preserved"
+                else:
+                    recovery_status = "destination_state_unverified"
+
+            error_detail = type(exc).__name__
+            if recovery_status:
+                error_detail += ":" + recovery_status
             try:
-                self._record("write", root["id"], relative, "error", type(exc).__name__)
+                self._record("write", root["id"], relative, "error", error_detail)
             except LocalAgentError:
                 pass
+
+            if recovery_status == "previous_version_restored":
+                raise LocalAgentError(
+                    "Write failed after publication; the previous file version was conditionally restored"
+                ) from exc
+            if recovery_status == "rollback_skipped_or_failed":
+                raise LocalAgentError(
+                    "Write failed after publication; automatic rollback was skipped or failed because "
+                    "the target could not be proven unchanged. Preserve and inspect the target before retrying"
+                ) from exc
+            if recovery_status == "external_change_preserved":
+                raise LocalAgentError(
+                    "Write failed after publication; the destination changed externally, so automatic "
+                    "rollback was skipped to preserve the external version"
+                ) from exc
+            if recovery_status == "new_file_left_in_place":
+                raise LocalAgentError(
+                    "Write failed after publishing a new file; no previous version existed, so the file "
+                    "was not automatically deleted. Inspect the target and audit before retrying"
+                ) from exc
             if isinstance(exc, LocalAgentError):
                 raise
             raise LocalAgentError(f"File write failed: {type(exc).__name__}") from exc

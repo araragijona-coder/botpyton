@@ -67,6 +67,15 @@ Todas las escrituras de una misma raíz autorizada comparten un lock lateral est
 
 No se crean automáticamente carpetas padre.
 
+
+## Recuperación posterior a la publicación — Fase 54
+
+Una escritura puede publicar el temporal correctamente y fallar después al verificar el destino o registrar el éxito. BOTPYTON conserva en memoria el contenido anterior del archivo reemplazado y, ante un fallo posterior a la publicación, intenta restaurarlo **solo** si puede demostrar que el destino sigue siendo el mismo objeto que BOTPYTON publicó y que aún contiene exactamente los bytes nuevos solicitados. La restauración se prepara en otro temporal verificado y se publica usando la misma comprobación de identidad/hash; no se degrada a una escritura directa.
+
+Si la identidad del destino cambió, el contenido difiere, la lectura falla o no puede validarse la ruta padre, BOTPYTON omite la restauración y conserva el estado externo observado. No pisa ciegamente un cambio más reciente. Cuando se había creado un archivo nuevo, no existía una versión anterior para restaurar y BOTPYTON no elimina automáticamente ese archivo: informa de que hay que inspeccionarlo. Un fallo durante la restauración también requiere inspección manual del archivo y del registro de auditoría.
+
+Esta compensación no es una transacción ACID ni revierte cambios externos hechos después de la comprobación final. La política se limita a evitar que el propio mecanismo de recuperación sobrescriba un destino cuya identidad/contenido ya no coincide con la publicación de BOTPYTON; los procesos externos no cooperativos conservan una pequeña ventana de carrera inherente al sistema de archivos. Tras un error posterior a la publicación, lee el mensaje de resultado y verifica tanto el hash del archivo como el registro antes de reintentar.
+
 ## Límites de seguridad
 
 - El acceso se limita a una raíz identificada por ID y a un permiso explícito.
