@@ -20,6 +20,9 @@ MAX_PLAN_BYTES = 600_000
 MAX_TRANSACTION_BYTES = 2 * 1024 * 1024
 TRANSACTION_SCHEMA_VERSION = 2
 TASK_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$")
+_WINDOWS_INVALID_COMPONENT_CHARS = frozenset('<>:"|?*')
+_WINDOWS_DEVICE_NAMES = frozenset({"con", "prn", "aux", "nul", "clock$", "conin$", "conout$"})
+_WINDOWS_DEVICE_NUMBER_RE = re.compile(r"^(?:com|lpt)(?:[1-9]|[¹²³])$", re.IGNORECASE)
 PROTECTED_PREFIXES = (
     ".git/", ".github/", ".cerebro/policies/", ".cerebro/memory/",
     ".cerebro/reports/", ".cerebro/backups/", ".venv/", "node_modules/",
@@ -81,6 +84,27 @@ def _safe_relative_path(raw: Any) -> str:
     normalized = path.as_posix()
     if normalized != raw:
         raise LocalChangeError(f"Path is not canonical: {raw!r}")
+
+    # Plans must have the same meaning on POSIX and Windows. Reject Windows
+    # names that can redirect writes to streams/devices or normalize silently.
+    for component in path.parts:
+        if component.endswith((" ", ".")):
+            raise LocalChangeError(
+                f"Path component cannot end in a space or period on Windows: {component!r}"
+            )
+        if any(char in _WINDOWS_INVALID_COMPONENT_CHARS for char in component):
+            raise LocalChangeError(
+                f"Path component contains a Windows-invalid character: {component!r}"
+            )
+        device_name = component.split(".", 1)[0].rstrip(" .").casefold()
+        if (
+            device_name in _WINDOWS_DEVICE_NAMES
+            or _WINDOWS_DEVICE_NUMBER_RE.fullmatch(device_name)
+        ):
+            raise LocalChangeError(
+                f"Windows reserved device name is not an approved path component: {component!r}"
+            )
+
     folded = normalized.casefold()
     if folded in _PROTECTED_EXACT_CASEFOLD or any(
         folded.startswith(prefix) for prefix in _PROTECTED_PREFIXES_CASEFOLD
@@ -129,16 +153,34 @@ def _validate_local_change_plan(plan: Any, root: str | Path) -> dict:
     base = lexical_root.resolve()
     if not base.is_dir():
         raise LocalChangeError("Project root must be an existing directory")
-    seen: set[str] = set()
+    seen: dict[str, str] = {}
+    seen_prefixes: dict[str, str] = {}
     normalized = []
     total_bytes = 0
     for item in changes:
         if not isinstance(item, dict) or set(item) - {"path", "content", "expected_sha256"} or not {"path", "content"} <= item.keys():
             raise LocalChangeError("Each change requires path and content, with optional expected_sha256")
         relative = _safe_relative_path(item["path"])
-        if relative in seen:
-            raise LocalChangeError(f"Duplicate path: {relative}")
-        seen.add(relative)
+        folded_path = relative.casefold()
+        if folded_path in seen:
+            previous = seen[folded_path]
+            if previous == relative:
+                raise LocalChangeError(f"Duplicate path: {relative}")
+            raise LocalChangeError(
+                f"Case-insensitive path collision: {previous!r} conflicts with {relative!r}"
+            )
+        seen[folded_path] = relative
+        prefix_parts: list[str] = []
+        for component in PurePosixPath(relative).parts:
+            prefix_parts.append(component)
+            exact_prefix = "/".join(prefix_parts)
+            folded_prefix = exact_prefix.casefold()
+            previous_prefix = seen_prefixes.get(folded_prefix)
+            if previous_prefix is not None and previous_prefix != exact_prefix:
+                raise LocalChangeError(
+                    f"Case-insensitive path-component collision: {previous_prefix!r} conflicts with {exact_prefix!r}"
+                )
+            seen_prefixes[folded_prefix] = exact_prefix
         content = item["content"]
         if not isinstance(content, str):
             raise LocalChangeError(f"Content must be UTF-8 text: {relative}")
