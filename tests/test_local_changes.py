@@ -9,6 +9,8 @@ from bot.local_changes import (
     apply_local_change_plan,
     read_local_plan,
     validate_local_change_plan,
+    inspect_local_change_transaction,
+    rollback_local_change_transaction,
 )
 
 
@@ -291,6 +293,159 @@ class LocalChangePlanTests(unittest.TestCase):
 
             self.assertEqual(target.read_bytes(), original)
             self.assertEqual(backup_path.read_bytes(), sentinel)
+
+    def test_successful_multifile_plan_persists_content_free_transaction_journal(self):
+        with tempfile.TemporaryDirectory() as temp:
+            base = Path(temp)
+            root = base / "project"
+            root.mkdir()
+            existing = root / "app.py"
+            existing.write_bytes(b"VALUE = 1\n")
+            backup_root = base / "backups"
+            plan = {
+                "schema_version": 1,
+                "task_id": "journal-success",
+                "changes": [
+                    {
+                        "path": "app.py",
+                        "content": "VALUE = 2\n",
+                        "expected_sha256": digest(b"VALUE = 1\n"),
+                    },
+                    {"path": "new.py", "content": "VALUE = 3\n"},
+                ],
+            }
+            result = apply_local_change_plan(plan, root, backup_root=backup_root)
+            journal_path = Path(result["transaction_journal_path"])
+            journal = json.loads(journal_path.read_text(encoding="utf-8"))
+
+            self.assertEqual(journal["status"], "completed")
+            self.assertEqual(journal["transaction_id"], result["transaction_id"])
+            self.assertEqual(
+                [item["status"] for item in journal["changes"]],
+                ["published", "published"],
+            )
+            self.assertTrue(all("content" not in item for item in journal["changes"]))
+            self.assertEqual(existing.read_bytes(), b"VALUE = 2\n")
+            self.assertEqual((root / "new.py").read_bytes(), b"VALUE = 3\n")
+            self.assertEqual(
+                inspect_local_change_transaction(journal_path, root)["writes_performed"],
+                False,
+            )
+
+    def test_explicit_transaction_rollback_restores_originals_and_removes_new_files(self):
+        with tempfile.TemporaryDirectory() as temp:
+            base = Path(temp)
+            root = base / "project"
+            root.mkdir()
+            existing = root / "app.py"
+            original = b"VALUE = 1\n"
+            existing.write_bytes(original)
+            plan = {
+                "schema_version": 1,
+                "task_id": "journal-rollback",
+                "changes": [
+                    {
+                        "path": "app.py",
+                        "content": "VALUE = 2\n",
+                        "expected_sha256": digest(original),
+                    },
+                    {"path": "new.py", "content": "VALUE = 3\n"},
+                ],
+            }
+            result = apply_local_change_plan(plan, root, backup_root=base / "backups")
+            journal_path = Path(result["transaction_journal_path"])
+
+            rolled_back = rollback_local_change_transaction(
+                journal_path, root, expected_transaction_id=result["transaction_id"]
+            )
+
+            self.assertEqual(rolled_back["recovery"], "rollback_complete")
+            self.assertEqual(rolled_back["transaction_status"], "rolled_back")
+            self.assertEqual(existing.read_bytes(), original)
+            self.assertFalse((root / "new.py").exists())
+            self.assertTrue(rolled_back["writes_performed"])
+
+    def test_transaction_rollback_requires_exact_transaction_id(self):
+        with tempfile.TemporaryDirectory() as temp:
+            base = Path(temp)
+            root = base / "project"
+            root.mkdir()
+            result = apply_local_change_plan(
+                {
+                    "schema_version": 1,
+                    "task_id": "journal-id-guard",
+                    "changes": [{"path": "new.py", "content": "safe = True\n"}],
+                },
+                root,
+                backup_root=base / "backups",
+            )
+            target = root / "new.py"
+            with self.assertRaisesRegex(LocalChangeError, "confirmation does not match"):
+                rollback_local_change_transaction(
+                    result["transaction_journal_path"], root,
+                    expected_transaction_id="0" * 64,
+                )
+            self.assertEqual(target.read_text(encoding="utf-8"), "safe = True\n")
+
+    def test_transaction_rollback_preserves_external_changes(self):
+        with tempfile.TemporaryDirectory() as temp:
+            base = Path(temp)
+            root = base / "project"
+            root.mkdir()
+            target = root / "existing.py"
+            target.write_bytes(b"VALUE = 1\n")
+            plan = {
+                "schema_version": 1,
+                "task_id": "journal-external-change",
+                "changes": [{
+                    "path": "existing.py",
+                    "content": "VALUE = 2\n",
+                    "expected_sha256": digest(b"VALUE = 1\n"),
+                }],
+            }
+            result = apply_local_change_plan(plan, root, backup_root=base / "backups")
+            target.write_bytes(b"external update\n")
+
+            report = rollback_local_change_transaction(
+                result["transaction_journal_path"], root,
+                expected_transaction_id=result["transaction_id"],
+            )
+
+            self.assertEqual(target.read_bytes(), b"external update\n")
+            self.assertEqual(report["recovery"], "rollback_partial")
+            self.assertEqual(report["changes"][0]["recommended_action"], "manual_review_preserve_current_state")
+
+    def test_interrupted_publication_with_unknown_identity_requires_manual_review(self):
+        with tempfile.TemporaryDirectory() as temp:
+            base = Path(temp)
+            root = base / "project"
+            root.mkdir()
+            plan = {
+                "schema_version": 1,
+                "task_id": "journal-uncertain",
+                "changes": [{"path": "new.py", "content": "VALUE = 2\n"}],
+            }
+            result = apply_local_change_plan(plan, root, backup_root=base / "backups")
+            journal_path = Path(result["transaction_journal_path"])
+            journal = json.loads(journal_path.read_text(encoding="utf-8"))
+            journal["status"] = "applying"
+            journal["changes"][0]["status"] = "publishing"
+            journal["changes"][0]["published_identity"] = None
+            journal_path.write_text(
+                json.dumps(journal, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+                encoding="utf-8",
+            )
+
+            inspected = inspect_local_change_transaction(journal_path, root)
+            self.assertEqual(
+                inspected["changes"][0]["recommended_action"],
+                "manual_review_ambiguous_publication",
+            )
+            report = rollback_local_change_transaction(
+                journal_path, root, expected_transaction_id=result["transaction_id"]
+            )
+            self.assertEqual((root / "new.py").read_text(encoding="utf-8"), "VALUE = 2\n")
+            self.assertEqual(report["recovery"], "rollback_partial")
 
     def test_reads_bounded_json_plan(self):
         with tempfile.TemporaryDirectory() as temp:
