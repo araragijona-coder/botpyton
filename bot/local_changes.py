@@ -298,12 +298,22 @@ def _persist_transaction_journal(
     _reject_link_components(journal_path.parent, "Transaction journal directory")
     _reject_link_components(journal_path, "Transaction journal")
     try:
-        _write_atomic(journal_path, raw, replace_existing=not create)
+        if create:
+            _write_atomic(journal_path, raw, replace_existing=False)
+        else:
+            previous = read_bounded_bytes(
+                journal_path, limit_bytes=MAX_TRANSACTION_BYTES,
+                label="Existing local-change transaction journal",
+            )
+            _write_atomic(
+                journal_path, raw, replace_existing=True,
+                expected_current_sha256=_sha256(previous),
+            )
     except FileExistsError as exc:
         raise LocalChangeError(
             "A transaction journal already exists for this task and plan; inspect it before retrying"
         ) from exc
-    except OSError as exc:
+    except (OSError, BoundedReadError) as exc:
         raise LocalChangeError(
             f"Could not persist transaction journal safely: {type(exc).__name__}"
         ) from exc
