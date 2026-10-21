@@ -105,6 +105,64 @@ class LocalChangePlanTests(unittest.TestCase):
                 ):
                     validate_local_change_plan(plan, root)
 
+    def test_rejects_windows_streams_devices_and_ambiguous_names(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            invalid_paths = (
+                "settings.py" + chr(58) + "backup",
+                "bad" + chr(63) + ".py",
+                "C" + "ON.py",
+                "n" + "ul.txt",
+                "nested/N" + "UL.json.py",
+                "C" + "OM1.py",
+                "trailing.py" + ".",
+                "folder." + "/child.py",
+                "folder " + "/child.py",
+            )
+            for path in invalid_paths:
+                plan = {
+                    "schema_version": 1,
+                    "task_id": "portable-paths",
+                    "changes": [{"path": path, "content": "safe = True\\n"}],
+                }
+                with self.subTest(path=path), self.assertRaises(LocalChangeError):
+                    validate_local_change_plan(plan, root)
+
+    def test_rejects_case_insensitive_file_and_directory_collisions(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            plans = (
+                [
+                    {"path": "Settings.py", "content": "ONE = 1\\n"},
+                    {"path": "settings.py", "content": "TWO = 2\\n"},
+                ],
+                [
+                    {"path": "src/app.py", "content": "ONE = 1\\n"},
+                    {"path": "SRC/test.py", "content": "TWO = 2\\n"},
+                ],
+            )
+            for changes in plans:
+                plan = {"schema_version": 1, "task_id": "case-collision", "changes": changes}
+                with self.subTest(paths=[item["path"] for item in changes]), self.assertRaisesRegex(
+                    LocalChangeError, "Case-insensitive path"
+                ):
+                    validate_local_change_plan(plan, root)
+
+    def test_allows_multiple_files_with_consistent_portable_parent_spelling(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            plan = {
+                "schema_version": 1,
+                "task_id": "consistent-paths",
+                "changes": [
+                    {"path": "src/app.py", "content": "APP = True\\n"},
+                    {"path": "src/helper.py", "content": "HELPER = True\\n"},
+                ],
+            }
+            result = validate_local_change_plan(plan, root)
+            self.assertEqual(result["file_count"], 2)
+            self.assertFalse(result["writes_performed"])
+
     def test_rejects_existing_file_without_hash_and_invalid_limits(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
