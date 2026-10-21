@@ -31,6 +31,16 @@ El hueco principal era el alcance de esa recuperación: `apply_local_change_plan
 
 Estas referencias aportan patrones y ejemplos documentados; no implican que BOTPYTON tuviera cada uno de esos fallos externos.
 
+## Código fuente de referencia inspeccionado
+
+- [BleachBit `FileUtilities.py`](https://github.com/bleachbit/bleachbit/blob/master/bleachbit/FileUtilities.py): extiende la detección de enlaces en Windows a junctions/reparse points y usa un lock del directorio padre para ciertas operaciones de borrado.
+- [pre-commit `store.py`](https://github.com/pre-commit/pre-commit/blob/main/pre_commit/store.py): inicializa su base de datos mediante un archivo temporal y movimiento atómico; vuelve a comprobar dentro del lock si otro proceso completó la inicialización.
+- [pre-commit `file_lock.py`](https://github.com/pre-commit/pre-commit/blob/main/pre_commit/file_lock.py): separa el mecanismo de lock de POSIX y Windows y documenta espera/adquisición con liberación explícita.
+- [restic `doc/design.rst`](https://github.com/restic/restic/blob/master/doc/design.rst): describe el uso de IDs SHA-256, publicación atómica y locks del repositorio para proteger la consistencia ante accesos concurrentes.
+- [restic `internal/restorer/restorer.go`](https://github.com/restic/restic/blob/master/internal/restorer/restorer.go): separa las políticas de sobrescritura y expone callbacks de error/aviso en la restauración, en vez de asumir que todos los destinos deben reemplazarse.
+
+Patrones trasladados en esta fase: lock estable durante la recuperación, diario de estado con SHA-256, publicación atómica, creación exclusiva, restauración condicionada y distinción explícita entre éxito completo, conflicto externo y estado ambiguo. BOTPYTON mantiene una implementación de biblioteca estándar y no copia código ni incorpora las dependencias de esos proyectos.
+
 ## Cambios aplicados
 
 - Se crea un diario JSON de tamaño limitado en `<backup_root>/.botpyton-transactions/<task>-<fingerprint>.json` antes de publicar el primer archivo del proyecto.
