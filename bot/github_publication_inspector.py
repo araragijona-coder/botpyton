@@ -262,9 +262,10 @@ def inspect_github_publication(
         _set_evidence(report, "repository_metadata", "verified",
                       default_branch=default_branch)
 
-        base_ref = get(client._endpoint(
+        base_ref_endpoint = client._endpoint(
             "/git/ref/heads/" + urllib.parse.quote(plan.base_branch, safe="/")
-        ))
+        )
+        base_ref = get(base_ref_endpoint)
         if (
             not isinstance(base_ref, dict)
             or not isinstance(base_ref.get("object"), dict)
@@ -323,6 +324,14 @@ def inspect_github_publication(
                 raise _InspectionStop("branch_appeared_during_inspection")
             _set_evidence(report, "branch_inventory_final", "complete",
                           pages_read=final_pages, target_found=False)
+            final_base_ref = get(base_ref_endpoint)
+            if (
+                not isinstance(final_base_ref, dict)
+                or not isinstance(final_base_ref.get("object"), dict)
+                or final_base_ref["object"].get("sha") != base_sha
+            ):
+                raise _InspectionStop("base_ref_changed_during_inspection")
+            _set_evidence(report, "base_ref_final", "unchanged", sha=base_sha)
             if effect != "effective_change_confirmed":
                 raise _InspectionStop(effect, "manual_review_required")
             report["status"] = "inspected"
@@ -413,6 +422,14 @@ def inspect_github_publication(
         ):
             raise _InspectionStop("branch_ref_changed_during_inspection")
         _set_evidence(report, "branch_ref_final", "unchanged", head_sha=initial_sha)
+        final_base_ref = get(base_ref_endpoint)
+        if (
+            not isinstance(final_base_ref, dict)
+            or not isinstance(final_base_ref.get("object"), dict)
+            or final_base_ref["object"].get("sha") != base_sha
+        ):
+            raise _InspectionStop("base_ref_changed_during_inspection")
+        _set_evidence(report, "base_ref_final", "unchanged", sha=base_sha)
 
         if initial_sha == base_sha and not pulls:
             if effect != "effective_change_confirmed":
