@@ -16,6 +16,19 @@ from . import local_changes as _local_changes
 LocalChangeError = _local_changes.LocalChangeError
 MAX_TRANSACTION_BYTES = _local_changes.MAX_TRANSACTION_BYTES
 TRANSACTION_SCHEMA_VERSION = _local_changes.TRANSACTION_SCHEMA_VERSION
+def _journal_checksum(journal: dict[str, Any]) -> str:
+    """Detect accidental journal corruption; not an authentication mechanism."""
+    payload = {key: value for key, value in journal.items() if key != "journal_sha256"}
+    try:
+        canonical = json.dumps(
+            payload, ensure_ascii=False, sort_keys=True,
+            separators=(",", ":"), allow_nan=False,
+        ).encode("utf-8")
+    except (TypeError, ValueError, RecursionError) as exc:
+        raise LocalChangeError("Transaction journal cannot be canonicalized safely") from exc
+    return _local_changes._sha256(canonical)
+
+
 def _transaction_timestamp() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
@@ -56,6 +69,8 @@ def _persist_transaction_journal(
     create: bool = False,
 ) -> None:
     journal["updated_at"] = _transaction_timestamp()
+    journal.pop("journal_sha256", None)
+    journal["journal_sha256"] = _journal_checksum(journal)
     try:
         raw = (json.dumps(
             journal, ensure_ascii=False, indent=2, sort_keys=True, allow_nan=False
@@ -80,7 +95,7 @@ def _persist_transaction_journal(
                 journal_path, raw, replace_existing=True,
                 expected_current_sha256=_local_changes._sha256(previous),
             )
-    except _PublishedCleanupError as exc:
+    except _local_changes._PublishedCleanupError as exc:
         try:
             exc.temporary_path.unlink(missing_ok=True)
         except OSError as cleanup_exc:
@@ -128,7 +143,7 @@ def _load_transaction_journal(journal_path: str | Path) -> tuple[Path, dict[str,
 
     required = {
         "schema_version", "transaction_id", "task_id", "project_root", "backup_root",
-        "created_at", "updated_at", "status", "changes",
+        "created_at", "updated_at", "status", "changes", "journal_sha256",
     }
     if not isinstance(journal, dict) or set(journal) != required:
         raise LocalChangeError("Transaction journal fields do not match the supported schema")
@@ -138,6 +153,11 @@ def _load_transaction_journal(journal_path: str | Path) -> tuple[Path, dict[str,
         or journal["schema_version"] != TRANSACTION_SCHEMA_VERSION
     ):
         raise LocalChangeError("Unsupported transaction journal schema version")
+    journal_checksum = journal["journal_sha256"]
+    if not isinstance(journal_checksum, str) or not re.fullmatch(r"[0-9a-f]{64}", journal_checksum):
+        raise LocalChangeError("Transaction journal integrity checksum is malformed")
+    if _journal_checksum(journal) != journal_checksum:
+        raise LocalChangeError("Transaction journal integrity checksum mismatch; recovery is blocked")
     transaction_id = journal["transaction_id"]
     task_id = journal["task_id"]
     if not isinstance(transaction_id, str) or not re.fullmatch(r"[0-9a-f]{64}", transaction_id):
