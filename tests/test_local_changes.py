@@ -162,16 +162,25 @@ class LocalChangePlanTests(unittest.TestCase):
             }
             sentinel = b"created concurrently; preserve me"
             real_link = os.link
+            injected = False
 
             def create_collision_then_link(source, destination, *args, **kwargs):
-                if Path(destination) == target:
-                    Path(destination).write_bytes(sentinel)
+                nonlocal injected
+                candidate = Path(destination)
+                if (
+                    not injected
+                    and candidate.name.casefold() == target.name.casefold()
+                    and candidate.parent.name.casefold() == root.name.casefold()
+                ):
+                    candidate.write_bytes(sentinel)
+                    injected = True
                 return real_link(source, destination, *args, **kwargs)
 
             with patch("bot.local_changes.os.link", side_effect=create_collision_then_link):
                 with self.assertRaises(LocalChangeError):
                     apply_local_change_plan(plan, root, backup_root=base / "backups")
 
+            self.assertTrue(injected, "the race must be injected at the project-file destination")
             self.assertEqual(target.read_bytes(), sentinel)
             self.assertEqual(list(root.glob(".*.botpyton-tmp")), [])
 
