@@ -1,7 +1,12 @@
 """Failure-injection tests for read-only interrupted-publication inspection."""
+import contextlib
+import io
 import json
+import tempfile
 import urllib.parse
 import unittest
+from pathlib import Path
+from unittest.mock import patch
 
 from bot.github_ops import (
     GitHubAPIError,
@@ -10,7 +15,7 @@ from bot.github_ops import (
     submit_change_plan,
     validate_change_plan,
 )
-from bot.github_publication_inspector import inspect_github_publication
+from bot.github_publication_inspector import inspect_github_publication, main as inspector_main
 from test_github_ops import FakeGitHub, make_plan
 
 
@@ -23,6 +28,8 @@ class InspectableGitHub(FakeGitHub):
         self.transport_failures = []
         self.race_ref = None
         self.race_count = 0
+        self.race_base_ref = None
+        self.base_race_count = 0
 
     def __call__(self, method, endpoint, payload):
         parsed = urllib.parse.urlparse(endpoint)
@@ -56,6 +63,10 @@ class InspectableGitHub(FakeGitHub):
             self.race_count += 1
             if self.race_count == 2:
                 self.refs[self.race_ref.split("/git/ref/heads/", 1)[1]] = "ref-moved-during-read"
+        if method == "GET" and self.race_base_ref and path == self.race_base_ref:
+            self.base_race_count += 1
+            if self.base_race_count == 2:
+                self.refs["main"] = "base-ref-moved-during-read"
         return super().__call__(method, endpoint, payload)
 
 
@@ -212,6 +223,34 @@ class GitHubPublicationInspectorTests(unittest.TestCase):
 
         self.assertEqual(result["recommendation"], "manual_review_required")
         self.assertEqual(result["reason_code"], "branch_ref_changed_during_inspection")
+
+    def test_base_ref_change_during_inspection_is_detected(self):
+        fake, client, plan, _ = self._published_state()
+        fake.race_base_ref = "/repos/test/repo/git/ref/heads/main"
+        fake.base_race_count = 0
+        fake.calls.clear()
+
+        result = self._inspect(fake, client, plan)
+
+        self.assertEqual(result["recommendation"], "manual_review_required")
+        self.assertEqual(result["reason_code"], "base_ref_changed_during_inspection")
+
+    def test_cli_accepts_an_existing_plan_file_and_emits_json_report(self):
+        fake, client, plan, _ = self._published_state()
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "plan.json"
+            path.write_text(json.dumps(plan), encoding="utf-8")
+            output = io.StringIO()
+            with (
+                patch("bot.github_publication_inspector.GitHubClient", return_value=client),
+                contextlib.redirect_stdout(output),
+            ):
+                code = inspector_main([
+                    "--repository", "test/repo", "--plan", str(path)
+                ])
+        self.assertEqual(code, 0, output.getvalue())
+        self.assertEqual(json.loads(output.getvalue())["recommendation"], "safe_to_retry_same_plan")
+        self.assertTrue(all(method == "GET" and payload is None for method, _, payload in fake.calls))
 
     def test_plan_is_validated_before_any_github_request(self):
         fake = InspectableGitHub()
