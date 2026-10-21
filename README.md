@@ -274,6 +274,8 @@ To apply a plan, add `--execute-local-plan`. Existing files require a matching `
 
 Applied local plans also persist a content-free transaction journal outside the project. The journal records per-file hashes and publication states so an interrupted operation can be inspected instead of blindly retried. Inspect it read-only with `--local-transaction-inspect JOURNAL.json --project-root PROJECT`. An explicit rollback requires both `--local-transaction-rollback JOURNAL.json --project-root PROJECT` and `--confirm-transaction-id SHA256`; only unchanged files with matching recorded publication identity and SHA-256 are eligible. External or ambiguous changes are preserved for manual review. See `docs/research/PHASE-63-TRANSACTION-JOURNAL-AND-INDUSTRY-REVIEW.md`.
 
+Transaction apply and rollback share a stable per-transaction lock so BOTPYTON does not run those two modifying flows concurrently. Schema 2 journals also carry a canonical `journal_sha256` to detect accidental corruption before recovery; this checksum is not an authentication signature against someone who can edit and recompute the journal. See `docs/research/PHASE-64-JOURNAL-TRUST-BOUNDARY.md`.
+
 The process runner uses separate arguments, an explicit executable allowlist, `shell=False`, a timeout, disconnected stdin, stripped credential-like environment variables and bounded returned output. It is not a general shell and does not execute commands discovered in repository text. These controls are foundations for the worker, not a claim that free-form programming tasks can already be autonomously solved.
 
 
