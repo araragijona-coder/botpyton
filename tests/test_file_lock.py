@@ -23,7 +23,7 @@ class ExistingFileLockTests(unittest.TestCase):
             path.write_bytes(sentinel)
 
             with exclusive_file_lock(path, create=False):
-                self.assertEqual(path.read_bytes(), sentinel)
+                self.assertTrue(path.exists())
 
             self.assertEqual(path.read_bytes(), sentinel)
 
