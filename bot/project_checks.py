@@ -142,5 +142,12 @@ def run_project_check(
         "source": selected["source"],
         "ok": result["exit_code"] == 0 and not result["timed_out"],
         "project_code_execution_approved": True,
+        "project_code_may_access_network": True,
+        "network_isolation_enforced": False,
+        "network_security_note": (
+            "The selected project test/build command is not network-sandboxed. "
+            "It may contact hosts, registries, or services; review the code and command "
+            "before authorizing it."
+        ),
         **result,
     }

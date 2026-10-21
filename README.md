@@ -584,3 +584,7 @@ El log debe ser un archivo relativo al proyecto y no superar 64 KiB. El escaneo 
 
 The local agent now builds the next bounded audit log as a fully verified same-directory staged file and publishes it atomically, so a partial staging write does not corrupt the previous audit. POSIX new-file publication also reports separately when the destination link succeeds but cleanup of its temporary alias fails. The operation retries alias cleanup and discloses a persistent leftover instead of pretending publication never occurred. See [Phase 55 research](docs/research/PHASE-55-ATOMIC-AUDIT-PUBLICATION.md). CI passes are not target-PC validation; no changes are made to `main` automatically.
 
+## Phase 61 — process execution boundaries
+
+The process runner bounds time, output, and (on Windows) child memory, but it does not create a network sandbox. Project tests/build scripts may contact remote hosts when explicitly authorized. On Windows, a registered `.bat` or `.cmd` tool wrapper may invoke `cmd.exe` even though BOTPYTON calls Python `Popen` with `shell=False`; the JSON result now reports this condition. Review `network_isolation_enforced`, `child_may_access_network`, and `windows_batch_wrapper_may_use_cmd` in process reports. See [Phase 61 process-boundary audit](docs/research/PHASE-61-PROCESS-BOUNDARY-AUDIT.md).
+
