@@ -1,0 +1,13 @@
+[
+  {
+    "id": "project-smoke-001",
+    "goal": "Inspect the project and verify Python source syntax before declaring the order complete",
+    "depends_on": [],
+    "allowed_actions": ["inspect_repository", "prepare_report"],
+    "success_conditions": ["actions_pass", "report_created"],
+    "max_attempts": 2,
+    "verification_checks": [
+      {"type": "python_syntax"}
+    ]
+  }
+]

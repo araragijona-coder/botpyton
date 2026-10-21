@@ -159,14 +159,27 @@ class TaskQueue:
             raise QueueError(f"Unknown task ID: {task_id}")
         return {"id": task_id, **record}
 
-    def claim_next(self) -> dict[str, Any] | None:
-        """Claim exactly one task while holding the cross-process transaction lock."""
+    def claim_next(
+        self, *, allowed_task_ids: set[str] | frozenset[str] | None = None
+    ) -> dict[str, Any] | None:
+        """Claim one ready task, optionally restricting claims to an explicit task-ID set.
+
+        The scope applies only to claiming. Dependency readiness is always checked
+        against the full persisted queue, and unrelated pending tasks are not claimed.
+        """
+        if allowed_task_ids is not None and (
+            not isinstance(allowed_task_ids, (set, frozenset))
+            or any(not isinstance(task_id, str) or not task_id for task_id in allowed_task_ids)
+        ):
+            raise QueueError("allowed_task_ids must be a set of non-empty task ID strings")
         with self.memory.transaction():
             state = self._load()
             records = state["tasks"]
             while True:
                 ready = []
                 for task_id, record in records.items():
+                    if allowed_task_ids is not None and task_id not in allowed_task_ids:
+                        continue
                     if record["status"] != "pending":
                         continue
                     dependencies = record["payload"].get("depends_on", [])

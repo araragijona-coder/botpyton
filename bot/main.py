@@ -25,6 +25,7 @@ from .orchestration import (
     validate_change_plan_batch,
     validate_task_batch,
 )
+from .order_pipeline import run_order_batch
 from .planner import order_tasks
 from .repository_analyzer import inspect_repository
 from .process_runner import ProcessRunnerError, run_tool_probe
@@ -174,6 +175,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--investigation-exit-code", type=int, metavar="N", help="process exit code from the failed command")
     parser.add_argument("--investigation-expected", metavar="TEXT", help="expected behavior or contract for the failed operation")
     parser.add_argument("--investigation-observed", metavar="TEXT", help="observed behavior and reproducible failure summary")
+    parser.add_argument("--run-order", metavar="TASKS_JSON",
+                        help="validate, enqueue and execute a bounded task batch with explicit machine-verifiable acceptance checks")
     parser.add_argument("--enqueue", metavar="PATH", help="idempotently enqueue one task or a JSON array")
     parser.add_argument("--queue", action="store_true", help="list durable queue records")
     parser.add_argument("--claim-next", action="store_true", help="claim and print the next ready task")
@@ -226,6 +229,34 @@ def main(argv: list[str] | None = None) -> int:
         })
         return 2
     try:
+        if args.run_order:
+            ignored_for_order = {
+                "run_order", "project_root", "memory", "check_timeout",
+                "child_memory_limit_mb", "cycle_max_attempts", "cycle_timeout",
+            }
+            conflicts = []
+            for name, value in vars(args).items():
+                if name in ignored_for_order:
+                    continue
+                if value is None or value is False or value == "" or value == []:
+                    continue
+                if name == "local_agent_path" and value == ".":
+                    continue
+                conflicts.append(name.replace("_", "-"))
+            if conflicts:
+                raise OrchestrationError(
+                    "--run-order must be a standalone operation; conflicting options: "
+                    + ", ".join(sorted(conflicts))
+                )
+            order_value = _read_bounded_json(args.run_order, limit_bytes=600_000)
+            queue = TaskQueue(JsonMemory(args.memory))
+            executor = TaskExecutor(
+                Path(args.project_root).expanduser().resolve(),
+                test_timeout_seconds=args.check_timeout,
+            )
+            result = run_order_batch(order_value, queue=queue, executor=executor)
+            _print_json(result)
+            return 0 if result["status"] == "succeeded" else 1
         if args.apply_reviewed_patch and (
             args.architect_ai or args.architect_ai_failure_report or args.send_failure_report
             or args.architect_plan or args.create_workspace or args.workspace_status
