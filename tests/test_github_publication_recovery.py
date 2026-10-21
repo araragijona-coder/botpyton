@@ -68,7 +68,7 @@ class GitHubPublicationRecoveryTests(unittest.TestCase):
         self.assertIn(expected.branch_name, fake.refs)
         self.assertEqual(
             fake.files[expected.branch_name]["docs/example.md"],
-            "# Example\\n\\nCreated deterministically.\\n",
+            expected.changes["docs/example.md"],
         )
         self.assertFalse(any(
             method == "PATCH" and payload and payload.get("force") is True
