@@ -1,6 +1,7 @@
 import hashlib
 import json
 import tempfile
+import threading
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -461,6 +462,82 @@ class LocalChangePlanTests(unittest.TestCase):
             )
             self.assertEqual((root / "new.py").read_text(encoding="utf-8"), "VALUE = 2\n")
             self.assertEqual(report["recovery"], "rollback_partial")
+
+    def test_rollback_waits_for_active_apply_transaction(self):
+        with tempfile.TemporaryDirectory() as temp:
+            base = Path(temp)
+            root = base / "project"
+            root.mkdir()
+            backup_root = base / "backups"
+            target = root / "created.py"
+            plan = {
+                "schema_version": 1,
+                "task_id": "concurrent-journal-guard",
+                "changes": [{"path": "created.py", "content": "VALUE = 1\n"}],
+            }
+            writer_at_publication = threading.Event()
+            release_writer = threading.Event()
+            rollback_started = threading.Event()
+            rollback_finished = threading.Event()
+            outcomes = {}
+            errors = []
+            real_write_atomic = __import__("bot.local_changes", fromlist=["_write_atomic"])._write_atomic
+
+            def pause_project_publication(path, raw, **kwargs):
+                if Path(path) == target and raw == b"VALUE = 1\n":
+                    writer_at_publication.set()
+                    if not release_writer.wait(5):
+                        raise TimeoutError("test did not release publication gate")
+                return real_write_atomic(path, raw, **kwargs)
+
+            def apply_worker():
+                try:
+                    with patch("bot.local_changes._write_atomic", side_effect=pause_project_publication):
+                        outcomes["apply"] = apply_local_change_plan(
+                            plan, root, backup_root=backup_root
+                        )
+                except Exception as exc:
+                    errors.append(exc)
+
+            def rollback_worker(journal_path, transaction_id):
+                rollback_started.set()
+                try:
+                    outcomes["rollback"] = rollback_local_change_transaction(
+                        journal_path, root, expected_transaction_id=transaction_id
+                    )
+                except Exception as exc:
+                    errors.append(exc)
+                finally:
+                    rollback_finished.set()
+
+            writer = threading.Thread(target=apply_worker, daemon=True)
+            writer.start()
+            self.assertTrue(writer_at_publication.wait(5), "apply should reach target publication")
+            journal_dir = backup_root / ".botpyton-transactions"
+            journal_files = list(journal_dir.glob("concurrent-journal-guard-*.json"))
+            self.assertEqual(len(journal_files), 1)
+            journal = json.loads(journal_files[0].read_text(encoding="utf-8"))
+
+            rollback = threading.Thread(
+                target=rollback_worker,
+                args=(journal_files[0], journal["transaction_id"]),
+                daemon=True,
+            )
+            rollback.start()
+            self.assertTrue(rollback_started.wait(5))
+            self.assertFalse(
+                rollback_finished.wait(0.2),
+                "rollback must wait while apply owns the transaction lock",
+            )
+
+            release_writer.set()
+            writer.join(5)
+            rollback.join(5)
+            self.assertFalse(writer.is_alive(), "apply thread did not finish")
+            self.assertFalse(rollback.is_alive(), "rollback thread did not finish")
+            self.assertEqual(errors, [])
+            self.assertEqual(outcomes["rollback"]["recovery"], "rollback_complete")
+            self.assertFalse(target.exists(), "serialized rollback should remove the new file")
 
     def test_reads_bounded_json_plan(self):
         with tempfile.TemporaryDirectory() as temp:
