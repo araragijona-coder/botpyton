@@ -355,17 +355,22 @@ def inspect_local_change_transaction(
     journal_path: str | Path,
     project_root: str | Path,
 ) -> dict[str, Any]:
-    """Read-only inspection of a durable local change transaction journal."""
+    """Read-only, transaction-consistent inspection without creating lock files."""
     resolved_journal, journal = _load_transaction_journal(journal_path)
-    requested_root = Path(project_root).expanduser()
-    _local_changes._reject_link_components(requested_root, "Selected project root")
-    try:
-        requested_root = requested_root.resolve(strict=True)
-    except (OSError, RuntimeError, ValueError) as exc:
-        raise LocalChangeError("Selected project root cannot be resolved safely") from exc
-    if requested_root != Path(journal["project_root"]):
-        raise LocalChangeError("Selected project root does not match the transaction journal")
-    return _inspect_transaction_targets(resolved_journal, journal)
+    lock_path = resolved_journal.parent / f".{journal['transaction_id']}.transaction.lock"
+    with exclusive_file_lock(lock_path, create=False):
+        # Reload only after the shared transaction lock is held so the journal
+        # and target observations describe a consistent point in the transaction.
+        resolved_journal, journal = _load_transaction_journal(resolved_journal)
+        requested_root = Path(project_root).expanduser()
+        _local_changes._reject_link_components(requested_root, "Selected project root")
+        try:
+            requested_root = requested_root.resolve(strict=True)
+        except (OSError, RuntimeError, ValueError) as exc:
+            raise LocalChangeError("Selected project root cannot be resolved safely") from exc
+        if requested_root != Path(journal["project_root"]):
+            raise LocalChangeError("Selected project root does not match the transaction journal")
+        return _inspect_transaction_targets(resolved_journal, journal)
 
 
 def rollback_local_change_transaction(
