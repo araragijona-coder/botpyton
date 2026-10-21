@@ -306,7 +306,7 @@ def inspect_github_publication(
                 report["pull_request"].update({"matching_count": len(pulls), "items": pulls[:5]})
                 raise _InspectionStop("pull_request_exists_without_confirmed_branch")
             _set_evidence(report, "pull_request", "absent_in_complete_query")
-            final_status, final_pages = _list_branches(client, plan.branch_name)
+            final_status, final_pages = _list_branches(client, plan.branch_name, get)
             if final_status != "absent_in_complete_inventory":
                 raise _InspectionStop("branch_appeared_during_inspection")
             _set_evidence(report, "branch_inventory_final", "complete",
@@ -321,7 +321,7 @@ def inspect_github_publication(
         if initial_sha == base_sha:
             report["branch"]["status"] = "at_base_commit"
             _set_evidence(report, "branch_content", "no_plan_commit_detected")
-            effect = _base_plan_effect(client, plan.base_branch, plan.changes)
+            effect = _base_plan_effect(client, plan.base_branch, plan.changes, get)
             _set_evidence(report, "base_plan_effect", effect)
             branch_matches_plan = False
         else:
@@ -372,7 +372,7 @@ def inspect_github_publication(
             report["branch"]["status"] = "matches_plan"
             branch_matches_plan = True
 
-        pulls = _list_matching_pull_requests(client, plan.branch_name, plan.base_branch)
+        pulls = _list_matching_pull_requests(client, plan.branch_name, plan.base_branch, get)
         if len(pulls) > 1:
             report["pull_request"] = {"status": "multiple_matching", "matching_count": len(pulls),
                                       "items": pulls[:5]}
