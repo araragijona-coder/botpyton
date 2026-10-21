@@ -139,6 +139,15 @@ class ToolchainMatrixTests(unittest.TestCase):
         second = inspect_toolchain_matrix(self.root, **kwargs)
         self.assertEqual(first, second)
 
+    def test_dotnet_solution_does_not_create_a_false_cpp_match(self):
+        (self.root / "Example.sln").write_text("Microsoft Visual Studio Solution File\n", encoding="utf-8")
+        report = inspect_toolchain_matrix(
+            self.root, available_tool_ids={"dotnet"}, available_check_ids=set()
+        )
+        adapter_ids = set(self._adapter_map(report))
+        self.assertIn("dotnet", adapter_ids)
+        self.assertNotIn("c-cpp", adapter_ids)
+
     def test_invalid_project_root_is_rejected(self):
         with self.assertRaises(ToolchainMatrixError):
             inspect_toolchain_matrix(self.root / "missing")

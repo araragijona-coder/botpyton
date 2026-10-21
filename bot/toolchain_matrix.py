@@ -110,7 +110,7 @@ ADAPTERS: tuple[AdapterSpec, ...] = (
     AdapterSpec(
         "c-cpp", "C / C++",
         manifest_names=("cmakelists.txt", "meson.build", "makefile"),
-        manifest_patterns=("*.vcxproj", "*.sln"),
+        manifest_patterns=("*.vcxproj",),
         source_extensions=(".c", ".h", ".cc", ".cpp", ".cxx", ".hpp", ".hh", ".hxx"),
         optional_tool_ids=("cmake", "gcc", "clang"),
         notes=("No generic compile profile is selected; MSVC and project-specific build steps may need explicit configuration.",),
@@ -313,7 +313,7 @@ def inspect_toolchain_matrix(
                 if isinstance(item, dict) and isinstance(item.get("check_id"), str)
             }
             check_inventory_status = "discovered_at_project_root"
-        except Exception as exc:
+        except (OSError, ValueError, RuntimeError, RecursionError) as exc:
             check_ids = set()
             check_inventory_status = "unavailable_" + type(exc).__name__
     else:
