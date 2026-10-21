@@ -97,19 +97,25 @@ class ToolchainMatrixTests(unittest.TestCase):
         self.assertEqual(report["scan"]["files_seen"], 1)
 
     def test_symlinked_directories_are_not_followed(self):
-        target = self.root / "outside"
-        target.mkdir()
-        (target / "package.json").write_text('{"scripts":{"test":"do-not-run"}}', encoding="utf-8")
+        external = tempfile.TemporaryDirectory()
         alias = self.root / "linked"
         try:
-            alias.symlink_to(target, target_is_directory=True)
-        except (OSError, NotImplementedError) as exc:
-            self.skipTest(f"symlink creation is unavailable: {type(exc).__name__}")
-        report = inspect_toolchain_matrix(
-            self.root, available_tool_ids={"node", "npm"}, available_check_ids={"npm-test"}
-        )
-        self.assertNotIn("javascript-typescript", self._adapter_map(report))
-        self.assertEqual(report["scan"]["link_or_junctions_skipped"], 1)
+            target = Path(external.name)
+            (target / "package.json").write_text(
+                '{"scripts":{"test":"do-not-run"}}', encoding="utf-8"
+            )
+            try:
+                alias.symlink_to(target, target_is_directory=True)
+            except (OSError, NotImplementedError) as exc:
+                self.skipTest(f"symlink creation is unavailable: {type(exc).__name__}")
+            report = inspect_toolchain_matrix(
+                self.root, available_tool_ids={"node", "npm"}, available_check_ids={"npm-test"}
+            )
+            self.assertNotIn("javascript-typescript", self._adapter_map(report))
+            self.assertEqual(report["scan"]["link_or_junctions_skipped"], 1)
+        finally:
+            alias.unlink(missing_ok=True)
+            external.cleanup()
 
     def test_scan_limit_is_reported_as_partial(self):
         for index in range(5):
