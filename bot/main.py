@@ -14,7 +14,11 @@ from .diagnostics import diagnose_failure
 from .executor import TaskExecutor
 from .github_ops import GitHubClient, GitHubOpsError, submit_change_plan
 from .memory import JsonMemory, MemoryError
-from .local_changes import LocalChangeError, apply_local_change_plan, read_local_plan, validate_local_change_plan
+from .local_changes import (
+    LocalChangeError, apply_local_change_plan, read_local_plan,
+    validate_local_change_plan, inspect_local_change_transaction,
+    rollback_local_change_transaction,
+)
 from .orchestration import (
     OrchestrationError,
     submit_change_plan_batch,
@@ -133,6 +137,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--probe-tool", metavar="TOOL_ID", help="run the fixed version probe for one registered tool")
     parser.add_argument("--local-plan", metavar="PATH", help="validate a declarative local file-change plan (dry-run by default)")
     parser.add_argument("--execute-local-plan", action="store_true", help="apply --local-plan after hash checks and create backups")
+    parser.add_argument("--local-transaction-inspect", metavar="JOURNAL_JSON",
+                        help="read-only inspect a durable local-change transaction journal")
+    parser.add_argument("--local-transaction-rollback", metavar="JOURNAL_JSON",
+                        help="explicitly roll back a local-change transaction only where file identity and SHA-256 still match")
+    parser.add_argument("--confirm-transaction-id", metavar="SHA256",
+                        help="exact transaction ID confirmation required by --local-transaction-rollback")
     parser.add_argument("--local-agent-config", metavar="PATH", help="validate or use a local-agent JSON config with explicit folder permissions")
     parser.add_argument("--local-agent-validate", action="store_true", help="validate the local-agent config without performing file access")
     parser.add_argument("--local-agent-list", metavar="ROOT_ID", help="list one directory in the configured root; requires --local-agent-config")
@@ -219,7 +229,8 @@ def main(argv: list[str] | None = None) -> int:
         if args.apply_reviewed_patch and (
             args.architect_ai or args.architect_ai_failure_report or args.send_failure_report
             or args.architect_plan or args.create_workspace or args.workspace_status
-            or args.local_plan or args.autonomous_cycle or args.run_project_check
+            or args.local_plan or args.local_transaction_inspect or args.local_transaction_rollback
+            or args.autonomous_cycle or args.run_project_check
         ):
             raise ValueError("--apply-reviewed-patch must be used as a separate operation")
         if (args.patch_task_id or args.patch_check) and not args.apply_reviewed_patch:
@@ -494,6 +505,28 @@ def main(argv: list[str] | None = None) -> int:
                 )
             _print_json(result)
             return 0
+        transaction_action_count = sum(bool(value) for value in (
+            args.local_transaction_inspect, args.local_transaction_rollback,
+        ))
+        if transaction_action_count > 1:
+            raise LocalChangeError("Choose either --local-transaction-inspect or --local-transaction-rollback, not both")
+        if args.confirm_transaction_id and not args.local_transaction_rollback:
+            raise LocalChangeError("--confirm-transaction-id requires --local-transaction-rollback")
+        if args.local_transaction_rollback and not args.confirm_transaction_id:
+            raise LocalChangeError("--local-transaction-rollback requires --confirm-transaction-id SHA256")
+        if args.local_transaction_inspect:
+            result = inspect_local_change_transaction(
+                args.local_transaction_inspect, Path(args.project_root).expanduser().resolve()
+            )
+            _print_json(result)
+            return 0
+        if args.local_transaction_rollback:
+            result = rollback_local_change_transaction(
+                args.local_transaction_rollback, Path(args.project_root).expanduser().resolve(),
+                expected_transaction_id=args.confirm_transaction_id,
+            )
+            _print_json(result)
+            return 0 if result["recovery"] in {"rollback_complete", "already_rolled_back"} else 2
         if args.execute_local_plan and not args.local_plan:
             raise LocalChangeError("--execute-local-plan requires --local-plan")
         if args.local_plan:
