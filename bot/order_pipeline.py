@@ -99,13 +99,14 @@ def run_order_batch(
             queue.complete(task_id, {
                 "report_path": outcome.get("report_path"),
                 "verification": outcome.get("verification"),
-            })
+            }, refresh_task_ids=target_ids)
         else:
             diagnostic = outcome.get("diagnostic") or {}
             queue.fail(
                 task_id,
                 outcome.get("error") or "task_execution_failed",
                 retryable=bool(diagnostic.get("retryable")),
+                refresh_task_ids=target_ids,
             )
 
         current = queue.get(task_id)

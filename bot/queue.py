@@ -216,10 +216,25 @@ class TaskQueue:
                 self._save(state)
                 return {"id": task_id, **record}
 
-    def complete(self, task_id: str, result: Any = None) -> dict[str, Any]:
-        return self._transition(task_id, "succeeded", result=result)
+    def complete(
+        self,
+        task_id: str,
+        result: Any = None,
+        *,
+        refresh_task_ids: set[str] | frozenset[str] | None = None,
+    ) -> dict[str, Any]:
+        return self._transition(
+            task_id, "succeeded", result=result, refresh_task_ids=refresh_task_ids
+        )
 
-    def fail(self, task_id: str, error: str, *, retryable: bool = False) -> dict[str, Any]:
+    def fail(
+        self,
+        task_id: str,
+        error: str,
+        *,
+        retryable: bool = False,
+        refresh_task_ids: set[str] | frozenset[str] | None = None,
+    ) -> dict[str, Any]:
         with self.memory.transaction():
             if not isinstance(error, str) or not error.strip():
                 raise QueueError("Failure error must be a non-empty string")
@@ -235,11 +250,18 @@ class TaskQueue:
                 status = "failed"
             record.update(status=status, last_error=error, updated_at=_now(),
                            finished_at=None if status == "pending" else _now())
-            self._refresh_blocked(state)
+            self._refresh_blocked(state, task_ids=refresh_task_ids)
             self._save(state)
             return {"id": task_id, **record}
 
-    def _transition(self, task_id: str, status: str, *, result: Any = None) -> dict[str, Any]:
+    def _transition(
+        self,
+        task_id: str,
+        status: str,
+        *,
+        result: Any = None,
+        refresh_task_ids: set[str] | frozenset[str] | None = None,
+    ) -> dict[str, Any]:
         with self.memory.transaction():
             state = self._load()
             record = state["tasks"].get(task_id)
@@ -254,7 +276,7 @@ class TaskQueue:
                 raise QueueError(f"Cannot transition task {task_id} from {record['status']} to {status}")
             record.update(status=status, result=result, last_error=None,
                           updated_at=_now(), finished_at=_now())
-            self._refresh_blocked(state)
+            self._refresh_blocked(state, task_ids=refresh_task_ids)
             self._save(state)
             return {"id": task_id, **record}
 
