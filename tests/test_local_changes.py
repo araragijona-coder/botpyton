@@ -516,7 +516,11 @@ class LocalChangePlanTests(unittest.TestCase):
             real_write_atomic = __import__("bot.local_changes", fromlist=["_write_atomic"])._write_atomic
 
             def pause_project_publication(path, raw, **kwargs):
-                if Path(path) == target and raw == b"VALUE = 1\n":
+                candidate = Path(path)
+                if (
+                    candidate.name.casefold() == target.name.casefold()
+                    and raw == b"VALUE = 1\n"
+                ):
                     writer_at_publication.set()
                     if not release_writer.wait(5):
                         raise TimeoutError("test did not release publication gate")
@@ -544,7 +548,10 @@ class LocalChangePlanTests(unittest.TestCase):
 
             writer = threading.Thread(target=apply_worker, daemon=True)
             writer.start()
-            self.assertTrue(writer_at_publication.wait(5), "apply should reach target publication")
+            if not writer_at_publication.wait(5):
+                release_writer.set()
+                writer.join(5)
+                self.fail(f"apply did not reach target publication; worker_errors={errors!r}")
             journal_dir = backup_root / ".botpyton-transactions"
             journal_files = list(journal_dir.glob("concurrent-journal-guard-*.json"))
             self.assertEqual(len(journal_files), 1)
