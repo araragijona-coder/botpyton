@@ -5,15 +5,12 @@ import hashlib
 import json
 import os
 import re
-import stat
 import tempfile
-from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 from typing import Any
 
 from .application_cache import _is_link_or_reparse
 from .bounded_io import BoundedReadError, enforce_json_depth, read_bounded_bytes
-from .file_lock import exclusive_file_lock
 
 MAX_FILES = 20
 MAX_FILE_BYTES = 200_000
