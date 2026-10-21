@@ -128,6 +128,17 @@ class ToolchainMatrixTests(unittest.TestCase):
         self.assertTrue(report["scan"]["scan_truncated"])
         self.assertLessEqual(report["scan"]["entries_examined"], 2)
 
+    def test_report_is_deterministic_for_unchanged_tree(self):
+        (self.root / "pyproject.toml").write_text("[project]\nname='stable'\n", encoding="utf-8")
+        (self.root / "app.py").write_text("VALUE = 2\n", encoding="utf-8")
+        kwargs = {
+            "available_tool_ids": {"python"},
+            "available_check_ids": set(),
+        }
+        first = inspect_toolchain_matrix(self.root, **kwargs)
+        second = inspect_toolchain_matrix(self.root, **kwargs)
+        self.assertEqual(first, second)
+
     def test_invalid_project_root_is_rejected(self):
         with self.assertRaises(ToolchainMatrixError):
             inspect_toolchain_matrix(self.root / "missing")

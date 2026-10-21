@@ -59,6 +59,20 @@ class ProjectCheckTests(unittest.TestCase):
             self.assertFalse(result["shell_used"])
             self.assertTrue(result["project_code_execution_approved"])
 
+    def test_discovers_gradle_test_profile_without_executing_it(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            (root / "build.gradle.kts").write_text("tasks.test { useJUnitPlatform() }\n", encoding="utf-8")
+            result = discover_project_checks(
+                root,
+                which=lambda name: "/fake/gradle" if name == "gradle" else None,
+            )
+            self.assertEqual([item["check_id"] for item in result["checks"]], ["gradle-test"])
+            self.assertEqual(result["checks"][0]["argv"], ["/fake/gradle", "test"])
+            self.assertTrue(result["checks"][0]["requires_project_code_execution_approval"])
+            self.assertFalse(result["commands_executed"])
+            self.assertFalse(result["project_code_executed"])
+
     def test_unknown_check_and_invalid_timeout_are_rejected(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
