@@ -13,6 +13,7 @@ from .checkpoint import CheckpointError, export_checkpoint, restore_checkpoint
 from .diagnostics import diagnose_failure
 from .executor import TaskExecutor
 from .github_ops import GitHubClient, GitHubOpsError, submit_change_plan
+from .github_preflight import run_github_preflight
 from .memory import JsonMemory, MemoryError
 from .local_changes import (
     LocalChangeError, apply_local_change_plan, read_local_plan,
@@ -193,6 +194,12 @@ def main(argv: list[str] | None = None) -> int:
                         help="write validated state.json and SHA-256 manifest for GitHub artifact storage")
     parser.add_argument("--restore-checkpoint", metavar="DIR",
                         help="verify and restore state.json plus manifest downloaded from GitHub")
+    parser.add_argument("--github-preflight", metavar="OWNER/REPO",
+                        help="run read-only preflight checks against a real GitHub credential; no writes")
+    parser.add_argument("--github-branch", metavar="BRANCH",
+                        help="branch to read with --github-preflight (default: repository default branch)")
+    parser.add_argument("--github-intent", choices=("inspect", "draft-pr"), default="inspect",
+                        help="describe the intended read or draft-PR operation; write permission is never tested by this read-only probe")
     parser.add_argument("--github-plan", metavar="PATH",
                         help="validate a declarative GitHub change plan (dry-run by default)")
     parser.add_argument("--execute-github-plan", action="store_true",
@@ -229,6 +236,27 @@ def main(argv: list[str] | None = None) -> int:
         })
         return 2
     try:
+        if args.github_preflight:
+            allowed_preflight_args = {"github_preflight", "github_branch", "github_intent"}
+            conflicts = [
+                name.replace("_", "-")
+                for name, value in vars(args).items()
+                if name not in allowed_preflight_args and value != parser.get_default(name)
+            ]
+            if conflicts:
+                raise GitHubOpsError(
+                    "--github-preflight must be a standalone operation; conflicting options: "
+                    + ", ".join(sorted(conflicts))
+                )
+            result = run_github_preflight(
+                args.github_preflight,
+                branch=args.github_branch,
+                intent=args.github_intent,
+            )
+            _print_json(result)
+            return 0 if result["status"] == "ready" else 2
+        if args.github_branch is not None or args.github_intent != "inspect":
+            raise GitHubOpsError("--github-branch and --github-intent require --github-preflight")
         if args.run_order:
             ignored_for_order = {
                 "run_order", "project_root", "memory", "check_timeout",

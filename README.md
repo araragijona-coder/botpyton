@@ -10,6 +10,7 @@ BotPyton's built-in local worker is deterministic and does not require AI models
 - Bounded autonomous cycle: run fixed tests, apply at most one exact known repair after a failure, rerun tests, verify Python/JSON files, and persist per-attempt evidence.
 - Conservative diagnostics plus two exact source repairs: a uniquely located JSON trailing comma and a supported one-line Python compound-header colon.
 - Declarative GitHub operations: create an isolated bot branch, create one commit containing the declared paths, and open a draft pull request for review.
+- Read-only real-credential GitHub preflight: checks repository metadata, a selected branch, pull-request reads and Actions-run reads. Future draft-PR write permissions are reported as unverified; no probe writes to GitHub.
 - No automatic merge, no arbitrary shell commands, and no automatic package installation. No model provider or AI adviser is integrated. Local architecture planning uses deterministic rules; explicit GitHub publication is separate and is not an offline operation.
 
 ## Interfaz de escritorio
