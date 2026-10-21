@@ -827,6 +827,11 @@ def apply_local_change_plan(
                         _persist_transaction_journal(journal_path, journal)
                     except Exception:
                         pass
+                    try:
+                        publish_error.temporary_path.unlink(missing_ok=True)
+                    except OSError:
+                        # Preserve accurate error disclosure if this alias cannot be cleaned.
+                        pass
                 raise
 
             written.append(target)
