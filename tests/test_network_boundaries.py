@@ -4,6 +4,7 @@ import contextlib
 import io
 import os
 from pathlib import Path
+import re
 import unittest
 from unittest.mock import patch
 
@@ -73,14 +74,8 @@ class NetworkBoundaryRegressionTests(unittest.TestCase):
 
     def test_project_owned_code_requires_an_explicit_execution_switch(self):
         source = (ROOT / "bot/main.py").read_text(encoding="utf-8")
-        self.assertIn(
-            "if args.execute_project_code and not args.run_project_check:",
-            source,
-        )
-        self.assertIn(
-            "if args.patch_check and not args.execute_project_code:",
-            source,
-        )
+        self.assertIn("if args.execute_project_code and not args.run_project_check:", source)
+        self.assertIn("if args.patch_check and not args.execute_project_code:", source)
         self.assertIn(
             "args.execute_project_code",
             source,
@@ -89,14 +84,17 @@ class NetworkBoundaryRegressionTests(unittest.TestCase):
 
     def test_github_sender_workflows_remain_disabled_and_read_only(self):
         cases = {
-            ".github/workflows/botpyton-worker.yml": "submit-draft-prs:",
-            ".github/workflows/botpyton-github-ops.yml": "submit-draft-pr:",
+            ".github/workflows/botpyton-worker.yml": "submit-draft-prs",
+            ".github/workflows/botpyton-github-ops.yml": "submit-draft-pr",
         }
         for relative, job_name in cases.items():
             source = (ROOT / relative).read_text(encoding="utf-8")
-            start = source.index(job_name)
-            next_job = source.find("\n  ", start + len(job_name))
-            job = source[start: next_job if next_job >= 0 else len(source)]
+            match = re.search(
+                rf"(?ms)^  {re.escape(job_name)}:\n(.*?)(?=^  [A-Za-z0-9_-]+:\n|\Z)",
+                source,
+            )
+            self.assertIsNotNone(match, f"sender job block not found: {relative}/{job_name}")
+            job = match.group(1)
             with self.subTest(workflow=relative):
                 self.assertRegex(job, r"(?m)^\s+if:\s*false\s*$")
                 self.assertNotIn("contents: write", job)
