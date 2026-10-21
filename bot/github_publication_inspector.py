@@ -228,7 +228,7 @@ def inspect_github_publication(
         plan = validate_change_plan(plan_data)
         _validate_base_branch(plan.base_branch)
     except (GitHubOpsError, TypeError, ValueError, UnicodeError):
-        report["failure_code"] = "plan_validation_failed"
+        report["reason_code"] = "plan_validation_failed"
         report["evidence"]["plan"] = {"status": "blocked"}
         return report
     report["plan_validated"] = True
