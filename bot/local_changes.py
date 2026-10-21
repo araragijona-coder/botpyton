@@ -309,6 +309,22 @@ def _persist_transaction_journal(
                 journal_path, raw, replace_existing=True,
                 expected_current_sha256=_sha256(previous),
             )
+    except _PublishedCleanupError as exc:
+        try:
+            exc.temporary_path.unlink(missing_ok=True)
+        except OSError as cleanup_exc:
+            raise LocalChangeError(
+                "Transaction journal was published but its staging alias could not be cleaned"
+            ) from cleanup_exc
+        try:
+            published_journal = read_bounded_bytes(
+                journal_path, limit_bytes=MAX_TRANSACTION_BYTES,
+                label="Published local-change transaction journal",
+            )
+        except (BoundedReadError, OSError) as verify_exc:
+            raise LocalChangeError("Transaction journal publication could not be verified") from verify_exc
+        if _sha256(published_journal) != _sha256(raw):
+            raise LocalChangeError("Transaction journal changed at its publication boundary")
     except FileExistsError as exc:
         raise LocalChangeError(
             "A transaction journal already exists for this task and plan; inspect it before retrying"
@@ -854,6 +870,11 @@ def apply_local_change_plan(
         _persist_transaction_journal(journal_path, journal)
     except Exception as exc:
         rollback_errors: list[str] = []
+        if isinstance(exc, _PublishedCleanupError):
+            try:
+                exc.temporary_path.unlink(missing_ok=True)
+            except OSError:
+                rollback_errors.append("staging_alias_cleanup_failed")
         for target in reversed(written):
             relative = target.relative_to(base).as_posix()
             journal_entry = entries_by_path[relative]
