@@ -466,6 +466,44 @@ class LocalAgentTests(unittest.TestCase):
         self.assertTrue(errors)
         self.assertIn("previous_version_restored", errors[-1]["detail"])
 
+    def test_post_publish_audit_failure_discloses_new_file_left_in_place(self):
+        target = self.project / "new-audit-failure.py"
+        payload = "VALUE = 'published before audit failure'\\n"
+        agent = self.agent()
+        real_record = agent._record
+        injected = False
+
+        def fail_success_record(operation, root_id, relative, outcome, detail, byte_count=None):
+            nonlocal injected
+            if (
+                operation == "write" and relative == target.name
+                and outcome == "success" and not injected
+            ):
+                injected = True
+                raise LocalAgentError("injected post-publication audit failure")
+            return real_record(operation, root_id, relative, outcome, detail, byte_count)
+
+        with patch.object(agent, "_record", side_effect=fail_success_record):
+            with self.assertRaisesRegex(
+                LocalAgentError, "new file.*not automatically deleted"
+            ):
+                agent.write_file("project", target.name, payload)
+
+        self.assertTrue(injected, "failure must occur after the new file was published")
+        self.assertEqual(target.read_text(encoding="utf-8"), payload)
+        audit = self.agent().verify_audit()
+        self.assertEqual(audit["status"], "valid")
+        records = [
+            json.loads(line)
+            for line in self.audit_path.read_text(encoding="utf-8").splitlines()
+        ]
+        errors = [
+            record for record in records
+            if record["operation"] == "write" and record["outcome"] == "error"
+        ]
+        self.assertTrue(errors)
+        self.assertIn("new_file_left_in_place", errors[-1]["detail"])
+
     def test_post_publish_new_file_is_not_deleted_as_recovery(self):
         target = self.project / "new-after-publish.txt"
         real_read = __import__("bot.local_agent", fromlist=["read_bounded_bytes"]).read_bounded_bytes
@@ -566,6 +604,29 @@ class LocalAgentTests(unittest.TestCase):
         with self.assertRaisesRegex(LocalAgentError, "protected"):
             self.agent().write_file("project", ".ssh/authorized_keys", "not allowed")
         self.assertEqual((self.project / ".env").read_text(encoding="utf-8"), "TOKEN=secret")
+
+    def test_protected_paths_are_case_insensitive_and_denials_are_audited(self):
+        paths = (
+            ".GIT/settings.py",
+            ".SSH/authorized_keys.py",
+            ".CEREBRO/runtime.py",
+            ".ENV.PROD.py",
+            "private.KEY",
+        )
+        agent = self.agent()
+        for path in paths:
+            with self.subTest(path=path), self.assertRaisesRegex(LocalAgentError, "protected"):
+                agent.write_file("project", path, "not allowed")
+
+        status = agent.verify_audit()
+        self.assertEqual(status["status"], "valid")
+        self.assertEqual(status["event_count"], len(paths))
+        records = [
+            json.loads(line)
+            for line in self.audit_path.read_text(encoding="utf-8").splitlines()
+        ]
+        self.assertTrue(all(record["outcome"] == "denied" for record in records))
+        self.assertTrue(all(record["detail"] == "protected_path" for record in records))
 
     def test_symlink_target_is_blocked_when_platform_allows_symlink(self):
         outside = self.base / "outside.txt"
