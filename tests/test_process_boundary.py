@@ -91,11 +91,26 @@ class ProcessBoundaryTests(unittest.TestCase):
             and node.func.value.id == "subprocess"
         ]
         self.assertEqual(len(calls), 1)
-        keywords = {keyword.arg: keyword.value for keyword in calls[0].keywords}
-        self.assertIsInstance(keywords.get("shell"), ast.Constant)
-        self.assertIs(keywords["shell"].value, False)
-        self.assertIsInstance(keywords.get("close_fds"), ast.Constant)
-        self.assertIs(keywords["close_fds"].value, True)
+        self.assertTrue(
+            any(keyword.arg is None and isinstance(keyword.value, ast.Name)
+                and keyword.value.id == "launch_options" for keyword in calls[0].keywords),
+            "Popen must receive the audited launch_options mapping",
+        )
+        assignments = [
+            node for node in ast.walk(tree)
+            if isinstance(node, ast.Assign)
+            and any(isinstance(target, ast.Name) and target.id == "launch_options" for target in node.targets)
+            and isinstance(node.value, ast.Dict)
+        ]
+        self.assertEqual(len(assignments), 1)
+        options = {
+            key.value: value for key, value in zip(assignments[0].value.keys, assignments[0].value.values)
+            if isinstance(key, ast.Constant) and isinstance(key.value, str)
+        }
+        self.assertIsInstance(options.get("shell"), ast.Constant)
+        self.assertIs(options["shell"].value, False)
+        self.assertIsInstance(options.get("close_fds"), ast.Constant)
+        self.assertIs(options["close_fds"].value, True)
 
     def test_invalid_executable_still_fails_closed_before_process_start(self):
         with tempfile.TemporaryDirectory() as temp:
