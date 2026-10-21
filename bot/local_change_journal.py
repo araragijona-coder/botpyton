@@ -372,7 +372,7 @@ def rollback_local_change_transaction(
         result["writes_performed"] = False
         return result
 
-    lock_path = resolved_journal.parent / f".{journal['transaction_id']}.recovery.lock"
+    lock_path = resolved_journal.parent / f".{journal['transaction_id']}.transaction.lock"
     _local_changes._reject_link_components(lock_path, "Transaction recovery lock")
     with exclusive_file_lock(lock_path):
         resolved_journal, journal = _load_transaction_journal(resolved_journal)
