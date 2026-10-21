@@ -335,7 +335,11 @@ def _load_transaction_journal(journal_path: str | Path) -> tuple[Path, dict[str,
     }
     if not isinstance(journal, dict) or set(journal) != required:
         raise LocalChangeError("Transaction journal fields do not match the supported schema")
-    if journal["schema_version"] != TRANSACTION_SCHEMA_VERSION:
+    if (
+        not isinstance(journal["schema_version"], int)
+        or isinstance(journal["schema_version"], bool)
+        or journal["schema_version"] != TRANSACTION_SCHEMA_VERSION
+    ):
         raise LocalChangeError("Unsupported transaction journal schema version")
     transaction_id = journal["transaction_id"]
     task_id = journal["task_id"]
@@ -346,7 +350,7 @@ def _load_transaction_journal(journal_path: str | Path) -> tuple[Path, dict[str,
     allowed_statuses = {
         "prepared", "applying", "completed", "rolled_back", "rollback_partial",
     }
-    if journal["status"] not in allowed_statuses:
+    if not isinstance(journal["status"], str) or journal["status"] not in allowed_statuses:
         raise LocalChangeError("Transaction journal state is unsupported")
     if not all(isinstance(journal[key], str) and journal[key] for key in ("created_at", "updated_at")):
         raise LocalChangeError("Transaction journal timestamps are invalid")
@@ -414,7 +418,7 @@ def _load_transaction_journal(journal_path: str | Path) -> tuple[Path, dict[str,
         else:
             if original_sha is not None or item["backup_relative_path"] is not None:
                 raise LocalChangeError("New-file transaction entries cannot declare an original backup")
-        if item["status"] not in allowed_change_statuses:
+        if not isinstance(item["status"], str) or item["status"] not in allowed_change_statuses:
             raise LocalChangeError("Transaction journal change state is unsupported")
         identity = item["published_identity"]
         if identity is not None:
@@ -862,18 +866,36 @@ def apply_local_change_plan(
                 journal_entry["published_identity"] = None
                 _persist_transaction_journal(journal_path, journal)
             except Exception as rollback_exc:
-                rollback_errors.append(f"{target}: {type(rollback_exc).__name__}")
+                if isinstance(rollback_exc, _PublishedCleanupError):
+                    try:
+                        rollback_exc.temporary_path.unlink(missing_ok=True)
+                    except OSError:
+                        rollback_errors.append(f"{target}: staging_alias_cleanup_failed")
                 try:
-                    target_sha = _sha256(read_bounded_bytes(
-                        target, limit_bytes=MAX_FILE_BYTES, label="Rollback conflict probe"
-                    )) if target.is_file() and not _is_link_or_reparse(target) else None
-                    if target_sha != written_hashes[target]:
+                    current_after_error = (
+                        read_bounded_bytes(
+                            target, limit_bytes=MAX_FILE_BYTES, label="Rollback conflict probe"
+                        ) if target.is_file() and not _is_link_or_reparse(target) else None
+                    )
+                    original_after_error = backups[target]
+                    if (
+                        (original_after_error is not None and current_after_error == original_after_error)
+                        or (original_after_error is None and current_after_error is None)
+                    ):
+                        # The file rollback committed even if a subsequent journal
+                        # write failed; retry recording that verified state.
+                        journal_entry["status"] = "rolled_back"
+                        journal_entry["published_identity"] = None
+                    elif current_after_error is None or _sha256(current_after_error) != written_hashes[target]:
                         journal_entry["status"] = "external_change_preserved"
+                        rollback_errors.append(f"{target}: external_change_preserved")
                     else:
                         journal_entry["status"] = "rollback_failed"
+                        rollback_errors.append(f"{target}: {type(rollback_exc).__name__}")
                     _persist_transaction_journal(journal_path, journal)
                 except Exception:
-                    pass
+                    journal_entry["status"] = "rollback_failed"
+                    rollback_errors.append(f"{target}: {type(rollback_exc).__name__}")
 
         # Record changes which were never positively confirmed as published.
         # An uncertain publication is never deleted or overwritten automatically.
