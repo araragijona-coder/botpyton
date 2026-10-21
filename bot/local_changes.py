@@ -18,7 +18,7 @@ MAX_FILE_BYTES = 200_000
 MAX_TOTAL_BYTES = 500_000
 MAX_PLAN_BYTES = 600_000
 MAX_TRANSACTION_BYTES = 2 * 1024 * 1024
-TRANSACTION_SCHEMA_VERSION = 1
+TRANSACTION_SCHEMA_VERSION = 2
 TASK_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$")
 PROTECTED_PREFIXES = (
     ".git/", ".github/", ".cerebro/policies/", ".cerebro/memory/",
