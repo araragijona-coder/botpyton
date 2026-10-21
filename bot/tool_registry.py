@@ -18,9 +18,13 @@ class ToolSpec:
 TOOL_SPECS: tuple[ToolSpec, ...] = (
     ToolSpec("python", "python", "Python runtime", ("--version",), ("Python",)),
     ToolSpec("python3", "python3", "Python runtime (alternate name)", ("--version",), ("Python",)),
+    ToolSpec("py", "py", "Windows Python launcher", ("--version",), ("Python",)),
+    ToolSpec("pytest", "pytest", "Python test runner", ("--version",), ("Python",)),
     ToolSpec("git", "git", "Version control", ("--version",), ("Git",)),
     ToolSpec("gh", "gh", "GitHub CLI and local authentication", ("--version",), ("GitHub",)),
     ToolSpec("node", "node", "JavaScript runtime", ("--version",), ("JavaScript", "TypeScript")),
+    ToolSpec("deno", "deno", "Deno JavaScript/TypeScript runtime", ("--version",), ("JavaScript", "TypeScript")),
+    ToolSpec("bun", "bun", "Bun JavaScript/TypeScript runtime and package manager", ("--version",), ("JavaScript", "TypeScript")),
     ToolSpec("npm", "npm", "JavaScript package manager", ("--version",), ("JavaScript", "TypeScript")),
     ToolSpec("pnpm", "pnpm", "JavaScript package manager", ("--version",), ("JavaScript", "TypeScript")),
     ToolSpec("yarn", "yarn", "JavaScript package manager", ("--version",), ("JavaScript", "TypeScript")),
