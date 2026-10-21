@@ -5,7 +5,6 @@ import unittest
 
 from bot.github_ops import (
     GitHubAPIError,
-    GitHubOpsError,
     GitHubClient,
     GitHubOpsError,
     submit_change_plan,
