@@ -311,7 +311,7 @@ def _persist_transaction_journal(
 
 def _load_transaction_journal(journal_path: str | Path) -> tuple[Path, dict[str, Any]]:
     path = Path(journal_path).expanduser()
-    _reject_link_components(path, "Transaction journal", allow_missing=False)
+    _reject_link_components(path, "Transaction journal")
     try:
         if not path.is_file():
             raise LocalChangeError("Transaction journal must be an existing regular file")
@@ -361,8 +361,8 @@ def _load_transaction_journal(journal_path: str | Path) -> tuple[Path, dict[str,
     backup_root_input = Path(journal["backup_root"]).expanduser()
     if not project_root_input.is_absolute() or not backup_root_input.is_absolute():
         raise LocalChangeError("Transaction journal roots must be absolute")
-    _reject_link_components(project_root_input, "Transaction project root", allow_missing=False)
-    _reject_link_components(backup_root_input, "Transaction backup root", allow_missing=False)
+    _reject_link_components(project_root_input, "Transaction project root")
+    _reject_link_components(backup_root_input, "Transaction backup root")
     try:
         project_root = project_root_input.resolve(strict=True)
         backup_root = backup_root_input.resolve(strict=True)
@@ -457,7 +457,7 @@ def _inspect_transaction_targets(journal_path: Path, journal: dict[str, Any]) ->
         try:
             target = _resolve_target(root, relative)
             if target.exists():
-                _reject_link_components(target, "Transaction target", allow_missing=False)
+                _reject_link_components(target, "Transaction target")
                 if not target.is_file() or target.stat().st_size > MAX_FILE_BYTES:
                     target_state = "unsafe_or_nonregular"
                 else:
@@ -480,7 +480,7 @@ def _inspect_transaction_targets(journal_path: Path, journal: dict[str, Any]) ->
         if item["original_exists"]:
             try:
                 backup_path = _resolve_target(backup_root, item["backup_relative_path"])
-                _reject_link_components(backup_path, "Transaction backup", allow_missing=False)
+                _reject_link_components(backup_path, "Transaction backup")
                 backup_valid = (
                     backup_path.is_file()
                     and backup_path.stat().st_size <= MAX_FILE_BYTES
@@ -541,7 +541,7 @@ def inspect_local_change_transaction(
     """Read-only inspection of a durable local change transaction journal."""
     resolved_journal, journal = _load_transaction_journal(journal_path)
     requested_root = Path(project_root).expanduser()
-    _reject_link_components(requested_root, "Selected project root", allow_missing=False)
+    _reject_link_components(requested_root, "Selected project root")
     try:
         requested_root = requested_root.resolve(strict=True)
     except (OSError, RuntimeError, ValueError) as exc:
@@ -562,7 +562,7 @@ def rollback_local_change_transaction(
     if not isinstance(expected_transaction_id, str) or expected_transaction_id != journal["transaction_id"]:
         raise LocalChangeError("Transaction ID confirmation does not match; no recovery writes were performed")
     requested_root = Path(project_root).expanduser()
-    _reject_link_components(requested_root, "Selected project root", allow_missing=False)
+    _reject_link_components(requested_root, "Selected project root")
     try:
         requested_root = requested_root.resolve(strict=True)
     except (OSError, RuntimeError, ValueError) as exc:
@@ -590,7 +590,7 @@ def rollback_local_change_transaction(
             try:
                 target = _resolve_target(root, item["path"])
                 if target.exists():
-                    _reject_link_components(target, "Recovery target", allow_missing=False)
+                    _reject_link_components(target, "Recovery target")
                     if not target.is_file() or target.stat().st_size > MAX_FILE_BYTES:
                         item["status"] = "external_change_preserved"
                         _persist_transaction_journal(resolved_journal, journal)
@@ -628,7 +628,7 @@ def rollback_local_change_transaction(
 
                 if item["original_exists"]:
                     backup_path = _resolve_target(backup_root, item["backup_relative_path"])
-                    _reject_link_components(backup_path, "Recovery backup", allow_missing=False)
+                    _reject_link_components(backup_path, "Recovery backup")
                     if not backup_path.is_file() or backup_path.stat().st_size > MAX_FILE_BYTES:
                         raise LocalChangeError("Verified transaction backup is missing or not a regular bounded file")
                     original = read_bounded_bytes(
@@ -641,7 +641,7 @@ def rollback_local_change_transaction(
                     )
                     recovery_writes_performed = True
                 else:
-                    _reject_link_components(target, "Recovery target", allow_missing=False)
+                    _reject_link_components(target, "Recovery target")
                     if (
                         not target.is_file()
                         or _transaction_identity(target) != item["published_identity"]
