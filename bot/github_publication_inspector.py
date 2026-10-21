@@ -69,28 +69,28 @@ def _decode_file(response: Any) -> str:
         raise _InspectionStop("remote_file_content_not_valid_utf8") from None
 
 
-def _read_remote_file(client: GitHubClient, path: str, ref: str) -> str:
+def _read_remote_file(client: GitHubClient, path: str, ref: str, get) -> str:
     endpoint = client._endpoint(
         "/contents/" + urllib.parse.quote(path, safe="/")
         + "?" + urllib.parse.urlencode({"ref": ref})
     )
     try:
-        response = client.request("GET", endpoint)
-    except GitHubAPIError as exc:
-        if exc.status == 404:
+        response = get(endpoint)
+    except _InspectionStop as stop:
+        if stop.http_status == 404:
             # GitHub can conceal unavailable resources behind 404. Never call it absent.
             raise _InspectionStop("file_unreadable_or_missing_http_404", http_status=404) from None
         raise
     return _decode_file(response)
 
 
-def _list_branches(client: GitHubClient, wanted: str) -> tuple[str, int]:
+def _list_branches(client: GitHubClient, wanted: str, get) -> tuple[str, int]:
     """Find a branch or prove absence only after a bounded, complete branch listing."""
     for page in range(1, _BRANCH_MAX_PAGES + 1):
         endpoint = client._endpoint("/branches?" + urllib.parse.urlencode({
             "per_page": _BRANCH_PAGE_SIZE, "page": page
         }))
-        records = client.request("GET", endpoint)
+        records = get(endpoint)
         if not isinstance(records, list) or len(records) > _BRANCH_PAGE_SIZE:
             raise _InspectionStop("branch_inventory_response_invalid")
         for item in records:
@@ -104,7 +104,7 @@ def _list_branches(client: GitHubClient, wanted: str) -> tuple[str, int]:
 
 
 def _list_matching_pull_requests(
-    client: GitHubClient, branch_name: str, base_branch: str
+    client: GitHubClient, branch_name: str, base_branch: str, get
 ) -> list[dict[str, Any]]:
     found: list[dict[str, Any]] = []
     head = f"{client.owner}:{branch_name}"
@@ -116,7 +116,7 @@ def _list_matching_pull_requests(
             "per_page": 100,
             "page": page,
         }))
-        records = client.request("GET", endpoint)
+        records = get(endpoint)
         if not isinstance(records, list) or len(records) > 100:
             raise _InspectionStop("pull_request_inventory_response_invalid")
         for item in records:
@@ -152,14 +152,14 @@ def _list_matching_pull_requests(
 
 
 def _base_plan_effect(
-    client: GitHubClient, base_branch: str, changes: dict[str, str]
+    client: GitHubClient, base_branch: str, changes: dict[str, str], get
 ) -> str:
     """Check whether retrying the declared contents will make a real tree change."""
     has_confirmed_difference = False
     unknown_paths: list[str] = []
     for path, expected in changes.items():
         try:
-            actual = _read_remote_file(client, path, base_branch)
+            actual = _read_remote_file(client, path, base_branch, get)
         except _InspectionStop as stop:
             if stop.code == "file_unreadable_or_missing_http_404":
                 unknown_paths.append(path)
@@ -275,7 +275,7 @@ def inspect_github_publication(
             # A single ref lookup returning 404 is ambiguous. Cross-check with a complete
             # bounded branch inventory; do not treat the 404 itself as absence evidence.
             _set_evidence(report, "branch_ref", "http_404_ambiguous")
-            inventory_status, pages = _list_branches(client, plan.branch_name)
+            inventory_status, pages = _list_branches(client, plan.branch_name, get)
             if inventory_status != "absent_in_complete_inventory":
                 raise _InspectionStop("branch_ref_and_inventory_disagree")
             branch_absent = True
@@ -298,9 +298,9 @@ def inspect_github_publication(
             _set_evidence(report, "branch_ref", "verified", head_sha=initial_sha)
 
         if branch_absent:
-            effect = _base_plan_effect(client, plan.base_branch, plan.changes)
+            effect = _base_plan_effect(client, plan.base_branch, plan.changes, get)
             _set_evidence(report, "base_plan_effect", effect)
-            pulls = _list_matching_pull_requests(client, plan.branch_name, plan.base_branch)
+            pulls = _list_matching_pull_requests(client, plan.branch_name, plan.base_branch, get)
             report["pull_request"] = {"status": "absent" if not pulls else "present"}
             if pulls:
                 report["pull_request"].update({"matching_count": len(pulls), "items": pulls[:5]})
@@ -359,7 +359,7 @@ def inspect_github_publication(
 
             mismatched: list[str] = []
             for path, expected in plan.changes.items():
-                actual = _read_remote_file(client, path, plan.branch_name)
+                actual = _read_remote_file(client, path, plan.branch_name, get)
                 if actual != expected:
                     mismatched.append(path)
             if mismatched:
