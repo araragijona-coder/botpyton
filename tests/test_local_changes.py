@@ -78,6 +78,29 @@ class LocalChangePlanTests(unittest.TestCase):
                 with self.subTest(path=path), self.assertRaises(LocalChangeError):
                     validate_local_change_plan(plan, root)
 
+    def test_protected_paths_are_case_insensitive_for_windows_compatibility(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            paths = (
+                ".GIT/hooks/pre-commit.py",
+                ".GiThUb/workflows/ci.yml",
+                ".CEREBRO/CONFIG.JSON",
+                ".VENV/tools.py",
+                "NODE_MODULES/loader.js",
+                "DiSt/generated.py",
+                "BuIlD/generated.py",
+            )
+            for path in paths:
+                plan = {
+                    "schema_version": 1,
+                    "task_id": "mixed-case-protected",
+                    "changes": [{"path": path, "content": "unsafe = True\\n"}],
+                }
+                with self.subTest(path=path), self.assertRaisesRegex(
+                    LocalChangeError, "Protected path"
+                ):
+                    validate_local_change_plan(plan, root)
+
     def test_rejects_existing_file_without_hash_and_invalid_limits(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
@@ -147,6 +170,49 @@ class LocalChangePlanTests(unittest.TestCase):
 
             self.assertEqual(target.read_bytes(), sentinel)
             self.assertEqual(list(root.glob(".*.botpyton-tmp")), [])
+
+    def test_new_file_cleanup_failure_rolls_back_the_published_destination(self):
+        import os
+
+        with tempfile.TemporaryDirectory() as temp:
+            base = Path(temp)
+            root = base / "project"
+            root.mkdir()
+            target = root / "new_after_cleanup.py"
+            plan = {
+                "schema_version": 1,
+                "task_id": "new-cleanup-recovery",
+                "changes": [{"path": target.name, "content": "VALUE = 2\\n"}],
+            }
+            real_unlink = os.unlink
+            injected = False
+
+            def fail_first_staging_cleanup(path, *args, **kwargs):
+                nonlocal injected
+                candidate = Path(path)
+                if (
+                    not injected
+                    and candidate.parent == root
+                    and candidate.name.startswith(f".{target.name}.")
+                    and candidate.name.endswith(".botpyton-tmp")
+                ):
+                    injected = True
+                    raise PermissionError("injected post-publication staging cleanup failure")
+                return real_unlink(path, *args, **kwargs)
+
+            with patch("bot.local_changes.os.unlink", side_effect=fail_first_staging_cleanup):
+                with self.assertRaisesRegex(
+                    LocalChangeError, "Staging alias cleanup failed after publication"
+                ):
+                    apply_local_change_plan(plan, root, backup_root=base / "backups")
+
+            self.assertTrue(injected, "failure must occur after the new destination was linked")
+            self.assertFalse(target.exists(), "a confirmed BOTPYTON publication must be rolled back")
+            self.assertEqual(
+                list(root.glob(f".{target.name}.*.botpyton-tmp")),
+                [],
+                "the cleanup retry should remove the staging alias",
+            )
 
     def test_existing_file_changed_during_backup_is_not_overwritten(self):
         import os
