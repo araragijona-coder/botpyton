@@ -266,6 +266,8 @@ def main(argv: list[str] | None = None) -> int:
             for name, value in vars(args).items():
                 if name in ignored_for_order:
                     continue
+                if name == "github_intent" and value == "inspect":
+                    continue
                 if value is None or value is False or value == "" or value == []:
                     continue
                 if name == "local_agent_path" and value == ".":
