@@ -447,6 +447,8 @@ class LocalChangePlanTests(unittest.TestCase):
             journal["status"] = "applying"
             journal["changes"][0]["status"] = "publishing"
             journal["changes"][0]["published_identity"] = None
+            from bot.local_change_journal import _journal_checksum
+            journal["journal_sha256"] = _journal_checksum(journal)
             journal_path.write_text(
                 json.dumps(journal, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
                 encoding="utf-8",
@@ -462,6 +464,36 @@ class LocalChangePlanTests(unittest.TestCase):
             )
             self.assertEqual((root / "new.py").read_text(encoding="utf-8"), "VALUE = 2\n")
             self.assertEqual(report["recovery"], "rollback_partial")
+
+    def test_transaction_journal_checksum_detects_accidental_state_edits(self):
+        with tempfile.TemporaryDirectory() as temp:
+            base = Path(temp)
+            root = base / "project"
+            root.mkdir()
+            result = apply_local_change_plan(
+                {
+                    "schema_version": 1,
+                    "task_id": "journal-integrity-check",
+                    "changes": [{"path": "created.py", "content": "VALUE = 1\n"}],
+                },
+                root,
+                backup_root=base / "backups",
+            )
+            journal_path = Path(result["transaction_journal_path"])
+            journal = json.loads(journal_path.read_text(encoding="utf-8"))
+            journal["status"] = "rolled_back"
+            journal_path.write_text(
+                json.dumps(journal, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+                encoding="utf-8",
+            )
+
+            with self.assertRaisesRegex(LocalChangeError, "integrity checksum mismatch"):
+                inspect_local_change_transaction(journal_path, root)
+            with self.assertRaisesRegex(LocalChangeError, "integrity checksum mismatch"):
+                rollback_local_change_transaction(
+                    journal_path, root, expected_transaction_id=result["transaction_id"]
+                )
+            self.assertEqual((root / "created.py").read_text(encoding="utf-8"), "VALUE = 1\n")
 
     def test_rollback_waits_for_active_apply_transaction(self):
         with tempfile.TemporaryDirectory() as temp:
