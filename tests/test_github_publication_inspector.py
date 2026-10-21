@@ -5,6 +5,7 @@ import unittest
 
 from bot.github_ops import (
     GitHubAPIError,
+    GitHubOpsError,
     GitHubClient,
     GitHubOpsError,
     submit_change_plan,
@@ -20,6 +21,7 @@ class InspectableGitHub(FakeGitHub):
     def __init__(self):
         super().__init__()
         self.failures = []
+        self.transport_failures = []
         self.race_ref = None
         self.race_count = 0
 
@@ -32,6 +34,10 @@ class InspectableGitHub(FakeGitHub):
             if method == "GET" and path.startswith(path_prefix):
                 self.calls.append((method, endpoint, payload))
                 raise GitHubAPIError(status, "synthetic private response must not leak")
+        for path_prefix in self.transport_failures:
+            if method == "GET" and path.startswith(path_prefix):
+                self.calls.append((method, endpoint, payload))
+                raise GitHubOpsError("synthetic transport secret must not leak")
 
         if method == "GET" and path == "/repos/test/repo/branches":
             self.calls.append((method, endpoint, payload))
@@ -50,7 +56,7 @@ class InspectableGitHub(FakeGitHub):
         ):
             self.race_count += 1
             if self.race_count == 2:
-                self.refs[self.race_ref.rsplit("/", 1)[-1]] = "ref-moved-during-read"
+                self.refs[self.race_ref.split("/git/ref/heads/", 1)[1]] = "ref-moved-during-read"
         return super().__call__(method, endpoint, payload)
 
 
@@ -187,13 +193,14 @@ class GitHubPublicationInspectorTests(unittest.TestCase):
 
     def test_transport_failure_requires_manual_review_and_keeps_error_bounded(self):
         fake, client, plan, _ = self._published_state()
-        fake.failures.append(("/repos/test/repo/compare/", 503))
+        fake.transport_failures.append("/repos/test/repo/compare/")
         fake.calls.clear()
 
         result = self._inspect(fake, client, plan)
 
         self.assertEqual(result["recommendation"], "manual_review_required")
-        self.assertTrue(result.get("reason_code"))
+        self.assertEqual(result["reason_code"], "github_transport_or_response_error")
+        self.assertNotIn("synthetic transport secret must not leak", json.dumps(result))
         self.assertNotIn(self.TOKEN, json.dumps(result))
 
     def test_ref_change_during_inspection_is_detected(self):
