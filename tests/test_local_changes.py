@@ -511,6 +511,8 @@ class LocalChangePlanTests(unittest.TestCase):
             release_writer = threading.Event()
             rollback_started = threading.Event()
             rollback_finished = threading.Event()
+            inspect_started = threading.Event()
+            inspect_finished = threading.Event()
             outcomes = {}
             errors = []
             real_write_atomic = __import__("bot.local_changes", fromlist=["_write_atomic"])._write_atomic
@@ -546,6 +548,15 @@ class LocalChangePlanTests(unittest.TestCase):
                 finally:
                     rollback_finished.set()
 
+            def inspect_worker(journal_path):
+                inspect_started.set()
+                try:
+                    outcomes["inspect"] = inspect_local_change_transaction(journal_path, root)
+                except Exception as exc:
+                    errors.append(exc)
+                finally:
+                    inspect_finished.set()
+
             writer = threading.Thread(target=apply_worker, daemon=True)
             writer.start()
             if not writer_at_publication.wait(5):
@@ -557,13 +568,22 @@ class LocalChangePlanTests(unittest.TestCase):
             self.assertEqual(len(journal_files), 1)
             journal = json.loads(journal_files[0].read_text(encoding="utf-8"))
 
+            inspect = threading.Thread(
+                target=inspect_worker, args=(journal_files[0],), daemon=True
+            )
             rollback = threading.Thread(
                 target=rollback_worker,
                 args=(journal_files[0], journal["transaction_id"]),
                 daemon=True,
             )
+            inspect.start()
             rollback.start()
+            self.assertTrue(inspect_started.wait(5))
             self.assertTrue(rollback_started.wait(5))
+            self.assertFalse(
+                inspect_finished.wait(0.2),
+                "inspection must wait while apply owns the transaction lock",
+            )
             self.assertFalse(
                 rollback_finished.wait(0.2),
                 "rollback must wait while apply owns the transaction lock",
@@ -571,10 +591,14 @@ class LocalChangePlanTests(unittest.TestCase):
 
             release_writer.set()
             writer.join(5)
+            inspect.join(5)
             rollback.join(5)
             self.assertFalse(writer.is_alive(), "apply thread did not finish")
+            self.assertFalse(inspect.is_alive(), "inspection thread did not finish")
             self.assertFalse(rollback.is_alive(), "rollback thread did not finish")
             self.assertEqual(errors, [])
+            self.assertEqual(outcomes["inspect"]["writes_performed"], False)
+            self.assertIn(outcomes["inspect"]["transaction_status"], {"completed", "rolled_back"})
             self.assertEqual(outcomes["rollback"]["recovery"], "rollback_complete")
             self.assertFalse(target.exists(), "serialized rollback should remove the new file")
 
