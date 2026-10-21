@@ -192,8 +192,7 @@ class LocalChangePlanTests(unittest.TestCase):
                 candidate = Path(path)
                 if (
                     not injected
-                    and candidate.parent == root
-                    and candidate.name.startswith(f".{target.name}.")
+                    and target.name in str(path)
                     and candidate.name.endswith(".botpyton-tmp")
                 ):
                     injected = True
