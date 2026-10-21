@@ -186,7 +186,7 @@ class TaskQueue:
                     if all(records[dep]["status"] == "succeeded" for dep in dependencies):
                         ready.append(task_id)
                 if not ready:
-                    self._refresh_blocked(state)
+                    self._refresh_blocked(state, task_ids=allowed_task_ids)
                     self._save(state)
                     return None
 
@@ -203,7 +203,7 @@ class TaskQueue:
                         record["last_error"] = "retry_limit_reached"
                         record["updated_at"] = _now()
                         record["finished_at"] = _now()
-                    self._refresh_blocked(state)
+                    self._refresh_blocked(state, task_ids=allowed_task_ids)
                     continue
 
                 task_id = sorted(ready)[0]
@@ -278,9 +278,16 @@ class TaskQueue:
             self._save(state)
             return sorted(resumed)
 
-    def _refresh_blocked(self, state: dict[str, Any]) -> None:
+    def _refresh_blocked(
+        self,
+        state: dict[str, Any],
+        *,
+        task_ids: set[str] | frozenset[str] | None = None,
+    ) -> None:
         records = state["tasks"]
-        for record in records.values():
+        for task_id, record in records.items():
+            if task_ids is not None and task_id not in task_ids:
+                continue
             if record["status"] in {"pending", "blocked"}:
                 deps = record["payload"].get("depends_on", [])
                 failed = any(records[dep]["status"] in {"failed", "blocked"} for dep in deps)

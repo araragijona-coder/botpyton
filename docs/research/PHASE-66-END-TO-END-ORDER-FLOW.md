@@ -1,1 +1,36 @@
-# Phase 66 — End-to-end order execution\n\n## Summary\n\nAdded a single bounded CLI path that receives an explicit JSON task order, validates every task and dependency before queue mutation, enqueues idempotently, claims only task IDs named by that order, runs the existing allowlisted executor, requires machine-verifiable acceptance checks, and returns final queue statuses plus report paths.\n\n## Why\n\nPreviously, callers had to orchestrate queue insertion and worker invocation as separate CLI operations. The shared queue could contain unrelated pending work, and the general worker could claim it before a newly submitted task. Phase 66 adds a scoped claim API and an order runner so this invocation cannot claim unrelated IDs even if another process adds queue records concurrently.\n\n## Use\n\n```powershell\npython -m bot.main --run-order docs/examples/order-batch.json --project-root "C:\\projects\\my-app" --memory "C:\\BOTPYTON\\state\\queue.json"\n```\n\nThe order is JSON data. It does not become shell code, and action names must be in BOTPYTON's allowlist. A task must specify one or more `verification_checks` including at least one substantive acceptance check (`file_exists`, `file_sha256`, `python_syntax`, `json_valid`, `tests_pass`, `project_check_pass`, or `local_plan_applied`). A `report_exists` check alone is insufficient.\n\n## Safety and failure semantics\n\n- The full incoming order is validated before it is persisted.\n- External dependencies must already exist in the durable queue and be `succeeded`; otherwise the command stops before enqueueing.\n- Task IDs already running, failed or blocked require explicit inspection/recovery rather than being silently recycled.\n- The worker claims only IDs from this invocation. Dependencies are still evaluated against the complete persisted queue.\n- Retries are bounded by each task's `max_attempts` and by the sum of those configured limits.\n- A task is not marked successful when configured machine-verifiable checks fail. A failed or blocked task makes the order non-successful.\n- The command does not create branches, push, open pull requests, merge, install dependencies, enable AI, or enable network access. GitHub publication remains a separate explicit opt-in.\n- Existing lower-level queue commands remain available and keep their prior behavior.\n\n## Verification\n\nThe regression suite covers the complete CLI route, queue persistence, artifact/report verification, dependency order, unrelated-task isolation, malformed later tasks, unsupported acceptance-only report checks, external dependency preflight, and standalone-operation enforcement. GitHub Actions Linux and Windows jobs must both pass on the exact final SHA; this is CI evidence, not a substitute for testing on the user's own PC.\n\n## Limits\n\nThis path is a deterministic worker for structured orders and allowlisted actions, not a natural-language programmer or universal repair engine. Unrecognized actions, underspecified plans, unsupported acceptance criteria, missing tools and unverifiable results must remain blocked or fail visibly.\n
+# Phase 66 — End-to-end order execution
+
+## Summary
+
+Added a single bounded CLI path that receives an explicit JSON task order, validates every task and dependency before queue mutation, enqueues idempotently, claims only task IDs named by that order, runs the existing allowlisted executor, requires machine-verifiable acceptance checks, and returns final queue statuses plus report paths.
+
+## Why
+
+Previously, callers had to orchestrate queue insertion and worker invocation as separate CLI operations. The shared queue could contain unrelated pending work, and the general worker could claim it before a newly submitted task. Phase 66 adds a scoped claim API and an order runner so this invocation cannot claim unrelated IDs even if another process adds queue records concurrently.
+
+## Use
+
+```powershell
+python -m bot.main --run-order docs/examples/order-batch.json --project-root "C:\\projects\\my-app" --memory "C:\\BOTPYTON\\state\\queue.json"
+```
+
+The order is JSON data. It does not become shell code, and action names must be in BOTPYTON's allowlist. A task must specify one or more `verification_checks` including at least one substantive acceptance check (`file_exists`, `file_sha256`, `python_syntax`, `json_valid`, `tests_pass`, `project_check_pass`, or `local_plan_applied`). A `report_exists` check alone is insufficient.
+
+## Safety and failure semantics
+
+- The full incoming order is validated before it is persisted.
+- External dependencies must already exist in the durable queue and be `succeeded`; otherwise the command stops before enqueueing.
+- Task IDs already running, failed or blocked require explicit inspection/recovery rather than being silently recycled.
+- The worker claims only IDs from this invocation. Dependencies are still evaluated against the complete persisted queue.
+- Retries are bounded by each task's `max_attempts` and by the sum of those configured limits.
+- A task is not marked successful when configured machine-verifiable checks fail. A failed or blocked task makes the order non-successful.
+- The command does not create branches, push, open pull requests, merge, install dependencies, enable AI, or enable network access. GitHub publication remains a separate explicit opt-in.
+- Existing lower-level queue commands remain available and keep their prior behavior.
+
+## Verification
+
+The regression suite covers the complete CLI route, queue persistence, artifact/report verification, dependency order, unrelated-task isolation, malformed later tasks, unsupported acceptance-only report checks, external dependency preflight, and standalone-operation enforcement. GitHub Actions Linux and Windows jobs must both pass on the exact final SHA; this is CI evidence, not a substitute for testing on the user's own PC.
+
+## Limits
+
+This path is a deterministic worker for structured orders and allowlisted actions, not a natural-language programmer or universal repair engine. Unrecognized actions, underspecified plans, unsupported acceptance criteria, missing tools and unverifiable results must remain blocked or fail visibly.

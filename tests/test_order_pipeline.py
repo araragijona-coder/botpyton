@@ -51,7 +51,10 @@ class OrderPipelineTests(unittest.TestCase):
         self.assertEqual(report["task_id"], "ORDER-001")
 
     def test_order_respects_dependencies_and_claims_only_its_own_ids(self):
-        self.queue.enqueue_many([task("UNRELATED")])
+        self.queue.enqueue_many([
+            task("UNRELATED", depends_on=["UNRELATED-UPSTREAM"]),
+            task("UNRELATED-UPSTREAM"),
+        ])
         order = [
             task("ORDER-B", depends_on=["ORDER-A"]),
             task("ORDER-A"),
@@ -62,6 +65,7 @@ class OrderPipelineTests(unittest.TestCase):
         self.assertEqual([item["task_id"] for item in result["attempt_results"]],
                          ["ORDER-A", "ORDER-B"])
         self.assertEqual(self.queue.get("UNRELATED")["status"], "pending")
+        self.assertEqual(self.queue.get("UNRELATED-UPSTREAM")["status"], "pending")
 
     def test_order_requires_real_acceptance_check_before_any_queue_mutation(self):
         invalid = task("NO-CHECK", checks=[{"type": "report_exists"}])
