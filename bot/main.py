@@ -31,6 +31,7 @@ from .planner import order_tasks
 from .repository_analyzer import inspect_repository
 from .process_runner import ProcessRunnerError, run_tool_probe
 from .tool_registry import discover_tools
+from .toolchain_matrix import inspect_toolchain_matrix
 from .system_profile import get_system_profile
 from .doctor import run_preflight
 from .operation_guard import print_pc_result
@@ -97,6 +98,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--check", action="store_true", help="validate Python syntax and memory schema")
     parser.add_argument("--inspect-repository", metavar="PATH", nargs="?", const=".",
                         help="bounded read-only project inventory; candidate checks are not executed")
+    parser.add_argument("--toolchain-matrix", action="store_true",
+                        help="emit a bounded read-only project/toolchain matrix; no probes or project code run")
     parser.add_argument("--architect-plan", metavar="BRIEF_JSON",
                         help="turn a bounded programming brief into a deterministic reviewable architecture plan; no code executed")
     parser.add_argument("--architect-ai", metavar="BRIEF_JSON",
@@ -255,6 +258,21 @@ def main(argv: list[str] | None = None) -> int:
             )
             _print_json(result)
             return 0 if result["status"] == "ready" else 2
+        if args.toolchain_matrix:
+            allowed_matrix_args = {"toolchain_matrix", "project_root"}
+            conflicts = [
+                name.replace("_", "-")
+                for name, value in vars(args).items()
+                if name not in allowed_matrix_args and value != parser.get_default(name)
+            ]
+            if conflicts:
+                raise OrchestrationError(
+                    "--toolchain-matrix must be a standalone operation; conflicting options: "
+                    + ", ".join(sorted(conflicts))
+                )
+            result = inspect_toolchain_matrix(args.project_root)
+            _print_json(result)
+            return 0 if result["status"] == "discovery_complete" else 2
         if args.github_branch is not None or args.github_intent != "inspect":
             raise GitHubOpsError("--github-branch and --github-intent require --github-preflight")
         if args.run_order:
