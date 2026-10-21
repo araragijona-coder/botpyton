@@ -272,6 +272,8 @@ python -m bot.main --local-plan "C:\\path\\plan.json" --project-root "C:\\path\\
 
 To apply a plan, add `--execute-local-plan`. Existing files require a matching `expected_sha256`; changes are limited to 20 files, 200 KB per file and 500 KB of total content. Existing files are backed up outside the project root. Protected paths, traversal and symlink path components are rejected. See `docs/LOCAL-CHANGE-PLANS.md` for the schema and protections.
 
+Applied local plans also persist a content-free transaction journal outside the project. The journal records per-file hashes and publication states so an interrupted operation can be inspected instead of blindly retried. Inspect it read-only with `--local-transaction-inspect JOURNAL.json --project-root PROJECT`. An explicit rollback requires both `--local-transaction-rollback JOURNAL.json --project-root PROJECT` and `--confirm-transaction-id SHA256`; only unchanged files with matching recorded publication identity and SHA-256 are eligible. External or ambiguous changes are preserved for manual review. See `docs/research/PHASE-63-TRANSACTION-JOURNAL-AND-INDUSTRY-REVIEW.md`.
+
 The process runner uses separate arguments, an explicit executable allowlist, `shell=False`, a timeout, disconnected stdin, stripped credential-like environment variables and bounded returned output. It is not a general shell and does not execute commands discovered in repository text. These controls are foundations for the worker, not a claim that free-form programming tasks can already be autonomously solved.
 
 
