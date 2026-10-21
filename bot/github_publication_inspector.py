@@ -51,6 +51,17 @@ def _http_code(status: int) -> str:
     return "github_request_rejected"
 
 
+def _validate_base_branch(branch: str) -> None:
+    if (
+        not isinstance(branch, str) or not branch or len(branch) > 240
+        or branch.startswith("/") or branch.endswith("/") or branch.endswith(".")
+        or any(ord(char) < 32 or ord(char) == 127 or char.isspace() for char in branch)
+        or any(token in branch for token in ("..", "//", "@{", "\\\\"))
+        or any(part in {"", ".", ".."} or part.endswith(".lock") for part in branch.split("/"))
+    ):
+        raise ValueError("unsafe base branch name")
+
+
 def _decode_file(response: Any) -> str:
     if (
         not isinstance(response, dict)
@@ -215,6 +226,7 @@ def inspect_github_publication(
     # CRITICAL ORDERING: plan validation completes before the first network request.
     try:
         plan = validate_change_plan(plan_data)
+        _validate_base_branch(plan.base_branch)
     except (GitHubOpsError, TypeError, ValueError, UnicodeError):
         report["failure_code"] = "plan_validation_failed"
         report["evidence"]["plan"] = {"status": "blocked"}
