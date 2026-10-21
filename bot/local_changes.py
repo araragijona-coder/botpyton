@@ -581,6 +581,7 @@ def rollback_local_change_transaction(
         _persist_transaction_journal(resolved_journal, journal)
         root = Path(journal["project_root"])
         backup_root = Path(journal["backup_root"])
+        recovery_writes_performed = False
         for item in reversed(journal["changes"]):
             try:
                 target = _resolve_target(root, item["path"])
@@ -634,6 +635,7 @@ def rollback_local_change_transaction(
                     _write_atomic(
                         target, original, expected_current_sha256=item["new_sha256"]
                     )
+                    recovery_writes_performed = True
                 else:
                     _reject_link_components(target, "Recovery target", allow_missing=False)
                     if (
@@ -647,13 +649,36 @@ def rollback_local_change_transaction(
                         _persist_transaction_journal(resolved_journal, journal)
                         continue
                     target.unlink()
+                    recovery_writes_performed = True
 
                 item["status"] = "rolled_back"
                 item["published_identity"] = None
                 _persist_transaction_journal(resolved_journal, journal)
-            except Exception:
-                # Recovery errors are persisted as an unresolved per-file state.
-                if item["status"] not in {"external_change_preserved", "ambiguous"}:
+            except Exception as recovery_exc:
+                # A post-publication cleanup error may occur after restoration has
+                # already committed. Retry that alias cleanup and trust the target
+                # only when its restored bytes can be independently verified.
+                if isinstance(recovery_exc, _PublishedCleanupError):
+                    try:
+                        recovery_exc.temporary_path.unlink(missing_ok=True)
+                    except OSError:
+                        pass
+                try:
+                    if item["original_exists"]:
+                        restored = target.is_file() and not _is_link_or_reparse(target) and (
+                            _sha256(read_bounded_bytes(
+                                target, limit_bytes=MAX_FILE_BYTES, label="Recovery post-error probe"
+                            )) == item["original_sha256"]
+                        )
+                    else:
+                        restored = not target.exists()
+                except Exception:
+                    restored = False
+                if restored:
+                    item["status"] = "rolled_back"
+                    item["published_identity"] = None
+                    recovery_writes_performed = True
+                elif item["status"] not in {"external_change_preserved", "ambiguous"}:
                     item["status"] = "rollback_failed"
                 try:
                     _persist_transaction_journal(resolved_journal, journal)
@@ -669,7 +694,7 @@ def rollback_local_change_transaction(
 
     result = _inspect_transaction_targets(resolved_journal, journal)
     result["recovery"] = "rollback_complete" if journal["status"] == "rolled_back" else "rollback_partial"
-    result["writes_performed"] = any(item["recommended_action"] == "already_restored" for item in result["changes"])
+    result["writes_performed"] = recovery_writes_performed
     return result
 
 
