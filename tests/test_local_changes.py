@@ -164,7 +164,8 @@ class LocalChangePlanTests(unittest.TestCase):
             real_link = os.link
 
             def create_collision_then_link(source, destination, *args, **kwargs):
-                Path(destination).write_bytes(sentinel)
+                if Path(destination) == target:
+                    Path(destination).write_bytes(sentinel)
                 return real_link(source, destination, *args, **kwargs)
 
             with patch("bot.local_changes.os.link", side_effect=create_collision_then_link):
@@ -238,12 +239,16 @@ class LocalChangePlanTests(unittest.TestCase):
             }
             sentinel = b"external change must survive"
             real_fsync = os.fsync
+            fsync_count = 0
             changed = False
 
             def inject_external_change(fd):
-                nonlocal changed
+                nonlocal changed, fsync_count
                 result = real_fsync(fd)
-                if not changed:
+                fsync_count += 1
+                # The durable transaction journal is fsynced first. Inject the
+                # conflict after the original backup has been staged instead.
+                if not changed and fsync_count >= 2:
                     changed = True
                     target.write_bytes(sentinel)
                 return result
