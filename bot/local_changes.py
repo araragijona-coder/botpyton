@@ -23,6 +23,8 @@ PROTECTED_PREFIXES = (
     "dist/", "build/",
 )
 PROTECTED_EXACT = frozenset({".cerebro/config.json"})
+_PROTECTED_PREFIXES_CASEFOLD = tuple(prefix.casefold() for prefix in PROTECTED_PREFIXES)
+_PROTECTED_EXACT_CASEFOLD = frozenset(path.casefold() for path in PROTECTED_EXACT)
 ALLOWED_SUFFIXES = frozenset({
     ".py", ".pyi", ".js", ".jsx", ".ts", ".tsx", ".mjs", ".c", ".h", ".cc",
     ".cpp", ".hpp", ".cs", ".java", ".kt", ".kts", ".go", ".rs", ".rb", ".php",
@@ -34,6 +36,16 @@ ALLOWED_SUFFIXES = frozenset({
 
 class LocalChangeError(ValueError):
     """Raised when a local change plan is invalid or cannot be applied safely."""
+
+
+class _PublishedCleanupError(LocalChangeError):
+    """A destination was published, but its temporary staging alias could not be removed."""
+
+    def __init__(self, path: Path, temporary_path: Path, sha256: str):
+        super().__init__("Staging alias cleanup failed after publication")
+        self.path = path
+        self.temporary_path = temporary_path
+        self.sha256 = sha256
 
 
 def _reject_link_components(path: str | Path, label: str) -> None:
@@ -66,7 +78,10 @@ def _safe_relative_path(raw: Any) -> str:
     normalized = path.as_posix()
     if normalized != raw:
         raise LocalChangeError(f"Path is not canonical: {raw!r}")
-    if normalized in PROTECTED_EXACT or any(normalized.startswith(p) for p in PROTECTED_PREFIXES):
+    folded = normalized.casefold()
+    if folded in _PROTECTED_EXACT_CASEFOLD or any(
+        folded.startswith(prefix) for prefix in _PROTECTED_PREFIXES_CASEFOLD
+    ):
         raise LocalChangeError(f"Protected path cannot be modified: {normalized}")
     if not any(normalized.lower().endswith(suffix) for suffix in ALLOWED_SUFFIXES):
         raise LocalChangeError(f"File type is not approved for automatic changes: {normalized}")
@@ -196,6 +211,7 @@ def _write_atomic(
     _reject_link_components(path.parent, "Write destination")
     _reject_link_components(path, "Write destination")
     fd, temporary = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".botpyton-tmp", dir=path.parent)
+    published = False
     try:
         with os.fdopen(fd, "wb") as stream:
             stream.write(raw)
@@ -213,9 +229,15 @@ def _write_atomic(
             os.replace(temporary, path)
         else:
             os.link(temporary, path)
+        published = True
     finally:
         if os.path.exists(temporary):
-            os.unlink(temporary)
+            try:
+                os.unlink(temporary)
+            except OSError as exc:
+                if published:
+                    raise _PublishedCleanupError(path, Path(temporary), _sha256(raw)) from exc
+                raise
 
 
 def apply_local_change_plan(
@@ -287,6 +309,20 @@ def apply_local_change_plan(
             written_hashes[target] = item["new_sha256"]
     except Exception as exc:
         rollback_errors = []
+        if isinstance(exc, _PublishedCleanupError):
+            # The hard-link publication succeeded before alias cleanup failed. Mark
+            # that exact destination as our write so rollback can remove/restore it
+            # only if the normal post-write hash and link checks still match.
+            if exc.path in backups and exc.path not in written:
+                written.append(exc.path)
+                written_hashes[exc.path] = exc.sha256
+            try:
+                if exc.temporary_path.exists():
+                    exc.temporary_path.unlink()
+            except OSError as cleanup_exc:
+                rollback_errors.append(
+                    f"staging alias cleanup failed: {type(cleanup_exc).__name__}"
+                )
         for target in reversed(written):
             try:
                 _reject_link_components(target.parent, "Rollback target")
