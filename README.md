@@ -1,6 +1,6 @@
 # BotPyton — deterministic GitHub worker without AI
 
-BotPyton's local worker is deterministic and does not require AI models, inference APIs, AI credentials, or network access for local planning, inspection, tests, and repair workflows. Task descriptions are data, never commands. The former remote architecture adviser has been removed and all legacy adviser flags fail closed under the strict offline policy. Explicit GitHub publication commands remain a separate opt-in mode and require GitHub access by design.
+BotPyton's built-in local worker is deterministic and does not require AI models, inference APIs, AI credentials, or network access for local planning, inspection, and built-in deterministic task/repair operations. Task descriptions are data, never commands. The former remote architecture adviser has been removed and all legacy adviser flags fail closed under the strict offline policy. Network exceptions are explicit: GitHub publication requires the separate --execute-github-plan(s) flag, and Windows --pc-update-check uses the trusted WinGet source to list (not install) updates. If --execute-project-code is authorized, project-owned tests/build scripts may make their own network requests; BOTPYTON does not claim to sandbox their networking. See docs/research/PHASE-60-NETWORK-BOUNDARY-AUDIT.md.
 
 ## Capabilities
 
@@ -57,7 +57,7 @@ Use the deterministic local planner instead:
 python -m bot.main --architect-plan .cerebro/examples/architect-design-brief.json
 ```
 
-The offline guarantee applies to local planning, inspection, and deterministic task operations. Explicit GitHub write/publication commands are a separate, intentional network mode; they do not invoke an AI model.
+The offline guarantee applies to built-in local planning, inspection, diagnostics and deterministic task operations when no network option or third-party project check is selected. Explicit GitHub publication and the optional Windows --pc-update-check listing are separate network opt-ins and do not invoke an AI model. Explicit --execute-project-code can run project-owned programs that may perform their own network access. See docs/research/PHASE-60-NETWORK-BOUNDARY-AUDIT.md.
 
 ## Phase 27: isolated reviewed-patch cycle
 
