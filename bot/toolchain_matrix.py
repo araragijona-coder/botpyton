@@ -282,7 +282,7 @@ def _scan_project(base: Path) -> tuple[list[str], list[str], dict]:
             scan["scan_truncated"] = True
             break
 
-        entries = []
+        entries: list[tuple[str, str, tuple[int, int] | None]] = []
         overflow = False
         try:
             with _scandir_project_directory(base, current, root_identity, expected_identity) as iterator:
@@ -290,7 +290,21 @@ def _scan_project(base: Path) -> tuple[list[str], list[str], dict]:
                     if len(entries) >= remaining:
                         overflow = True
                         break
-                    entries.append(entry)
+                    entry_path = current / entry.name
+                    try:
+                        if entry.is_symlink() or _is_junction(str(entry_path)):
+                            kind, identity = "link", None
+                        else:
+                            entry_stat = entry.stat(follow_symlinks=False)
+                            if stat.S_ISDIR(entry_stat.st_mode):
+                                kind, identity = "directory", _directory_identity(entry_stat)
+                            elif stat.S_ISREG(entry_stat.st_mode):
+                                kind, identity = "file", None
+                            else:
+                                kind, identity = "other", None
+                    except (OSError, RuntimeError, ValueError):
+                        kind, identity = "unreadable", None
+                    entries.append((entry.name, kind, identity))
         except OSError:
             scan["directories_unreadable"] += 1
             continue
@@ -301,29 +315,31 @@ def _scan_project(base: Path) -> tuple[list[str], list[str], dict]:
             scan["scan_truncated"] = True
             break
 
-        entries.sort(key=lambda entry: (entry.name.casefold(), entry.name))
+        entries.sort(key=lambda entry: (entry[0].casefold(), entry[0]))
         scan["entries_examined"] += len(entries)
-        child_directories: list[tuple[Path, int]] = []
+        child_directories: list[tuple[Path, int, tuple[int, int]]] = []
 
-        for entry in entries:
+        for name, kind, identity in entries:
             try:
-                entry_path = current / entry.name
-                if entry.is_symlink() or _is_junction(str(entry_path)):
+                entry_path = current / name
+                if kind == "link":
                     scan["link_or_junctions_skipped"] += 1
                     continue
-                entry_stat = entry.stat(follow_symlinks=False)
+                if kind == "unreadable":
+                    scan["directories_unreadable"] += 1
+                    continue
                 rel = entry_path.relative_to(base).as_posix()
-                if stat.S_ISDIR(entry_stat.st_mode):
+                if kind == "directory" and identity is not None:
                     directories.append(rel)
                     scan["directories_seen"] += 1
-                    if entry.name.casefold() in _SKIP_DIRS_CASEFOLD:
+                    if name.casefold() in _SKIP_DIRS_CASEFOLD:
                         continue
                     if depth >= MAX_SCAN_DEPTH:
                         scan["depth_limit_reached"] = True
                         scan["scan_truncated"] = True
                         continue
-                    child_directories.append((entry_path, depth + 1, _directory_identity(entry_stat)))
-                elif stat.S_ISREG(entry_stat.st_mode):
+                    child_directories.append((entry_path, depth + 1, identity))
+                elif kind == "file":
                     files.append(rel)
                     scan["files_seen"] += 1
                 else:
