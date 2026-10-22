@@ -290,7 +290,7 @@ class ToolchainMatrixTests(unittest.TestCase):
             / "PHASE-70-TOOLCHAIN-MATRIX-ADAPTERS.md"
         ).read_text(encoding="utf-8")
 
-        self.assertNotIn("\\\\" + chr(96), document)
+        self.assertNotIn(chr(92) + chr(96), document)
         self.assertEqual(document.count(chr(96) * 3), 6)
         self.assertEqual(document.count(chr(96) * 3) % 2, 0)
 
