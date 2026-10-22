@@ -233,10 +233,10 @@ def _scandir_project_directory(
     # Windows fallback: verify the directory identity before and after enumeration.
     # If the path changes while it is open, discard that directory's collected entries.
     before = os.stat(current, follow_symlinks=False)
+    is_root = current == base
     if (
         not _matches_directory_identity(before, expected_identity)
-        or current.is_symlink()
-        or _is_junction(str(current))
+        or (not is_root and (current.is_symlink() or _is_junction(str(current))))
     ):
         raise OSError("directory changed or became a link before inventory")
     try:
@@ -246,8 +246,7 @@ def _scandir_project_directory(
         after = os.stat(current, follow_symlinks=False)
         if (
             not _matches_directory_identity(after, expected_identity)
-            or current.is_symlink()
-            or _is_junction(str(current))
+            or (not is_root and (current.is_symlink() or _is_junction(str(current))))
         ):
             raise OSError("directory changed or became a link during inventory")
 
@@ -295,7 +294,12 @@ def _scan_project(base: Path) -> tuple[list[str], list[str], dict]:
                         if entry.is_symlink() or _is_junction(str(entry_path)):
                             kind, identity = "link", None
                         else:
-                            entry_stat = entry.stat(follow_symlinks=False)
+                            if os.name == "nt":
+                                # Path-based stats keep Windows' fallback identity comparison
+                                # consistent with the revalidation immediately before descent.
+                                entry_stat = os.stat(entry_path, follow_symlinks=False)
+                            else:
+                                entry_stat = entry.stat(follow_symlinks=False)
                             if stat.S_ISDIR(entry_stat.st_mode):
                                 kind, identity = "directory", _directory_identity(entry_stat)
                             elif stat.S_ISREG(entry_stat.st_mode):
