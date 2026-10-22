@@ -6,6 +6,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+from bot import toolchain_matrix as matrix_module
 from bot.toolchain_matrix import (
     MAX_SCAN_ENTRIES,
     ToolchainMatrixError,
@@ -169,6 +170,129 @@ class ToolchainMatrixTests(unittest.TestCase):
                 code = main_module.main(["--toolchain-matrix", "--project-root", str(self.root)])
         self.assertEqual(code, 0)
         self.assertEqual(json.loads(output.getvalue()), expected)
+
+
+    def test_python_profile_is_available_from_nested_test_files_without_manifest(self):
+        tests = self.root / "tests"
+        tests.mkdir()
+        (tests / "test_app.py").write_text("def test_smoke(): pass\n", encoding="utf-8")
+
+        report = inspect_toolchain_matrix(self.root, available_tool_ids={"python"})
+
+        python = self._adapter_map(report)["python"]
+        self.assertEqual(report["check_inventory_status"], "discovered_at_project_root")
+        self.assertEqual(python["available_check_ids"], ["python-unittest"])
+        self.assertIn("tests/test_app.py", python["evidence_paths"])
+
+    def test_android_profile_is_not_hidden_by_nested_android_marker(self):
+        (self.root / "build.gradle.kts").write_text("tasks.test {}\n", encoding="utf-8")
+        manifest = self.root / "app" / "src" / "main" / "AndroidManifest.xml"
+        manifest.parent.mkdir(parents=True)
+        manifest.write_text("<manifest />\n", encoding="utf-8")
+
+        with patch(
+            "bot.toolchain_matrix.discover_project_checks",
+            return_value={"checks": [{"check_id": "gradle-test"}]},
+        ):
+            report = inspect_toolchain_matrix(
+                self.root, available_tool_ids={"java", "gradle"}
+            )
+
+        android = self._adapter_map(report)["android"]
+        self.assertEqual(android["available_check_ids"], ["gradle-test"])
+        self.assertEqual(android["status"], "known_profile_available")
+
+    def test_replaced_directory_is_not_traversed_as_a_symlink(self):
+        child = self.root / "linked"
+        child.mkdir()
+        external = tempfile.TemporaryDirectory()
+        target = Path(external.name)
+        (target / "package.json").write_text(
+            '{"scripts":{"test":"must-not-be-inventoried"}}', encoding="utf-8"
+        )
+        moved = self.root / "original-directory"
+        original_scandir = matrix_module._scandir_project_directory
+        swapped = False
+
+        def replace_before_descent(base, current, root_identity, expected_identity):
+            nonlocal swapped
+            if current == child and not swapped:
+                swapped = True
+                child.rename(moved)
+                try:
+                    child.symlink_to(target, target_is_directory=True)
+                except (OSError, NotImplementedError) as exc:
+                    moved.rename(child)
+                    self.skipTest(f"directory symlink creation unavailable: {type(exc).__name__}")
+            return original_scandir(base, current, root_identity, expected_identity)
+
+        try:
+            with patch(
+                "bot.toolchain_matrix._scandir_project_directory",
+                side_effect=replace_before_descent,
+            ):
+                report = inspect_toolchain_matrix(
+                    self.root,
+                    available_tool_ids={"node", "npm"},
+                    available_check_ids={"npm-test"},
+                )
+
+            self.assertTrue(swapped)
+            self.assertNotIn("javascript-typescript", self._adapter_map(report))
+            self.assertEqual(report["status"], "partial")
+            self.assertEqual(report["scan"]["directories_unreadable"], 1)
+        finally:
+            if child.is_symlink():
+                child.unlink(missing_ok=True)
+            external.cleanup()
+
+    def test_depth_limit_is_explicitly_reported_as_partial(self):
+        current = self.root
+        for index in range(7):
+            current = current / f"level-{index}"
+            current.mkdir()
+        (current / "deep.py").write_text("VALUE = 1\n", encoding="utf-8")
+
+        report = inspect_toolchain_matrix(
+            self.root, available_tool_ids={"python"}, available_check_ids=set()
+        )
+
+        self.assertEqual(report["status"], "partial")
+        self.assertTrue(report["scan"]["depth_limit_reached"])
+        self.assertTrue(report["scan"]["scan_truncated"])
+
+    def test_unreadable_subdirectory_yields_partial_inventory(self):
+        child = self.root / "child"
+        child.mkdir()
+        original_scandir = matrix_module._scandir_project_directory
+
+        def deny_child(base, current, root_identity, expected_identity):
+            if current == child:
+                raise PermissionError("simulated inaccessible directory")
+            return original_scandir(base, current, root_identity, expected_identity)
+
+        with patch(
+            "bot.toolchain_matrix._scandir_project_directory",
+            side_effect=deny_child,
+        ):
+            report = inspect_toolchain_matrix(
+                self.root, available_tool_ids=set(), available_check_ids=set()
+            )
+
+        self.assertEqual(report["status"], "partial")
+        self.assertEqual(report["scan"]["directories_unreadable"], 1)
+
+    def test_phase_70_documentation_uses_unescaped_markdown_fences(self):
+        document = (
+            Path(__file__).resolve().parents[1]
+            / "docs"
+            / "research"
+            / "PHASE-70-TOOLCHAIN-MATRIX-ADAPTERS.md"
+        ).read_text(encoding="utf-8")
+
+        self.assertNotIn("\\\\" + chr(96), document)
+        self.assertEqual(document.count(chr(96) * 3), 6)
+        self.assertEqual(document.count(chr(96) * 3) % 2, 0)
 
 
 if __name__ == "__main__":
