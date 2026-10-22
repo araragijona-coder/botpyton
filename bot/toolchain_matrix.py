@@ -3,9 +3,11 @@ from __future__ import annotations
 
 import fnmatch
 import os
+import stat
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
-from typing import Iterable
+from typing import Iterable, Iterator
 
 from .project_checks import discover_project_checks
 from .tool_registry import discover_tools
@@ -177,6 +179,79 @@ def _is_junction(path: str) -> bool:
         return True
 
 
+def _directory_identity(info: os.stat_result) -> tuple[int, int]:
+    return int(info.st_dev), int(info.st_ino)
+
+
+def _matches_directory_identity(info: os.stat_result, expected: tuple[int, int]) -> bool:
+    return stat.S_ISDIR(info.st_mode) and _directory_identity(info) == expected
+
+
+def _supports_handle_anchored_scan() -> bool:
+    return (
+        os.name != "nt"
+        and hasattr(os, "O_NOFOLLOW")
+        and hasattr(os, "O_DIRECTORY")
+        and os.open in getattr(os, "supports_dir_fd", set())
+    )
+
+
+@contextmanager
+def _scandir_project_directory(
+    base: Path,
+    current: Path,
+    expected_root_identity: tuple[int, int],
+    expected_identity: tuple[int, int],
+) -> Iterator[os.ScandirIterator[str]]:
+    """Enumerate a directory without following replaced path components where supported."""
+    if _supports_handle_anchored_scan():
+        flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+        fd = os.open(os.sep, flags)
+        try:
+            for component in base.parts[1:]:
+                next_fd = os.open(component, flags, dir_fd=fd)
+                os.close(fd)
+                fd = next_fd
+            if not _matches_directory_identity(os.fstat(fd), expected_root_identity):
+                raise OSError("project root changed during inventory")
+
+            for component in current.relative_to(base).parts:
+                if component in ("", "."):
+                    continue
+                next_fd = os.open(component, flags, dir_fd=fd)
+                os.close(fd)
+                fd = next_fd
+            if not _matches_directory_identity(os.fstat(fd), expected_identity):
+                raise OSError("directory changed before inventory")
+
+            with os.scandir(fd) as iterator:
+                yield iterator
+        finally:
+            os.close(fd)
+        return
+
+    # Windows fallback: verify the directory identity before and after enumeration.
+    # If the path changes while it is open, discard that directory's collected entries.
+    before = os.stat(current, follow_symlinks=False)
+    if (
+        not _matches_directory_identity(before, expected_identity)
+        or current.is_symlink()
+        or _is_junction(str(current))
+    ):
+        raise OSError("directory changed or became a link before inventory")
+    try:
+        with os.scandir(current) as iterator:
+            yield iterator
+    finally:
+        after = os.stat(current, follow_symlinks=False)
+        if (
+            not _matches_directory_identity(after, expected_identity)
+            or current.is_symlink()
+            or _is_junction(str(current))
+        ):
+            raise OSError("directory changed or became a link during inventory")
+
+
 def _scan_project(base: Path) -> tuple[list[str], list[str], dict]:
     files: list[str] = []
     directories: list[str] = []
@@ -191,10 +266,17 @@ def _scan_project(base: Path) -> tuple[list[str], list[str], dict]:
         "scan_truncated": False,
         "depth_limit_reached": False,
     }
-    pending: list[tuple[Path, int]] = [(base, 0)]
+    try:
+        root_stat = os.stat(base, follow_symlinks=False)
+        if not stat.S_ISDIR(root_stat.st_mode):
+            raise OSError("project root is no longer a directory")
+    except OSError as exc:
+        raise ToolchainMatrixError("project root changed or cannot be safely inventoried") from exc
+    root_identity = _directory_identity(root_stat)
+    pending: list[tuple[Path, int, tuple[int, int]]] = [(base, 0, root_identity)]
 
     while pending:
-        current, depth = pending.pop()
+        current, depth, expected_identity = pending.pop()
         remaining = MAX_SCAN_ENTRIES - scan["entries_examined"]
         if remaining <= 0:
             scan["scan_truncated"] = True
@@ -203,7 +285,7 @@ def _scan_project(base: Path) -> tuple[list[str], list[str], dict]:
         entries = []
         overflow = False
         try:
-            with os.scandir(current) as iterator:
+            with _scandir_project_directory(base, current, root_identity, expected_identity) as iterator:
                 for entry in iterator:
                     if len(entries) >= remaining:
                         overflow = True
@@ -225,12 +307,13 @@ def _scan_project(base: Path) -> tuple[list[str], list[str], dict]:
 
         for entry in entries:
             try:
-                if entry.is_symlink() or _is_junction(entry.path):
+                entry_path = current / entry.name
+                if entry.is_symlink() or _is_junction(str(entry_path)):
                     scan["link_or_junctions_skipped"] += 1
                     continue
-                rel = Path(entry.path).relative_to(base).as_posix()
-                rel_folded = rel.casefold()
-                if entry.is_dir(follow_symlinks=False):
+                entry_stat = entry.stat(follow_symlinks=False)
+                rel = entry_path.relative_to(base).as_posix()
+                if stat.S_ISDIR(entry_stat.st_mode):
                     directories.append(rel)
                     scan["directories_seen"] += 1
                     if entry.name.casefold() in _SKIP_DIRS_CASEFOLD:
@@ -239,8 +322,8 @@ def _scan_project(base: Path) -> tuple[list[str], list[str], dict]:
                         scan["depth_limit_reached"] = True
                         scan["scan_truncated"] = True
                         continue
-                    child_directories.append((Path(entry.path), depth + 1))
-                elif entry.is_file(follow_symlinks=False):
+                    child_directories.append((entry_path, depth + 1, _directory_identity(entry_stat)))
+                elif stat.S_ISREG(entry_stat.st_mode):
                     files.append(rel)
                     scan["files_seen"] += 1
                 else:
@@ -343,10 +426,11 @@ def inspect_toolchain_matrix(
         optional_available = sorted(
             tool_id for tool_id in adapter.optional_tool_ids if tool_id in tool_ids
         )
-        root_marker_found = any("/" not in path.rstrip("/") for path in strong)
+        # Check discovery is already scoped to the selected root. Do not require a
+        # second root-level marker: test files and ecosystem markers can be nested.
         profiles_available = sorted(
             check_id for check_id in adapter.candidate_check_ids
-            if check_id in check_ids and root_marker_found
+            if check_id in check_ids
         )
         profiles_not_available = sorted(
             check_id for check_id in adapter.candidate_check_ids
