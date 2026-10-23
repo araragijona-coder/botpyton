@@ -197,6 +197,10 @@ def build_architect_response(
         },
         "execution": execution,
         "next_action": next_action,
+        "next_step": next_action["message"],
+        "ai_enabled": False,
+        "external_ai_apis_enabled": False,
+        "automatic_merge": False,
         "safety": {
             "botpyton_ai_enabled": False,
             "external_ai_api_called": False,
