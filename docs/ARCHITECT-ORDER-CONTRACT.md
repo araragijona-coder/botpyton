@@ -208,3 +208,11 @@ Next-action decisions are evidence-backed:
 - A task is still running, queue integrity is unavailable or response binding mismatches: retain the appropriate inspection/repair action and do not replay the order.
 
 Recovery remains read-only: it does not execute code, repair queue files, mutate reports or responses, delete a candidate worktree, roll back unknown side effects or close a run automatically. SHA-256 provides integrity/correlation evidence, not cryptographic authentication of local files.
+
+## Phase 79 — deterministic revision context for failed tasks
+
+When recovery finds a failed or blocked task, the separate recovery response includes `evidence.revision_context`, a bounded JSON packet for the external architect. Each listed task includes its queue status, bounded attempt count, queue task-payload SHA-256 fingerprint, report status/hash where available, a short sanitized error summary, and a deduplicated list of failed checks. Successful tasks are not included as revision targets. Task count is capped at 25, check count at 10 per task, and each free-text field is bounded.
+
+The builder uses an allowlist rather than copying the source order or report. It omits full report bodies, complete logs/stdout, local paths, reviewed patch bodies, full diffs, credentials, and environment values. Short error summaries are scrubbed for common credential forms, but this is not a universal secret detector; human review is required before sharing the context outside the local machine.
+
+The packet is advisory evidence only. It requires a new order ID, new task IDs for materially changed work, and a changed payload; it explicitly marks local approvals as not inherited. The local operator must review the revised order and separately grant `--execute-architect-order`, `--authorize-local-writes`, and/or `--execute-project-code` as the revised actions require. The context builder makes no queue changes and has no capability to execute, retry, publish, or merge. BotPyton remains deterministic and offline; the external architect is responsible for interpreting the evidence and preparing the next order.

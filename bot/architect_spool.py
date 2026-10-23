@@ -15,6 +15,7 @@ from typing import Any, Callable
 
 from .application_cache import _is_link_or_reparse
 from .architect_order_contract import ArchitectOrderError, validate_architect_order
+from .architect_revision import build_revision_context
 from .architect_order_response import (
     ArchitectResponseWriter,
     build_architect_response,
@@ -480,6 +481,12 @@ def run_order_spool(
                             "task_id": task_id,
                             "status": record.get("status"),
                             "attempts": record.get("attempts"),
+                            "task_payload_sha256": (
+                                record.get("idempotency_key")
+                                if isinstance(record.get("idempotency_key"), str)
+                                and re.fullmatch(r"[0-9a-f]{64}", record.get("idempotency_key", ""))
+                                else None
+                            ),
                             "last_error": str(record.get("last_error") or "")[:1_000] or None,
                             "report_path": report_path,
                             "queue_verification_recorded": (
@@ -566,9 +573,9 @@ def run_order_spool(
                         "actor": "architect",
                         "action": "create_revised_order_from_failure_evidence",
                         "message": (
-                            "One or more order tasks failed or were blocked. Use the bounded report failure fields and verification evidence "
-                            "to diagnose the cause, then submit a revised order with a new order_id and task IDs where work must change. "
-                            "Do not retry the same failed task payload blindly; local approvals remain separate."
+                            "One or more order tasks failed or were blocked. Read evidence.revision_context for bounded task fingerprints, "
+                            "report hashes, sanitized failure summaries and failed checks. Create a revised order with a new order_id, new task IDs "
+                            "for changed work, and a changed task payload; do not replay the same failed payload. Local approvals must be granted again."
                         ),
                     }
                 else:
@@ -580,6 +587,19 @@ def run_order_spool(
                             "report hashes, verification evidence, and possible side effects before deciding whether to create a revised order."
                         ),
                     }
+
+                revision_context = None
+                if (
+                    not binding_mismatches
+                    and queue_snapshot.get("status") == "inspected"
+                    and any(state in {"failed", "blocked"} for state in states)
+                ):
+                    revision_context = build_revision_context(
+                        order_id=canonical_order["order_id"],
+                        request_sha256=request_sha256,
+                        queue_snapshot=queue_snapshot,
+                        report_root_evidence=report_root_evidence,
+                    )
 
                 recovery_core = {
                     "response_type": "botpyton.architect_response",
@@ -616,6 +636,7 @@ def run_order_spool(
                         ),
                         "report_root_validation": report_root_evidence,
                         "queue_snapshot": queue_snapshot,
+                        "revision_context": revision_context,
                     },
                     "execution": None,
                     "next_action": next_action,

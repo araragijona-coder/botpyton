@@ -435,8 +435,18 @@ class ArchitectSpoolTests(unittest.TestCase):
             )
             self.assertEqual(result["next_action"]["action"], "create_revised_order_from_failure_evidence")
             self.assertFalse(result["execution_replayed"])
-            evidence = result["response"]["evidence"]["queue_snapshot"]["tasks"][0]["report_evidence"]
+            queue_task = result["response"]["evidence"]["queue_snapshot"]["tasks"][0]
+            evidence = queue_task["report_evidence"]
             self.assertEqual(evidence["status"], "report_path_missing")
+            revision = result["response"]["evidence"]["revision_context"]
+            self.assertEqual(revision["context_type"], "botpyton.architect_revision_context")
+            self.assertEqual(revision["source_order"]["order_id"], order["order_id"])
+            self.assertEqual(revision["tasks"][0]["task_id"], record["id"])
+            self.assertEqual(revision["tasks"][0]["task_payload_sha256"], record["idempotency_key"])
+            self.assertTrue(revision["revision_requirements"]["new_order_id_required"])
+            self.assertTrue(revision["revision_requirements"]["changed_task_payload_required"])
+            self.assertFalse(revision["revision_requirements"]["local_approvals_inherited"])
+            self.assertFalse(revision["execution_policy"]["may_execute"])
 
     def test_direct_module_rejects_overlapping_directories(self):
         with tempfile.TemporaryDirectory() as temp:
