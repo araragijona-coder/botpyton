@@ -164,6 +164,12 @@ def _safe_environment(
     return env
 
 
+def _is_windows_batch_wrapper(executable: str, *, windows: bool | None = None) -> bool:
+    """Report Windows batch wrappers that may invoke cmd.exe even with shell=False."""
+    is_windows = os.name == "nt" if windows is None else windows
+    return is_windows and Path(executable).suffix.casefold() in {".bat", ".cmd"}
+
+
 def _resolve_approved_executable(executable: str, approved_executables: Sequence[str]) -> str:
     if not isinstance(executable, str) or not executable or chr(0) in executable:
         raise ProcessRunnerError("Executable must be a non-empty string")
@@ -437,6 +443,14 @@ def run_process(
         "output_capture_memory_limit_per_stream": output_limit_bytes,
         "process_memory_limit_mb": memory_limit_mb,
         "process_memory_limit_enforced": os.name == "nt",
+        # A bounded child process is not a network sandbox. Project code and
+        # child processes can still contact remote hosts unless the OS enforces
+        # a separate network policy outside this runner.
+        "network_isolation_enforced": False,
+        "child_may_access_network": True,
+        # On Windows, CreateProcess may route .bat/.cmd wrappers through cmd.exe
+        # even when the Python Popen call uses shell=False.
+        "windows_batch_wrapper_may_use_cmd": _is_windows_batch_wrapper(normalized_argv[0]),
     }
 
 

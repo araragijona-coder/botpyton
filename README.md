@@ -1,6 +1,6 @@
 # BotPyton — deterministic GitHub worker without AI
 
-BotPyton's core worker is deterministic and does not require AI models, inference APIs, or AI service credentials. Its task engine combines a JSON queue with strict allowlists. Task descriptions are data, never commands. A separate architecture-advice command is optional and makes a remote AI request only after explicit user consent; it is not part of normal task execution.
+BotPyton's built-in local worker is deterministic and does not require AI models, inference APIs, AI credentials, or network access for local planning, inspection, and built-in deterministic task/repair operations. Task descriptions are data, never commands. The former remote architecture adviser has been removed and all legacy adviser flags fail closed under the strict offline policy. Network exceptions are explicit: GitHub publication requires the separate --execute-github-plan(s) flag, and Windows --pc-update-check uses the trusted WinGet source to list (not install) updates. If --execute-project-code is authorized, project-owned tests/build scripts may make their own network requests; BOTPYTON does not claim to sandbox their networking. See docs/research/PHASE-60-NETWORK-BOUNDARY-AUDIT.md.
 
 ## Capabilities
 
@@ -10,7 +10,9 @@ BotPyton's core worker is deterministic and does not require AI models, inferenc
 - Bounded autonomous cycle: run fixed tests, apply at most one exact known repair after a failure, rerun tests, verify Python/JSON files, and persist per-attempt evidence.
 - Conservative diagnostics plus two exact source repairs: a uniquely located JSON trailing comma and a supported one-line Python compound-header colon.
 - Declarative GitHub operations: create an isolated bot branch, create one commit containing the declared paths, and open a draft pull request for review.
-- No automatic merge, no arbitrary shell commands, and no automatic package installation. The normal worker does not call AI APIs; the optional architecture adviser is isolated, explicitly authorized, and described below.
+- Read-only real-credential GitHub preflight: checks repository metadata, a selected branch, pull-request reads and Actions-run reads. Future draft-PR write permissions are reported as unverified; no probe writes to GitHub.
+- GitHub publication recovery regression tests: inject a bounded failure before and after each remote write, then verify that retrying the same declarative plan converges to one draft PR using a fake in-memory transport.
+- No automatic merge, no arbitrary shell commands, and no automatic package installation. No model provider or AI adviser is integrated. Local architecture planning uses deterministic rules; explicit GitHub publication is separate and is not an offline operation.
 
 ## Interfaz de escritorio
 
@@ -47,36 +49,17 @@ The recovery policy no longer automatically retries a known or unknown task fail
 
 See [docs/research/PHASE-24-EVIDENCE-BASED-RECOVERY.md](docs/research/PHASE-24-EVIDENCE-BASED-RECOVERY.md). The registry runs locally and does not install tools, change permissions, or make network/API calls.
 
-## Phase 25: optional free-model architecture adviser
+## Phase 25–26 — Remote architecture adviser retired
 
-BOTPYTON supports a separate, opt-in second opinion for software architecture through OpenRouter's free-model router. The base architecture planner remains offline and deterministic. The remote adviser does not run code, write files, issue commands, change the queue, or create pull requests. Source code is not sent by default; uploading selected files requires a second, separate consent.
+The previous OpenRouter-backed adviser and the source-context/failure-report upload paths have been retired under the Phase 59 offline policy. The CLI keeps its old flag names only for compatibility: passing any of them returns `disabled_offline_policy` before reading the selected brief/source/report, importing network clients, or making a request. No provider endpoint or AI service credential is required.
 
-Current free-router limits published by OpenRouter are **50 requests/day and 20 requests/minute**; the free model router prices input and output at $0. The selected underlying model can change, and availability/limits are not guaranteed. BOTPYTON makes one request, sets a maximum output token count, enforces payload/response/time limits, and never retries a failed request. See [the detailed setup, consent, privacy, and limits](docs/ARCHITECT-AI-ADVISOR.md).
-
-Configure `BOTPYTON_OPENROUTER_API_KEY` in your Windows user environment. Then review your structured brief and explicitly allow external processing:
-
-```powershell
-python -m bot.main --architect-ai .cerebro/examples/architect-design-brief.json --allow-external-ai
-```
-
-Without `--allow-external-ai`, no request is sent. For the entirely local workflow, continue to use:
+Use the deterministic local planner instead:
 
 ```powershell
 python -m bot.main --architect-plan .cerebro/examples/architect-design-brief.json
 ```
 
-Only selected brief fields and the local plan's high-level steps/questions are sent by default; the local project path and repository inventory are excluded. Any sensitive text pasted into brief fields can still be sent, so remove credentials and private source details before consent. To provide actual code evidence, choose up to four relative file paths under project_root, such as --architect-ai-context bot/queue.py --architect-ai-context tests/test_queue.py, and add --send-source-context. Without that second flag no source text is uploaded. Each file is capped at 16 KB, total source context at 40 KB, and the full request at 70 KB; common secret-like values and link/reparse paths are rejected, though the scanner cannot guarantee that every secret is detected. The model reply is advice for human review, not executable instructions. This does not make BOTPYTON an autonomous general-purpose programmer.
-
-## Phase 26: selected source context for the optional architecture adviser
-
-The adviser can now use actual code evidence rather than infer from the task description. Source text is still excluded by default. Choose no more than four exact paths under `project_root`, and add a separate consent flag:
-
-```powershell
-python -m bot.main --architect-ai .cerebro/examples/architect-design-brief.json --allow-external-ai --architect-ai-context bot/queue.py --architect-ai-context tests/test_queue.py --send-source-context
-```
-
-Each selected file is capped at 16 KB, all selected source at 40 KB, and the complete serialized request at 70 KB. The loader rejects traversal, symbolic/reparse links, unsupported extensions, generated/private folders, binary/non-UTF-8 content, and common secret patterns. This filter cannot guarantee every secret is detected; review the selected files yourself. When source context is provided, the adviser can also propose a unified diff marked `BORRADOR DE PARCHE (NO APLICADO)`, limited to selected paths. The draft is never applied or executed automatically and must be reviewed and tested separately. The bot is still not a general-purpose autonomous programmer. See [Phase 26 research and constraints](docs/research/PHASE-26-EXPLICIT-SOURCE-CONTEXT.md).
-Sources: [OpenRouter free model router](https://openrouter.ai/openrouter/free) · [official pricing and limits](https://openrouter.ai/pricing).
+The offline guarantee applies to built-in local planning, inspection, diagnostics and deterministic task operations when no network option or third-party project check is selected. Explicit GitHub publication and the optional Windows --pc-update-check listing are separate network opt-ins and do not invoke an AI model. Explicit --execute-project-code can run project-owned programs that may perform their own network access. See docs/research/PHASE-60-NETWORK-BOUNDARY-AUDIT.md.
 
 ## Phase 27: isolated reviewed-patch cycle
 
@@ -103,9 +86,9 @@ Sources: [Git apply](https://git-scm.com/docs/git-apply) · [Python subprocess](
 
 ## Next limitations to address
 
-- The planner still uses deterministic heuristics; a general natural-language architecture brain requires the separately consented remote adviser or an independently supplied patch proposal.
-- The patch cycle does not extract or apply a diff straight from an AI response. Review the proposal and save the diff explicitly.
-- A failed candidate produces diagnostic guidance but does not autonomously ask the model for another patch. The next safe step is an evidence-aware, bounded repair iteration with explicit external-AI consent, preserved baseline/candidate logs, and a hard stop after a small number of attempts.
+- The planner is intentionally deterministic; ambiguous goals still require clearer acceptance criteria or an independently supplied, human-reviewed patch.
+- The patch cycle accepts a patch file that a human has reviewed; there is no model-generated patch endpoint.
+- A failed candidate produces local diagnostic guidance. The worker stops when evidence is insufficient and does not contact a model provider or upload failure evidence.
 
 ## Quick start
 
@@ -291,6 +274,10 @@ python -m bot.main --local-plan "C:\\path\\plan.json" --project-root "C:\\path\\
 
 To apply a plan, add `--execute-local-plan`. Existing files require a matching `expected_sha256`; changes are limited to 20 files, 200 KB per file and 500 KB of total content. Existing files are backed up outside the project root. Protected paths, traversal and symlink path components are rejected. See `docs/LOCAL-CHANGE-PLANS.md` for the schema and protections.
 
+Applied local plans also persist a content-free transaction journal outside the project. The journal records per-file hashes and publication states so an interrupted operation can be inspected instead of blindly retried. Inspect it read-only with `--local-transaction-inspect JOURNAL.json --project-root PROJECT`. An explicit rollback requires both `--local-transaction-rollback JOURNAL.json --project-root PROJECT` and `--confirm-transaction-id SHA256`; only unchanged files with matching recorded publication identity and SHA-256 are eligible. External or ambiguous changes are preserved for manual review. See `docs/research/PHASE-63-TRANSACTION-JOURNAL-AND-INDUSTRY-REVIEW.md`.
+
+Transaction apply and rollback share a stable per-transaction lock so BOTPYTON does not run those two modifying flows concurrently. Schema 2 journals also carry a canonical `journal_sha256` to detect accidental corruption before recovery; this checksum is not an authentication signature against someone who can edit and recompute the journal. See `docs/research/PHASE-64-JOURNAL-TRUST-BOUNDARY.md`.
+
 The process runner uses separate arguments, an explicit executable allowlist, `shell=False`, a timeout, disconnected stdin, stripped credential-like environment variables and bounded returned output. It is not a general shell and does not execute commands discovered in repository text. These controls are foundations for the worker, not a claim that free-form programming tasks can already be autonomously solved.
 
 
@@ -471,26 +458,11 @@ The current feature gap against CCleaner is documented in [`docs/CCLEANER-PARITY
 Run `python -m bot.main --pc-startup-advisor` or select **W** in `BOTPYTON.bat`. The advisor reads Windows Run/RunOnce entries and startup-folder items, extracts only a recognized executable/script target, checks whether that target exists, and never returns registry command arguments. It does not disable entries, launch commands, measure actual boot impact, or label a program unnecessary. Results can include local paths; inspect them before sharing.
 
 
-## Phase 28: evidence-guided repair feedback
+## Phases 28–29 — Former remote repair feedback (disabled)
 
-When a reviewed patch fails in Phase 27, BOTPYTON can now give the optional architecture adviser the **sanitized failure evidence** from that patch cycle. This reduces the need to manually summarize the failing test and helps the adviser revise its hypothesis. It is still advice, not an autonomous retry loop.
+Older releases documented sending selected source files and sanitized patch-failure reports to a remote adviser. Phase 59 removes that runtime path. The legacy flags `--architect-ai`, `--architect-ai-context`, `--send-source-context`, `--architect-ai-failure-report`, `--send-failure-report`, and `--allow-external-ai` now return `disabled_offline_policy`. They do not open, sanitize, or upload the named files or reports. Local patch validation and diagnostics remain available through the reviewed-patch workflow.
 
-Save the complete JSON output from a failed `--apply-reviewed-patch` run as `repair-result.json`. Review the exact files and report first, then provide the same explicitly selected source context used for the patch proposal:
-
-```powershell
-python -m bot.main --architect-ai .cerebro/examples/architect-design-brief.json --allow-external-ai --architect-ai-context src/parser.py --architect-ai-context tests/test_parser.py --send-source-context --architect-ai-failure-report repair-result.json --send-failure-report
-```
-
-The separate `--send-failure-report` flag is required in addition to `--allow-external-ai`; source contents still require the independent `--send-source-context` flag. The report is field-filtered and size-limited, absolute workspace paths and arbitrary JSON fields are excluded, and common secret patterns are rejected before any request. The scanner cannot guarantee that every secret is detected, so inspect the report before consenting. See [Phase 28 repair feedback](docs/ARCHITECT-REPAIR-FEEDBACK.md).
-
-BOTPYTON does not apply the suggested revision automatically. Review and save the new diff, then run the Phase 27 isolated patch cycle again. If evidence is ambiguous, ask for clarification rather than repeating an unchanged patch.
-
-
-## Phase 29: redacción de rutas locales en evidencia de reparación
-
-Antes de compartir el informe de una reparación con el asesor remoto, BOTPYTON ahora sustituye patrones comunes de rutas absolutas locales que aparezcan dentro de los logs, tracebacks y textos de diagnóstico. La fase anterior ya omitía campos enteros de ubicación, pero una ruta también podía venir incrustada en el texto de un error. Se cubren rutas Windows citadas y sin comillas, y raíces Unix frecuentes como `/home`, `/Users`, `/tmp`, `/runner` y `/workspace`. Las URL web no se deben confundir con rutas locales.
-
-La redacción es una defensa por capas, no un detector universal de datos privados: otras rutas, nombres de usuario, secretos con formatos desconocidos y datos incluidos en el brief o en los archivos fuente seleccionados pueden seguir siendo sensibles. Inspeccioná el informe antes de usar `--send-failure-report`. No cambia el consentimiento externo ni el ciclo aislado de parches.
+See [the archived adviser note](docs/ARCHITECT-AI-ADVISOR.md) and [the Phase 59 offline policy](docs/research/PHASE-59-STRICT-OFFLINE-NO-AI.md).
 
 
 ## Phase 32 — portable package publication safety
@@ -586,3 +558,52 @@ Executor reports are now staged through uniquely created temporary files in the 
 ## Phase 44 — terminate timed-out process trees
 
 BOTPYTON now isolates each POSIX subprocess in its own session and terminates the whole process group on timeout or execution cleanup, rather than killing only the leader. On Windows, when the memory Job Object is available, timeout closes that job before waiting on output collectors so descendants cannot keep stdout/stderr pipes open or outlive the task. Regression coverage launches a child that would write a marker after the parent timeout and confirms it never survives. See [Phase 44 research](docs/research/PHASE-44-PROCESS-TREE-TIMEOUT-CLEANUP.md).
+
+
+## Phase 46 — permisos del agente local y auditoría
+
+BOTPYTON incorpora una CLI local, bajo demanda, para listar un nivel de una carpeta autorizada, leer archivos UTF-8 acotados y crear/reemplazar archivos bajo un permiso explícito por raíz. Los reemplazos requieren permiso de lectura, permiso de escritura y el SHA-256 exacto del archivo actual. No crea carpetas, no elimina archivos, no ejecuta comandos y no instala dependencias.
+
+Las operaciones se registran en JSONL con una cadena de SHA-256; si la auditoría está dañada o no puede guardarse, la operación se bloquea. La configuración y el registro deben vivir fuera de las raíces autorizadas. Consulta la [guía del agente local](docs/LOCAL-AGENT.md), el [ejemplo de configuración](docs/examples/local-agent-config.example.json) y la [auditoría técnica de la fase](docs/research/PHASE-46-LOCAL-AGENT-PERMISSIONS.md).
+
+Validación de configuración y auditoría:
+
+~~~powershell
+python -m bot.main --local-agent-config "C:\BOTPYTON\agent.json"
+python -m bot.main --local-agent-config "C:\BOTPYTON\agent.json" --local-agent-audit
+~~~
+
+Este agente es una base local de archivos, no un servicio remoto ni un programador autónomo universal. La revisión de CI no reemplaza probar la configuración y los permisos en el PC del usuario.
+
+
+## Phase 47 — investigación de errores desconocidos
+
+La investigación local genera un plan reproducible de hipótesis falsables a partir del log y de evidencia estática acotada. Comprueba sintaxis Python y formatos JSON/TOML, detecta señales directas, ordena hipótesis por evidencia y señala qué datos faltan. No ejecuta el proyecto, no escribe archivos, no repite la tarea ni inventa una causa raíz. Si no hay evidencia suficiente, detiene el ciclo y pide la información precisa necesaria.
+
+~~~powershell
+python -m bot.main --investigate-failure "reports/failure.log" --project-root "C:\projects\mi-app" --investigation-command "python -m unittest" --investigation-exit-code 1 --investigation-expected "la prueba pasa" --investigation-observed "la prueba falla con error Z-19"
+~~~
+
+El log debe ser un archivo relativo al proyecto y no superar 64 KiB. El escaneo estático omite directorios generados, limita la cantidad/tamaño de archivos y no ejecuta código del proyecto. Revisá el informe antes de decidir una modificación. Guía: [investigación de errores desconocidos](docs/UNKNOWN-ERROR-INVESTIGATION.md) y [auditoría técnica Fase 47](docs/research/PHASE-47-UNKNOWN-ERROR-RECOVERY.md).
+
+## Phase 55 — Atomic audit publication and post-link cleanup
+
+The local agent now builds the next bounded audit log as a fully verified same-directory staged file and publishes it atomically, so a partial staging write does not corrupt the previous audit. POSIX new-file publication also reports separately when the destination link succeeds but cleanup of its temporary alias fails. The operation retries alias cleanup and discloses a persistent leftover instead of pretending publication never occurred. See [Phase 55 research](docs/research/PHASE-55-ATOMIC-AUDIT-PUBLICATION.md). CI passes are not target-PC validation; no changes are made to `main` automatically.
+
+## Phase 61 — process execution boundaries
+
+The process runner bounds time, output, and (on Windows) child memory, but it does not create a network sandbox. Project tests/build scripts may contact remote hosts when explicitly authorized. On Windows, a registered `.bat` or `.cmd` tool wrapper may invoke `cmd.exe` even though BOTPYTON calls Python `Popen` with `shell=False`; the JSON result now reports this condition. Review `network_isolation_enforced`, `child_may_access_network`, and `windows_batch_wrapper_may_use_cmd` in process reports. See [Phase 61 process-boundary audit](docs/research/PHASE-61-PROCESS-BOUNDARY-AUDIT.md).
+
+
+
+## Phase 71: external architect-order contract
+
+An external architecture bot can hand BOTPYTON a bounded JSON order without turning task text into shell commands. The packet is validated against BOTPYTON's existing action allowlist, dependency rules, substantive machine-verifiable checks and size limits.
+
+Default is validation-only; it does not mutate the queue or execute project code:
+
+~~~powershell
+python -m bot.main --architect-order .cerebro/examples/architect-order.json
+~~~
+
+Execution requires `--execute-architect-order`. File-writing actions additionally require `--authorize-local-writes`; test/build actions additionally require `--execute-project-code`. Incoming JSON cannot grant any of these approvals. Orders with `status: "needs_input"` must contain questions and no executable tasks. Unknown fields—including `approved`, `execute`, and `shell`—are rejected. See [the Phase 71 contract](docs/ARCHITECT-ORDER-CONTRACT.md).

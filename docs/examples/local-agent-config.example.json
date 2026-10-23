@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "audit_log": "C:\\Users\\TU_USUARIO\\AppData\\Local\\BOTPYTON\\local-agent-audit.jsonl",
+  "roots": [
+    {
+      "id": "mi_proyecto",
+      "path": "C:\\Users\\TU_USUARIO\\Projects\\MiProyecto",
+      "permissions": ["list", "read", "write"],
+      "max_file_bytes": 200000
+    }
+  ]
+}

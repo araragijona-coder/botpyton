@@ -80,6 +80,9 @@ def discover_project_checks(
     if (base / "pom.xml").is_file():
         add("maven-test", "Java", "Run Maven test lifecycle", find("mvn"),
             ["test"], source="pom.xml")
+    if any((base / name).is_file() for name in ("build.gradle", "build.gradle.kts")):
+        add("gradle-test", "Java/Kotlin", "Run the configured Gradle test task", find("gradle"),
+            ["test"], source="Gradle build file; global Gradle executable only")
     if any(base.glob("*.sln")) or any(base.glob("*.csproj")):
         add("dotnet-test", "C#/.NET", "Build solution and run .NET tests", find("dotnet"),
             ["test"], source="solution or project file")
@@ -142,5 +145,12 @@ def run_project_check(
         "source": selected["source"],
         "ok": result["exit_code"] == 0 and not result["timed_out"],
         "project_code_execution_approved": True,
+        "project_code_may_access_network": True,
+        "network_isolation_enforced": False,
+        "network_security_note": (
+            "The selected project test/build command is not network-sandboxed. "
+            "It may contact hosts, registries, or services; review the code and command "
+            "before authorizing it."
+        ),
         **result,
     }

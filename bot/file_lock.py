@@ -28,7 +28,7 @@ def _is_reparse(info: os.stat_result) -> bool:
 
 
 @contextmanager
-def exclusive_file_lock(path: str | Path) -> Iterator[None]:
+def exclusive_file_lock(path: str | Path, *, create: bool = True) -> Iterator[None]:
     """Serialize threads and processes using a stable sidecar lock file.
 
     The sidecar is intentionally not removed after use: deleting a lock file while
@@ -36,7 +36,10 @@ def exclusive_file_lock(path: str | Path) -> Iterator[None]:
     The OS releases its advisory lock if a process exits unexpectedly.
     """
     lock_path = Path(os.path.abspath(os.fspath(Path(path).expanduser())))
-    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    if create:
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
+    elif not lock_path.parent.is_dir():
+        raise FileNotFoundError(f"Lock directory does not exist: {lock_path.parent}")
     key = os.path.normcase(os.path.normpath(str(lock_path)))
     thread_lock = _thread_lock_for(key)
 
@@ -56,7 +59,9 @@ def exclusive_file_lock(path: str | Path) -> Iterator[None]:
         descriptor = None
         acquired = False
         try:
-            flags = os.O_CREAT | os.O_RDWR
+            flags = os.O_RDWR
+            if create:
+                flags |= os.O_CREAT
             flags |= getattr(os, "O_BINARY", 0)
             flags |= getattr(os, "O_NOFOLLOW", 0)
             descriptor = os.open(lock_path, flags, 0o600)

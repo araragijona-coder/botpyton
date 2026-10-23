@@ -159,21 +159,34 @@ class TaskQueue:
             raise QueueError(f"Unknown task ID: {task_id}")
         return {"id": task_id, **record}
 
-    def claim_next(self) -> dict[str, Any] | None:
-        """Claim exactly one task while holding the cross-process transaction lock."""
+    def claim_next(
+        self, *, allowed_task_ids: set[str] | frozenset[str] | None = None
+    ) -> dict[str, Any] | None:
+        """Claim one ready task, optionally restricting claims to an explicit task-ID set.
+
+        The scope applies only to claiming. Dependency readiness is always checked
+        against the full persisted queue, and unrelated pending tasks are not claimed.
+        """
+        if allowed_task_ids is not None and (
+            not isinstance(allowed_task_ids, (set, frozenset))
+            or any(not isinstance(task_id, str) or not task_id for task_id in allowed_task_ids)
+        ):
+            raise QueueError("allowed_task_ids must be a set of non-empty task ID strings")
         with self.memory.transaction():
             state = self._load()
             records = state["tasks"]
             while True:
                 ready = []
                 for task_id, record in records.items():
+                    if allowed_task_ids is not None and task_id not in allowed_task_ids:
+                        continue
                     if record["status"] != "pending":
                         continue
                     dependencies = record["payload"].get("depends_on", [])
                     if all(records[dep]["status"] == "succeeded" for dep in dependencies):
                         ready.append(task_id)
                 if not ready:
-                    self._refresh_blocked(state)
+                    self._refresh_blocked(state, task_ids=allowed_task_ids)
                     self._save(state)
                     return None
 
@@ -190,7 +203,7 @@ class TaskQueue:
                         record["last_error"] = "retry_limit_reached"
                         record["updated_at"] = _now()
                         record["finished_at"] = _now()
-                    self._refresh_blocked(state)
+                    self._refresh_blocked(state, task_ids=allowed_task_ids)
                     continue
 
                 task_id = sorted(ready)[0]
@@ -203,10 +216,25 @@ class TaskQueue:
                 self._save(state)
                 return {"id": task_id, **record}
 
-    def complete(self, task_id: str, result: Any = None) -> dict[str, Any]:
-        return self._transition(task_id, "succeeded", result=result)
+    def complete(
+        self,
+        task_id: str,
+        result: Any = None,
+        *,
+        refresh_task_ids: set[str] | frozenset[str] | None = None,
+    ) -> dict[str, Any]:
+        return self._transition(
+            task_id, "succeeded", result=result, refresh_task_ids=refresh_task_ids
+        )
 
-    def fail(self, task_id: str, error: str, *, retryable: bool = False) -> dict[str, Any]:
+    def fail(
+        self,
+        task_id: str,
+        error: str,
+        *,
+        retryable: bool = False,
+        refresh_task_ids: set[str] | frozenset[str] | None = None,
+    ) -> dict[str, Any]:
         with self.memory.transaction():
             if not isinstance(error, str) or not error.strip():
                 raise QueueError("Failure error must be a non-empty string")
@@ -222,11 +250,18 @@ class TaskQueue:
                 status = "failed"
             record.update(status=status, last_error=error, updated_at=_now(),
                            finished_at=None if status == "pending" else _now())
-            self._refresh_blocked(state)
+            self._refresh_blocked(state, task_ids=refresh_task_ids)
             self._save(state)
             return {"id": task_id, **record}
 
-    def _transition(self, task_id: str, status: str, *, result: Any = None) -> dict[str, Any]:
+    def _transition(
+        self,
+        task_id: str,
+        status: str,
+        *,
+        result: Any = None,
+        refresh_task_ids: set[str] | frozenset[str] | None = None,
+    ) -> dict[str, Any]:
         with self.memory.transaction():
             state = self._load()
             record = state["tasks"].get(task_id)
@@ -241,7 +276,7 @@ class TaskQueue:
                 raise QueueError(f"Cannot transition task {task_id} from {record['status']} to {status}")
             record.update(status=status, result=result, last_error=None,
                           updated_at=_now(), finished_at=_now())
-            self._refresh_blocked(state)
+            self._refresh_blocked(state, task_ids=refresh_task_ids)
             self._save(state)
             return {"id": task_id, **record}
 
@@ -265,9 +300,16 @@ class TaskQueue:
             self._save(state)
             return sorted(resumed)
 
-    def _refresh_blocked(self, state: dict[str, Any]) -> None:
+    def _refresh_blocked(
+        self,
+        state: dict[str, Any],
+        *,
+        task_ids: set[str] | frozenset[str] | None = None,
+    ) -> None:
         records = state["tasks"]
-        for record in records.values():
+        for task_id, record in records.items():
+            if task_ids is not None and task_id not in task_ids:
+                continue
             if record["status"] in {"pending", "blocked"}:
                 deps = record["payload"].get("depends_on", [])
                 failed = any(records[dep]["status"] in {"failed", "blocked"} for dep in deps)

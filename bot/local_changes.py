@@ -11,18 +11,26 @@ from typing import Any
 
 from .application_cache import _is_link_or_reparse
 from .bounded_io import BoundedReadError, enforce_json_depth, read_bounded_bytes
+from .file_lock import exclusive_file_lock
 
 MAX_FILES = 20
 MAX_FILE_BYTES = 200_000
 MAX_TOTAL_BYTES = 500_000
 MAX_PLAN_BYTES = 600_000
+MAX_TRANSACTION_BYTES = 2 * 1024 * 1024
+TRANSACTION_SCHEMA_VERSION = 2
 TASK_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$")
+_WINDOWS_INVALID_COMPONENT_CHARS = frozenset('<>:"|?*')
+_WINDOWS_DEVICE_NAMES = frozenset({"con", "prn", "aux", "nul", "clock$", "conin$", "conout$"})
+_WINDOWS_DEVICE_NUMBER_RE = re.compile(r"^(?:com|lpt)(?:[1-9]|[¹²³])$", re.IGNORECASE)
 PROTECTED_PREFIXES = (
     ".git/", ".github/", ".cerebro/policies/", ".cerebro/memory/",
     ".cerebro/reports/", ".cerebro/backups/", ".venv/", "node_modules/",
     "dist/", "build/",
 )
 PROTECTED_EXACT = frozenset({".cerebro/config.json"})
+_PROTECTED_PREFIXES_CASEFOLD = tuple(prefix.casefold() for prefix in PROTECTED_PREFIXES)
+_PROTECTED_EXACT_CASEFOLD = frozenset(path.casefold() for path in PROTECTED_EXACT)
 ALLOWED_SUFFIXES = frozenset({
     ".py", ".pyi", ".js", ".jsx", ".ts", ".tsx", ".mjs", ".c", ".h", ".cc",
     ".cpp", ".hpp", ".cs", ".java", ".kt", ".kts", ".go", ".rs", ".rb", ".php",
@@ -34,6 +42,16 @@ ALLOWED_SUFFIXES = frozenset({
 
 class LocalChangeError(ValueError):
     """Raised when a local change plan is invalid or cannot be applied safely."""
+
+
+class _PublishedCleanupError(LocalChangeError):
+    """A destination was published, but its temporary staging alias could not be removed."""
+
+    def __init__(self, path: Path, temporary_path: Path, sha256: str):
+        super().__init__("Staging alias cleanup failed after publication")
+        self.path = path
+        self.temporary_path = temporary_path
+        self.sha256 = sha256
 
 
 def _reject_link_components(path: str | Path, label: str) -> None:
@@ -66,7 +84,31 @@ def _safe_relative_path(raw: Any) -> str:
     normalized = path.as_posix()
     if normalized != raw:
         raise LocalChangeError(f"Path is not canonical: {raw!r}")
-    if normalized in PROTECTED_EXACT or any(normalized.startswith(p) for p in PROTECTED_PREFIXES):
+
+    # Plans must have the same meaning on POSIX and Windows. Reject Windows
+    # names that can redirect writes to streams/devices or normalize silently.
+    for component in path.parts:
+        if component.endswith((" ", ".")):
+            raise LocalChangeError(
+                f"Path component cannot end in a space or period on Windows: {component!r}"
+            )
+        if any(char in _WINDOWS_INVALID_COMPONENT_CHARS for char in component):
+            raise LocalChangeError(
+                f"Path component contains a Windows-invalid character: {component!r}"
+            )
+        device_name = component.split(".", 1)[0].rstrip(" .").casefold()
+        if (
+            device_name in _WINDOWS_DEVICE_NAMES
+            or _WINDOWS_DEVICE_NUMBER_RE.fullmatch(device_name)
+        ):
+            raise LocalChangeError(
+                f"Windows reserved device name is not an approved path component: {component!r}"
+            )
+
+    folded = normalized.casefold()
+    if folded in _PROTECTED_EXACT_CASEFOLD or any(
+        folded.startswith(prefix) for prefix in _PROTECTED_PREFIXES_CASEFOLD
+    ):
         raise LocalChangeError(f"Protected path cannot be modified: {normalized}")
     if not any(normalized.lower().endswith(suffix) for suffix in ALLOWED_SUFFIXES):
         raise LocalChangeError(f"File type is not approved for automatic changes: {normalized}")
@@ -111,16 +153,34 @@ def _validate_local_change_plan(plan: Any, root: str | Path) -> dict:
     base = lexical_root.resolve()
     if not base.is_dir():
         raise LocalChangeError("Project root must be an existing directory")
-    seen: set[str] = set()
+    seen: dict[str, str] = {}
+    seen_prefixes: dict[str, str] = {}
     normalized = []
     total_bytes = 0
     for item in changes:
         if not isinstance(item, dict) or set(item) - {"path", "content", "expected_sha256"} or not {"path", "content"} <= item.keys():
             raise LocalChangeError("Each change requires path and content, with optional expected_sha256")
         relative = _safe_relative_path(item["path"])
-        if relative in seen:
-            raise LocalChangeError(f"Duplicate path: {relative}")
-        seen.add(relative)
+        folded_path = relative.casefold()
+        if folded_path in seen:
+            previous = seen[folded_path]
+            if previous == relative:
+                raise LocalChangeError(f"Duplicate path: {relative}")
+            raise LocalChangeError(
+                f"Case-insensitive path collision: {previous!r} conflicts with {relative!r}"
+            )
+        seen[folded_path] = relative
+        prefix_parts: list[str] = []
+        for component in PurePosixPath(relative).parts:
+            prefix_parts.append(component)
+            exact_prefix = "/".join(prefix_parts)
+            folded_prefix = exact_prefix.casefold()
+            previous_prefix = seen_prefixes.get(folded_prefix)
+            if previous_prefix is not None and previous_prefix != exact_prefix:
+                raise LocalChangeError(
+                    f"Case-insensitive path-component collision: {previous_prefix!r} conflicts with {exact_prefix!r}"
+                )
+            seen_prefixes[folded_prefix] = exact_prefix
         content = item["content"]
         if not isinstance(content, str):
             raise LocalChangeError(f"Content must be UTF-8 text: {relative}")
@@ -196,6 +256,7 @@ def _write_atomic(
     _reject_link_components(path.parent, "Write destination")
     _reject_link_components(path, "Write destination")
     fd, temporary = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".botpyton-tmp", dir=path.parent)
+    published = False
     try:
         with os.fdopen(fd, "wb") as stream:
             stream.write(raw)
@@ -213,9 +274,15 @@ def _write_atomic(
             os.replace(temporary, path)
         else:
             os.link(temporary, path)
+        published = True
     finally:
         if os.path.exists(temporary):
-            os.unlink(temporary)
+            try:
+                os.unlink(temporary)
+            except OSError as exc:
+                if published:
+                    raise _PublishedCleanupError(path, Path(temporary), _sha256(raw)) from exc
+                raise
 
 
 def apply_local_change_plan(
@@ -224,7 +291,11 @@ def apply_local_change_plan(
     *,
     backup_root: str | Path | None = None,
 ) -> dict:
-    """Apply validated changes; existing files require a matching hash and are backed up."""
+    """Apply a reviewed change plan with backups, a durable journal, and guarded rollback."""
+    from .local_change_journal import (
+        _persist_transaction_journal, _transaction_identity,
+        _transaction_journal_path, _transaction_timestamp,
+    )
     validated = _validate_local_change_plan(plan, root)
     base = Path(validated["root"])
     backup_base_input = Path(backup_root).expanduser() if backup_root else (
@@ -244,78 +315,237 @@ def apply_local_change_plan(
           "expected_sha256": item["expected_sha256"]} for item in validated["changes"]],
         sort_keys=True, separators=(",", ":"),
     ).encode("utf-8"))
+
     backup_base.mkdir(parents=True, exist_ok=True)
     _reject_link_components(backup_base, "Backup directory")
-
-    written: list[Path] = []
-    written_hashes: dict[Path, str] = {}
-    backups: dict[Path, bytes | None] = {}
-    backup_records = []
-    try:
+    journal_path = _transaction_journal_path(backup_base, validated["task_id"], plan_fingerprint)
+    with exclusive_file_lock(journal_path.parent / f".{plan_fingerprint}.transaction.lock"):
+        transaction_entries = []
         for item in validated["changes"]:
-            _reject_link_components(base, "Project root")
-            target = _resolve_target(base, item["path"])
-            _reject_link_components(target.parent, "Project file parent")
-            original = target.read_bytes() if item["exists"] else None
-            if original is not None and _sha256(original) != item["expected_sha256"]:
-                raise LocalChangeError(f"File changed immediately before write: {item['path']}")
-            if original is None and target.exists():
-                raise LocalChangeError(f"File appeared immediately before write: {item['path']}")
-            backups[target] = original
-            if original is not None:
-                backup_path = backup_base / validated["task_id"] / plan_fingerprint / item["path"]
-                expected_backup_sha256 = _sha256(original)
-                _reject_link_components(backup_path.parent, "Backup file")
-                if backup_path.exists() or backup_path.is_symlink():
-                    _reject_link_components(backup_path, "Backup file")
-                    if not backup_path.is_file() or _sha256(backup_path.read_bytes()) != expected_backup_sha256:
-                        raise LocalChangeError("An existing backup does not match the expected original file; it was preserved.")
-                else:
-                    _write_atomic(backup_path, original, replace_existing=False)
-                backup_records.append({
-                    "path": item["path"],
-                    "backup_path": str(backup_path),
-                    "sha256": _sha256(original),
-                })
-            _write_atomic(
-                target,
-                item["content"].encode("utf-8"),
-                replace_existing=bool(item["exists"]),
-                expected_current_sha256=item["expected_sha256"],
-            )
-            written.append(target)
-            written_hashes[target] = item["new_sha256"]
-    except Exception as exc:
-        rollback_errors = []
-        for target in reversed(written):
-            try:
-                _reject_link_components(target.parent, "Rollback target")
-                _reject_link_components(target, "Rollback target")
-                if not target.is_file() or _is_link_or_reparse(target):
-                    raise OSError("rollback skipped because target is no longer a regular file")
-                if _sha256(target.read_bytes()) != written_hashes[target]:
-                    raise OSError("rollback skipped because target changed after BOTPYTON wrote it")
-                original = backups[target]
-                if original is None:
-                    target.unlink()
-                else:
-                    _write_atomic(target, original, expected_current_sha256=written_hashes[target])
-            except (OSError, LocalChangeError) as rollback_exc:
-                rollback_errors.append(f"{target}: {type(rollback_exc).__name__}")
-        message = f"Local change failed and rollback was attempted: {type(exc).__name__}: {exc}"
-        if rollback_errors:
-            message += "; rollback errors: " + ", ".join(rollback_errors)
-        raise LocalChangeError(message) from exc
+            transaction_entries.append({
+                "path": item["path"],
+                "original_exists": item["exists"],
+                "original_sha256": item["current_sha256"],
+                "new_sha256": item["new_sha256"],
+                "backup_relative_path": (
+                    PurePosixPath(validated["task_id"], plan_fingerprint, item["path"]).as_posix()
+                    if item["exists"] else None
+                ),
+                "status": "pending",
+                "published_identity": None,
+            })
+        journal = {
+            "schema_version": TRANSACTION_SCHEMA_VERSION,
+            "transaction_id": plan_fingerprint,
+            "task_id": validated["task_id"],
+            "project_root": str(base),
+            "backup_root": str(backup_base),
+            "created_at": _transaction_timestamp(),
+            "updated_at": _transaction_timestamp(),
+            "status": "prepared",
+            "changes": transaction_entries,
+        }
+        try:
+            _persist_transaction_journal(journal_path, journal, create=True)
+        except LocalChangeError:
+            raise
+        except Exception as exc:
+            raise LocalChangeError(
+                f"Could not create transaction journal before project writes: {type(exc).__name__}"
+            ) from exc
 
-    return {
-        **_public_summary(validated),
-        "mode": "executed",
-        "writes_performed": True,
-        "backups": backup_records,
-        "plan_fingerprint": plan_fingerprint,
-        "written_files": [item["path"] for item in validated["changes"]],
-        "rollback_performed": False,
-    }
+        written: list[Path] = []
+        written_hashes: dict[Path, str] = {}
+        backups: dict[Path, bytes | None] = {}
+        backup_records = []
+        entries_by_path = {item["path"]: item for item in journal["changes"]}
+        try:
+            for item in validated["changes"]:
+                _reject_link_components(base, "Project root")
+                target = _resolve_target(base, item["path"])
+                _reject_link_components(target.parent, "Project file parent")
+                original = target.read_bytes() if item["exists"] else None
+                if original is not None and _sha256(original) != item["expected_sha256"]:
+                    raise LocalChangeError(f"File changed immediately before write: {item['path']}")
+                if original is None and target.exists():
+                    raise LocalChangeError(f"File appeared immediately before write: {item['path']}")
+                backups[target] = original
+                journal_entry = entries_by_path[item["path"]]
+                if original is not None:
+                    backup_path = backup_base / validated["task_id"] / plan_fingerprint / item["path"]
+                    expected_backup_sha256 = _sha256(original)
+                    _reject_link_components(backup_path.parent, "Backup file")
+                    if backup_path.exists() or backup_path.is_symlink():
+                        _reject_link_components(backup_path, "Backup file")
+                        if not backup_path.is_file() or _sha256(backup_path.read_bytes()) != expected_backup_sha256:
+                            raise LocalChangeError("An existing backup does not match the expected original file; it was preserved.")
+                    else:
+                        _write_atomic(backup_path, original, replace_existing=False)
+                    backup_records.append({
+                        "path": item["path"],
+                        "backup_path": str(backup_path),
+                        "sha256": _sha256(original),
+                    })
+                    journal_entry["status"] = "backed_up"
+                    _persist_transaction_journal(journal_path, journal)
+
+                journal_entry["status"] = "publishing"
+                journal["status"] = "applying"
+                _persist_transaction_journal(journal_path, journal)
+                try:
+                    _write_atomic(
+                        target,
+                        item["content"].encode("utf-8"),
+                        replace_existing=bool(item["exists"]),
+                        expected_current_sha256=item["expected_sha256"],
+                    )
+                except _PublishedCleanupError as publish_error:
+                    # The destination was published before temporary-alias cleanup failed.
+                    # Track it before propagating so the normal guarded rollback can run.
+                    if (
+                        publish_error.path == target
+                        and target.is_file()
+                        and _sha256(target.read_bytes()) == item["new_sha256"]
+                    ):
+                        written.append(target)
+                        written_hashes[target] = item["new_sha256"]
+                        journal_entry["status"] = "published"
+                        journal_entry["published_identity"] = _transaction_identity(target)
+                        try:
+                            _persist_transaction_journal(journal_path, journal)
+                        except Exception:
+                            pass
+                        try:
+                            publish_error.temporary_path.unlink(missing_ok=True)
+                        except OSError:
+                            # Preserve accurate error disclosure if this alias cannot be cleaned.
+                            pass
+                    raise
+
+                written.append(target)
+                written_hashes[target] = item["new_sha256"]
+                journal_entry["status"] = "published"
+                journal_entry["published_identity"] = _transaction_identity(target)
+                _persist_transaction_journal(journal_path, journal)
+
+            journal["status"] = "completed"
+            _persist_transaction_journal(journal_path, journal)
+        except Exception as exc:
+            rollback_errors: list[str] = []
+            if isinstance(exc, _PublishedCleanupError):
+                try:
+                    exc.temporary_path.unlink(missing_ok=True)
+                except OSError:
+                    rollback_errors.append("staging_alias_cleanup_failed")
+            for target in reversed(written):
+                relative = target.relative_to(base).as_posix()
+                journal_entry = entries_by_path[relative]
+                try:
+                    _reject_link_components(target.parent, "Rollback target")
+                    _reject_link_components(target, "Rollback target")
+                    if not target.is_file() or _is_link_or_reparse(target):
+                        raise OSError("rollback skipped because target is no longer a regular file")
+                    current = read_bounded_bytes(
+                        target, limit_bytes=MAX_FILE_BYTES, label="Local-change rollback target"
+                    )
+                    if _sha256(current) != written_hashes[target]:
+                        raise OSError("rollback skipped because target changed after BOTPYTON wrote it")
+                    expected_identity = journal_entry["published_identity"]
+                    if expected_identity is not None and _transaction_identity(target) != expected_identity:
+                        raise OSError("rollback skipped because target identity changed after BOTPYTON wrote it")
+                    original = backups[target]
+                    if original is None:
+                        target.unlink()
+                    else:
+                        _write_atomic(
+                            target, original, expected_current_sha256=written_hashes[target]
+                        )
+                    journal_entry["status"] = "rolled_back"
+                    journal_entry["published_identity"] = None
+                    _persist_transaction_journal(journal_path, journal)
+                except Exception as rollback_exc:
+                    if isinstance(rollback_exc, _PublishedCleanupError):
+                        try:
+                            rollback_exc.temporary_path.unlink(missing_ok=True)
+                        except OSError:
+                            rollback_errors.append(f"{target}: staging_alias_cleanup_failed")
+                    try:
+                        current_after_error = (
+                            read_bounded_bytes(
+                                target, limit_bytes=MAX_FILE_BYTES, label="Rollback conflict probe"
+                            ) if target.is_file() and not _is_link_or_reparse(target) else None
+                        )
+                        original_after_error = backups[target]
+                        if (
+                            (original_after_error is not None and current_after_error == original_after_error)
+                            or (original_after_error is None and current_after_error is None)
+                        ):
+                            # The file rollback committed even if a subsequent journal
+                            # write failed; retry recording that verified state.
+                            journal_entry["status"] = "rolled_back"
+                            journal_entry["published_identity"] = None
+                        elif current_after_error is None or _sha256(current_after_error) != written_hashes[target]:
+                            journal_entry["status"] = "external_change_preserved"
+                            rollback_errors.append(f"{target}: external_change_preserved")
+                        else:
+                            journal_entry["status"] = "rollback_failed"
+                            rollback_errors.append(f"{target}: {type(rollback_exc).__name__}")
+                        _persist_transaction_journal(journal_path, journal)
+                    except Exception:
+                        journal_entry["status"] = "rollback_failed"
+                        rollback_errors.append(f"{target}: {type(rollback_exc).__name__}")
+
+            # Record changes which were never positively confirmed as published.
+            # An uncertain publication is never deleted or overwritten automatically.
+            for item in journal["changes"]:
+                if item["path"] in {path.relative_to(base).as_posix() for path in written}:
+                    continue
+                if item["status"] in {"pending", "backed_up", "publishing"}:
+                    try:
+                        target = _resolve_target(base, item["path"])
+                        if item["original_exists"]:
+                            if target.is_file() and _sha256(read_bounded_bytes(
+                                target, limit_bytes=MAX_FILE_BYTES, label="Unpublished transaction target"
+                            )) == item["original_sha256"]:
+                                item["status"] = "rolled_back"
+                            else:
+                                item["status"] = "ambiguous"
+                        else:
+                            item["status"] = "rolled_back" if not target.exists() else "ambiguous"
+                        _persist_transaction_journal(journal_path, journal)
+                    except Exception:
+                        item["status"] = "ambiguous"
+                        rollback_errors.append(f"{item['path']}: recovery_state_unverified")
+                        try:
+                            _persist_transaction_journal(journal_path, journal)
+                        except Exception:
+                            pass
+
+            journal["status"] = "rollback_partial" if rollback_errors or any(
+                item["status"] not in {"rolled_back", "already_original"}
+                for item in journal["changes"]
+            ) else "rolled_back"
+            try:
+                _persist_transaction_journal(journal_path, journal)
+            except Exception as journal_exc:
+                rollback_errors.append(f"transaction journal: {type(journal_exc).__name__}")
+            message = f"Local change failed and rollback was attempted: {type(exc).__name__}: {exc}"
+            if rollback_errors:
+                message += "; unresolved recovery: " + ", ".join(rollback_errors)
+            message += f"; transaction journal: {journal_path}"
+            raise LocalChangeError(message) from exc
+
+        return {
+            **_public_summary(validated),
+            "mode": "executed",
+            "writes_performed": True,
+            "backups": backup_records,
+            "plan_fingerprint": plan_fingerprint,
+            "transaction_id": plan_fingerprint,
+            "transaction_journal_path": str(journal_path),
+            "written_files": [item["path"] for item in validated["changes"]],
+            "rollback_performed": False,
+        }
 
 
 def read_local_plan(path: str | Path, *, max_bytes: int = MAX_PLAN_BYTES) -> Any:
@@ -327,3 +557,25 @@ def read_local_plan(path: str | Path, *, max_bytes: int = MAX_PLAN_BYTES) -> Any
         return value
     except (BoundedReadError, UnicodeError, json.JSONDecodeError, RecursionError) as exc:
         raise LocalChangeError(f"Plan is not safe UTF-8 JSON: {exc}") from exc
+
+
+def inspect_local_change_transaction(
+    journal_path: str | Path,
+    project_root: str | Path,
+) -> dict[str, Any]:
+    """Read-only inspection of a durable local change transaction journal."""
+    from .local_change_journal import inspect_local_change_transaction as inspect
+    return inspect(journal_path, project_root)
+
+
+def rollback_local_change_transaction(
+    journal_path: str | Path,
+    project_root: str | Path,
+    *,
+    expected_transaction_id: str,
+) -> dict[str, Any]:
+    """Explicitly roll back only published files whose identity and hash still match."""
+    from .local_change_journal import rollback_local_change_transaction as rollback
+    return rollback(
+        journal_path, project_root, expected_transaction_id=expected_transaction_id
+    )

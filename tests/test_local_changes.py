@@ -1,5 +1,7 @@
 import hashlib
+import json
 import tempfile
+import threading
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -9,6 +11,8 @@ from bot.local_changes import (
     apply_local_change_plan,
     read_local_plan,
     validate_local_change_plan,
+    inspect_local_change_transaction,
+    rollback_local_change_transaction,
 )
 
 
@@ -78,6 +82,87 @@ class LocalChangePlanTests(unittest.TestCase):
                 with self.subTest(path=path), self.assertRaises(LocalChangeError):
                     validate_local_change_plan(plan, root)
 
+    def test_protected_paths_are_case_insensitive_for_windows_compatibility(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            paths = (
+                ".GIT/hooks/pre-commit.py",
+                ".GiThUb/workflows/ci.yml",
+                ".CEREBRO/CONFIG.JSON",
+                ".VENV/tools.py",
+                "NODE_MODULES/loader.js",
+                "DiSt/generated.py",
+                "BuIlD/generated.py",
+            )
+            for path in paths:
+                plan = {
+                    "schema_version": 1,
+                    "task_id": "mixed-case-protected",
+                    "changes": [{"path": path, "content": "unsafe = True\\n"}],
+                }
+                with self.subTest(path=path), self.assertRaisesRegex(
+                    LocalChangeError, "Protected path"
+                ):
+                    validate_local_change_plan(plan, root)
+
+    def test_rejects_windows_streams_devices_and_ambiguous_names(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            invalid_paths = (
+                "settings.py" + chr(58) + "backup",
+                "bad" + chr(63) + ".py",
+                "C" + "ON.py",
+                "n" + "ul.txt",
+                "nested/N" + "UL.json.py",
+                "C" + "OM1.py",
+                "trailing.py" + ".",
+                "folder." + "/child.py",
+                "folder " + "/child.py",
+            )
+            for path in invalid_paths:
+                plan = {
+                    "schema_version": 1,
+                    "task_id": "portable-paths",
+                    "changes": [{"path": path, "content": "safe = True\\n"}],
+                }
+                with self.subTest(path=path), self.assertRaises(LocalChangeError):
+                    validate_local_change_plan(plan, root)
+
+    def test_rejects_case_insensitive_file_and_directory_collisions(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            plans = (
+                [
+                    {"path": "Settings.py", "content": "ONE = 1\\n"},
+                    {"path": "settings.py", "content": "TWO = 2\\n"},
+                ],
+                [
+                    {"path": "src/app.py", "content": "ONE = 1\\n"},
+                    {"path": "SRC/test.py", "content": "TWO = 2\\n"},
+                ],
+            )
+            for changes in plans:
+                plan = {"schema_version": 1, "task_id": "case-collision", "changes": changes}
+                with self.subTest(paths=[item["path"] for item in changes]), self.assertRaisesRegex(
+                    LocalChangeError, "Case-insensitive path"
+                ):
+                    validate_local_change_plan(plan, root)
+
+    def test_allows_multiple_files_with_consistent_portable_parent_spelling(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            plan = {
+                "schema_version": 1,
+                "task_id": "consistent-paths",
+                "changes": [
+                    {"path": "src/app.py", "content": "APP = True\\n"},
+                    {"path": "src/helper.py", "content": "HELPER = True\\n"},
+                ],
+            }
+            result = validate_local_change_plan(plan, root)
+            self.assertEqual(result["file_count"], 2)
+            self.assertFalse(result["writes_performed"])
+
     def test_rejects_existing_file_without_hash_and_invalid_limits(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
@@ -136,17 +221,69 @@ class LocalChangePlanTests(unittest.TestCase):
             }
             sentinel = b"created concurrently; preserve me"
             real_link = os.link
+            injected = False
 
             def create_collision_then_link(source, destination, *args, **kwargs):
-                Path(destination).write_bytes(sentinel)
+                nonlocal injected
+                candidate = Path(destination)
+                if (
+                    not injected
+                    and candidate.name.casefold() == target.name.casefold()
+                    and candidate.parent.name.casefold() == root.name.casefold()
+                ):
+                    candidate.write_bytes(sentinel)
+                    injected = True
                 return real_link(source, destination, *args, **kwargs)
 
             with patch("bot.local_changes.os.link", side_effect=create_collision_then_link):
                 with self.assertRaises(LocalChangeError):
                     apply_local_change_plan(plan, root, backup_root=base / "backups")
 
+            self.assertTrue(injected, "the race must be injected at the project-file destination")
             self.assertEqual(target.read_bytes(), sentinel)
             self.assertEqual(list(root.glob(".*.botpyton-tmp")), [])
+
+    def test_new_file_cleanup_failure_rolls_back_the_published_destination(self):
+        import os
+
+        with tempfile.TemporaryDirectory() as temp:
+            base = Path(temp)
+            root = base / "project"
+            root.mkdir()
+            target = root / "new_after_cleanup.py"
+            plan = {
+                "schema_version": 1,
+                "task_id": "new-cleanup-recovery",
+                "changes": [{"path": target.name, "content": "VALUE = 2\\n"}],
+            }
+            real_unlink = os.unlink
+            injected = False
+
+            def fail_first_staging_cleanup(path, *args, **kwargs):
+                nonlocal injected
+                candidate = Path(path)
+                if (
+                    not injected
+                    and target.name in str(path)
+                    and candidate.name.endswith(".botpyton-tmp")
+                ):
+                    injected = True
+                    raise PermissionError("injected post-publication staging cleanup failure")
+                return real_unlink(path, *args, **kwargs)
+
+            with patch("bot.local_changes.os.unlink", side_effect=fail_first_staging_cleanup):
+                with self.assertRaisesRegex(
+                    LocalChangeError, "Staging alias cleanup failed after publication"
+                ):
+                    apply_local_change_plan(plan, root, backup_root=base / "backups")
+
+            self.assertTrue(injected, "failure must occur after the new destination was linked")
+            self.assertFalse(target.exists(), "a confirmed BOTPYTON publication must be rolled back")
+            self.assertEqual(
+                list(root.glob(f".{target.name}.*.botpyton-tmp")),
+                [],
+                "the cleanup retry should remove the staging alias",
+            )
 
     def test_existing_file_changed_during_backup_is_not_overwritten(self):
         import os
@@ -170,12 +307,16 @@ class LocalChangePlanTests(unittest.TestCase):
             }
             sentinel = b"external change must survive"
             real_fsync = os.fsync
+            fsync_count = 0
             changed = False
 
             def inject_external_change(fd):
-                nonlocal changed
+                nonlocal changed, fsync_count
                 result = real_fsync(fd)
-                if not changed:
+                fsync_count += 1
+                # The durable transaction journal is fsynced first. Inject the
+                # conflict after the original backup has been staged instead.
+                if not changed and fsync_count >= 2:
                     changed = True
                     target.write_bytes(sentinel)
                 return result
@@ -226,6 +367,298 @@ class LocalChangePlanTests(unittest.TestCase):
 
             self.assertEqual(target.read_bytes(), original)
             self.assertEqual(backup_path.read_bytes(), sentinel)
+
+    def test_successful_multifile_plan_persists_content_free_transaction_journal(self):
+        with tempfile.TemporaryDirectory() as temp:
+            base = Path(temp)
+            root = base / "project"
+            root.mkdir()
+            existing = root / "app.py"
+            existing.write_bytes(b"VALUE = 1\n")
+            backup_root = base / "backups"
+            plan = {
+                "schema_version": 1,
+                "task_id": "journal-success",
+                "changes": [
+                    {
+                        "path": "app.py",
+                        "content": "VALUE = 2\n",
+                        "expected_sha256": digest(b"VALUE = 1\n"),
+                    },
+                    {"path": "new.py", "content": "VALUE = 3\n"},
+                ],
+            }
+            result = apply_local_change_plan(plan, root, backup_root=backup_root)
+            journal_path = Path(result["transaction_journal_path"])
+            journal = json.loads(journal_path.read_text(encoding="utf-8"))
+
+            self.assertEqual(journal["status"], "completed")
+            self.assertEqual(journal["transaction_id"], result["transaction_id"])
+            self.assertEqual(
+                [item["status"] for item in journal["changes"]],
+                ["published", "published"],
+            )
+            self.assertTrue(all("content" not in item for item in journal["changes"]))
+            self.assertEqual(existing.read_bytes(), b"VALUE = 2\n")
+            self.assertEqual((root / "new.py").read_bytes(), b"VALUE = 3\n")
+            self.assertEqual(
+                inspect_local_change_transaction(journal_path, root)["writes_performed"],
+                False,
+            )
+
+    def test_explicit_transaction_rollback_restores_originals_and_removes_new_files(self):
+        with tempfile.TemporaryDirectory() as temp:
+            base = Path(temp)
+            root = base / "project"
+            root.mkdir()
+            existing = root / "app.py"
+            original = b"VALUE = 1\n"
+            existing.write_bytes(original)
+            plan = {
+                "schema_version": 1,
+                "task_id": "journal-rollback",
+                "changes": [
+                    {
+                        "path": "app.py",
+                        "content": "VALUE = 2\n",
+                        "expected_sha256": digest(original),
+                    },
+                    {"path": "new.py", "content": "VALUE = 3\n"},
+                ],
+            }
+            result = apply_local_change_plan(plan, root, backup_root=base / "backups")
+            journal_path = Path(result["transaction_journal_path"])
+
+            rolled_back = rollback_local_change_transaction(
+                journal_path, root, expected_transaction_id=result["transaction_id"]
+            )
+
+            self.assertEqual(rolled_back["recovery"], "rollback_complete")
+            self.assertEqual(rolled_back["transaction_status"], "rolled_back")
+            self.assertEqual(existing.read_bytes(), original)
+            self.assertFalse((root / "new.py").exists())
+            self.assertTrue(rolled_back["writes_performed"])
+
+    def test_transaction_rollback_requires_exact_transaction_id(self):
+        with tempfile.TemporaryDirectory() as temp:
+            base = Path(temp)
+            root = base / "project"
+            root.mkdir()
+            result = apply_local_change_plan(
+                {
+                    "schema_version": 1,
+                    "task_id": "journal-id-guard",
+                    "changes": [{"path": "new.py", "content": "safe = True\n"}],
+                },
+                root,
+                backup_root=base / "backups",
+            )
+            target = root / "new.py"
+            with self.assertRaisesRegex(LocalChangeError, "confirmation does not match"):
+                rollback_local_change_transaction(
+                    result["transaction_journal_path"], root,
+                    expected_transaction_id="0" * 64,
+                )
+            self.assertEqual(target.read_text(encoding="utf-8"), "safe = True\n")
+
+    def test_transaction_rollback_preserves_external_changes(self):
+        with tempfile.TemporaryDirectory() as temp:
+            base = Path(temp)
+            root = base / "project"
+            root.mkdir()
+            target = root / "existing.py"
+            target.write_bytes(b"VALUE = 1\n")
+            plan = {
+                "schema_version": 1,
+                "task_id": "journal-external-change",
+                "changes": [{
+                    "path": "existing.py",
+                    "content": "VALUE = 2\n",
+                    "expected_sha256": digest(b"VALUE = 1\n"),
+                }],
+            }
+            result = apply_local_change_plan(plan, root, backup_root=base / "backups")
+            target.write_bytes(b"external update\n")
+
+            report = rollback_local_change_transaction(
+                result["transaction_journal_path"], root,
+                expected_transaction_id=result["transaction_id"],
+            )
+
+            self.assertEqual(target.read_bytes(), b"external update\n")
+            self.assertEqual(report["recovery"], "rollback_partial")
+            self.assertEqual(report["changes"][0]["recommended_action"], "manual_review_preserve_current_state")
+
+    def test_interrupted_publication_with_unknown_identity_requires_manual_review(self):
+        with tempfile.TemporaryDirectory() as temp:
+            base = Path(temp)
+            root = base / "project"
+            root.mkdir()
+            plan = {
+                "schema_version": 1,
+                "task_id": "journal-uncertain",
+                "changes": [{"path": "new.py", "content": "VALUE = 2\n"}],
+            }
+            result = apply_local_change_plan(plan, root, backup_root=base / "backups")
+            journal_path = Path(result["transaction_journal_path"])
+            journal = json.loads(journal_path.read_text(encoding="utf-8"))
+            journal["status"] = "applying"
+            journal["changes"][0]["status"] = "publishing"
+            journal["changes"][0]["published_identity"] = None
+            from bot.local_change_journal import _journal_checksum
+            journal["journal_sha256"] = _journal_checksum(journal)
+            journal_path.write_text(
+                json.dumps(journal, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+                encoding="utf-8",
+            )
+
+            inspected = inspect_local_change_transaction(journal_path, root)
+            self.assertEqual(
+                inspected["changes"][0]["recommended_action"],
+                "manual_review_ambiguous_publication",
+            )
+            report = rollback_local_change_transaction(
+                journal_path, root, expected_transaction_id=result["transaction_id"]
+            )
+            self.assertEqual((root / "new.py").read_text(encoding="utf-8"), "VALUE = 2\n")
+            self.assertEqual(report["recovery"], "rollback_partial")
+
+    def test_transaction_journal_checksum_detects_accidental_state_edits(self):
+        with tempfile.TemporaryDirectory() as temp:
+            base = Path(temp)
+            root = base / "project"
+            root.mkdir()
+            result = apply_local_change_plan(
+                {
+                    "schema_version": 1,
+                    "task_id": "journal-integrity-check",
+                    "changes": [{"path": "created.py", "content": "VALUE = 1\n"}],
+                },
+                root,
+                backup_root=base / "backups",
+            )
+            journal_path = Path(result["transaction_journal_path"])
+            journal = json.loads(journal_path.read_text(encoding="utf-8"))
+            journal["status"] = "rolled_back"
+            journal_path.write_text(
+                json.dumps(journal, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+                encoding="utf-8",
+            )
+
+            with self.assertRaisesRegex(LocalChangeError, "integrity checksum mismatch"):
+                inspect_local_change_transaction(journal_path, root)
+            with self.assertRaisesRegex(LocalChangeError, "integrity checksum mismatch"):
+                rollback_local_change_transaction(
+                    journal_path, root, expected_transaction_id=result["transaction_id"]
+                )
+            self.assertEqual((root / "created.py").read_text(encoding="utf-8"), "VALUE = 1\n")
+
+    def test_rollback_waits_for_active_apply_transaction(self):
+        with tempfile.TemporaryDirectory() as temp:
+            base = Path(temp)
+            root = base / "project"
+            root.mkdir()
+            backup_root = base / "backups"
+            target = root / "created.py"
+            plan = {
+                "schema_version": 1,
+                "task_id": "concurrent-journal-guard",
+                "changes": [{"path": "created.py", "content": "VALUE = 1\n"}],
+            }
+            writer_at_publication = threading.Event()
+            release_writer = threading.Event()
+            rollback_started = threading.Event()
+            rollback_finished = threading.Event()
+            inspect_started = threading.Event()
+            inspect_finished = threading.Event()
+            outcomes = {}
+            errors = []
+            real_write_atomic = __import__("bot.local_changes", fromlist=["_write_atomic"])._write_atomic
+
+            def pause_project_publication(path, raw, **kwargs):
+                candidate = Path(path)
+                if (
+                    candidate.name.casefold() == target.name.casefold()
+                    and raw == b"VALUE = 1\n"
+                ):
+                    writer_at_publication.set()
+                    if not release_writer.wait(5):
+                        raise TimeoutError("test did not release publication gate")
+                return real_write_atomic(path, raw, **kwargs)
+
+            def apply_worker():
+                try:
+                    with patch("bot.local_changes._write_atomic", side_effect=pause_project_publication):
+                        outcomes["apply"] = apply_local_change_plan(
+                            plan, root, backup_root=backup_root
+                        )
+                except Exception as exc:
+                    errors.append(exc)
+
+            def rollback_worker(journal_path, transaction_id):
+                rollback_started.set()
+                try:
+                    outcomes["rollback"] = rollback_local_change_transaction(
+                        journal_path, root, expected_transaction_id=transaction_id
+                    )
+                except Exception as exc:
+                    errors.append(exc)
+                finally:
+                    rollback_finished.set()
+
+            def inspect_worker(journal_path):
+                inspect_started.set()
+                try:
+                    outcomes["inspect"] = inspect_local_change_transaction(journal_path, root)
+                except Exception as exc:
+                    errors.append(exc)
+                finally:
+                    inspect_finished.set()
+
+            writer = threading.Thread(target=apply_worker, daemon=True)
+            writer.start()
+            if not writer_at_publication.wait(5):
+                release_writer.set()
+                writer.join(5)
+                self.fail(f"apply did not reach target publication; worker_errors={errors!r}")
+            journal_dir = backup_root / ".botpyton-transactions"
+            journal_files = list(journal_dir.glob("concurrent-journal-guard-*.json"))
+            self.assertEqual(len(journal_files), 1)
+            journal = json.loads(journal_files[0].read_text(encoding="utf-8"))
+
+            inspect = threading.Thread(
+                target=inspect_worker, args=(journal_files[0],), daemon=True
+            )
+            rollback = threading.Thread(
+                target=rollback_worker,
+                args=(journal_files[0], journal["transaction_id"]),
+                daemon=True,
+            )
+            inspect.start()
+            rollback.start()
+            self.assertTrue(inspect_started.wait(5))
+            self.assertTrue(rollback_started.wait(5))
+            self.assertFalse(
+                inspect_finished.wait(0.2),
+                "inspection must wait while apply owns the transaction lock",
+            )
+            self.assertFalse(
+                rollback_finished.wait(0.2),
+                "rollback must wait while apply owns the transaction lock",
+            )
+
+            release_writer.set()
+            writer.join(5)
+            inspect.join(5)
+            rollback.join(5)
+            self.assertFalse(writer.is_alive(), "apply thread did not finish")
+            self.assertFalse(inspect.is_alive(), "inspection thread did not finish")
+            self.assertFalse(rollback.is_alive(), "rollback thread did not finish")
+            self.assertEqual(errors, [])
+            self.assertEqual(outcomes["inspect"]["writes_performed"], False)
+            self.assertIn(outcomes["inspect"]["transaction_status"], {"completed", "rolled_back"})
+            self.assertEqual(outcomes["rollback"]["recovery"], "rollback_complete")
+            self.assertFalse(target.exists(), "serialized rollback should remove the new file")
 
     def test_reads_bounded_json_plan(self):
         with tempfile.TemporaryDirectory() as temp:

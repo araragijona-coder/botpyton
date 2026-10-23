@@ -49,6 +49,24 @@ class PersistentQueueTests(unittest.TestCase):
         self.assertEqual(first["idempotency_key"], second["idempotency_key"])
         self.assertEqual(len(self.queue.list_tasks()), 1)
 
+    def test_scoped_claim_does_not_run_unrelated_pending_tasks(self):
+        self.queue.enqueue_many([task("A"), task("B")])
+
+        claimed = self.queue.claim_next(allowed_task_ids={"B"})
+        self.assertEqual(claimed["id"], "B")
+        self.assertEqual(self.queue.get("A")["status"], "pending")
+
+        self.queue.complete("B", {"ok": True})
+        claimed_a = self.queue.claim_next(allowed_task_ids=frozenset({"A"}))
+        self.assertEqual(claimed_a["id"], "A")
+        self.assertEqual(self.queue.get("B")["status"], "succeeded")
+
+    def test_scoped_claim_rejects_malformed_allowlist(self):
+        self.queue.enqueue_many([task("A")])
+        for invalid in (["A"], {"", "A"}, {1}):
+            with self.subTest(invalid=invalid), self.assertRaises(QueueError):
+                self.queue.claim_next(allowed_task_ids=invalid)
+
     def test_two_processes_cannot_claim_the_same_task(self):
         self.queue.enqueue_many([task("A")])
         context = multiprocessing.get_context("spawn")
