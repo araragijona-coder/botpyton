@@ -398,6 +398,32 @@ class ArchitectOrderContractTests(unittest.TestCase):
         with self.assertRaisesRegex(ArchitectOrderError, "Task batch failed strict validation|unsafe relative path|canonical relative path"):
             validate_architect_order(packet([unsafe]))
 
+    def test_reviewed_patch_tasks_cannot_overlap_even_with_windows_case_variants(self):
+        patch_template = (
+            "diff --git a/{path} b/{path}\\n"
+            "--- a/{path}\\n"
+            "+++ b/{path}\\n"
+            "@@ -1 +1 @@\\n"
+            "-VALUE = 1\\n"
+            "+VALUE = 2\\n"
+        )
+        first = task(
+            "ARCH-PATCH-OVERLAP-A",
+            actions=["apply_reviewed_patch", "prepare_report"],
+            checks=[{"type": "patch_applied"}, {"type": "python_syntax"}],
+        )
+        second = task(
+            "ARCH-PATCH-OVERLAP-B",
+            actions=["apply_reviewed_patch", "prepare_report"],
+            checks=[{"type": "patch_applied"}, {"type": "python_syntax"}],
+        )
+        first["success_conditions"] = ["patch_applied", "python_syntax"]
+        second["success_conditions"] = ["patch_applied", "python_syntax"]
+        first["reviewed_patch"] = patch_template.format(path="App.py")
+        second["reviewed_patch"] = patch_template.format(path="app.py")
+        with self.assertRaisesRegex(ArchitectOrderError, "both change"):
+            validate_architect_order(packet([first, second]))
+
     def test_inline_reviewed_patch_is_preflighted_and_applied_only_in_order_worktree(self):
         if not shutil.which("git"):
             self.skipTest("Git is required for isolated architect workspace tests")
