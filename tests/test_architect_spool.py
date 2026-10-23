@@ -1,4 +1,5 @@
 import contextlib
+import hashlib
 import io
 import json
 import tempfile
@@ -6,6 +7,8 @@ import unittest
 from pathlib import Path
 
 from bot.architect_spool import ArchitectSpoolError, run_order_spool
+from bot.architect_order_contract import validate_architect_order
+from bot.architect_order_response import ArchitectResponseWriter, build_architect_response
 from bot.main import main
 
 
@@ -109,20 +112,41 @@ class ArchitectSpoolTests(unittest.TestCase):
 
             # The profile now differs, so the previously blocked packet can be
             # deliberately re-considered after the operator grants this capability.
-            code, permitted = self.invoke(
-                inbox, outbox, "--execute-architect-order", "--execute-project-code"
+            def accepted_runner(snapshot, response_path, flags):
+                raw = snapshot.read_bytes()
+                order = validate_architect_order(json.loads(raw.decode("utf-8")))
+                response = build_architect_response(
+                    order, hashlib.sha256(raw).hexdigest(), status="succeeded",
+                    execution_started=True, queue_mutated=True,
+                    operator_flags=flags,
+                    execution={
+                        "status": "succeeded", "tasks": [{"id": "SPOOL-TASK-001", "status": "succeeded", "attempts": 1}],
+                        "attempt_results": [], "attempts_executed": 1,
+                    },
+                )
+                with ArchitectResponseWriter(response_path) as writer:
+                    writer.write(response)
+                return {"exit_code": 0, "stdout": "", "stderr": ""}
+
+            permitted = run_order_spool(
+                inbox_path=inbox, outbox_path=outbox,
+                execute=True, authorize_local_writes=False, execute_project_code=True,
+                project_root=str(inbox), memory_path=str(outbox / "queue.json"),
+                check_timeout=10, run_order=accepted_runner,
             )
             self.assertEqual(permitted["spool_status"], "processed")
             self.assertNotEqual(blocked["response_file"], permitted["response_file"])
-            self.assertNotEqual(permitted["status"], "authorization_required")
+            self.assertEqual(permitted["status"], "succeeded")
 
     def test_direct_module_rejects_overlapping_directories(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
+            nested_outbox = root / "outbox"
+            nested_outbox.mkdir()
             with self.assertRaisesRegex(ArchitectSpoolError, "must not contain one another"):
                 run_order_spool(
                     inbox_path=root,
-                    outbox_path=root / "outbox",
+                    outbox_path=nested_outbox,
                     execute=False,
                     authorize_local_writes=False,
                     execute_project_code=False,
