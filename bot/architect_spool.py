@@ -173,7 +173,7 @@ def _registered_workspace_root(
     except (OSError, RuntimeError, ValueError):
         return None, {"status": "source_root_not_repository_root", "registered": False}
 
-    for block in listed["stdout"].split("\\n\\n"):
+    for block in listed["stdout"].split("\n\n"):
         lines = block.splitlines()
         worktree_line = next((line[len("worktree "):] for line in lines if line.startswith("worktree ")), None)
         if worktree_line is None:
@@ -215,7 +215,7 @@ def _inspect_task_report(
         return {"status": "report_root_unavailable", "verified_success": False}
     if not isinstance(report_path, str) or not report_path.strip():
         return {"status": "report_path_missing", "verified_success": False}
-    normalized = report_path.replace("\\\\", "/")
+    normalized = report_path.replace("\\", "/")
     if not _TASK_REPORT_PATH.fullmatch(normalized):
         return {"status": "unsafe_report_reference", "verified_success": False}
     relative = PurePosixPath(normalized)
@@ -428,6 +428,9 @@ def run_order_spool(
                 if previous_response.get("execution") is not None:
                     binding_mismatches.append("execution")
 
+                report_root, report_root_evidence = _registered_workspace_root(
+                    project_root, previous_response, binding_mismatches
+                )
                 queue_snapshot: dict[str, Any] = {
                     "status": "unavailable",
                     "tasks": [],
@@ -442,23 +445,37 @@ def run_order_spool(
                     for task_id in task_ids:
                         record = indexed.get(task_id)
                         if record is None:
-                            queue_tasks.append({"task_id": task_id, "status": "not_found"})
+                            queue_tasks.append({
+                                "task_id": task_id,
+                                "status": "not_found",
+                                "report_evidence": {"status": "no_queue_record", "verified_success": False},
+                            })
                             continue
                         result = record.get("result")
+                        report_path = result.get("report_path") if isinstance(result, dict) else None
+                        report_evidence = _inspect_task_report(report_root, task_id, report_path)
                         queue_tasks.append({
                             "task_id": task_id,
                             "status": record.get("status"),
                             "attempts": record.get("attempts"),
-                            "last_error": record.get("last_error"),
-                            "report_path": result.get("report_path") if isinstance(result, dict) else None,
-                            "verification_recorded": (
+                            "last_error": str(record.get("last_error") or "")[:1_000] or None,
+                            "report_path": report_path,
+                            "queue_verification_recorded": (
                                 isinstance(result, dict) and isinstance(result.get("verification"), dict)
                             ),
+                            "report_evidence": report_evidence,
                         })
                     queue_snapshot = {
                         "status": "inspected",
                         "task_count": len(task_ids),
                         "tasks": queue_tasks,
+                        "all_reports_verified": bool(queue_tasks) and all(
+                            item.get("status") == "succeeded"
+                            and isinstance(item.get("report_evidence"), dict)
+                            and item["report_evidence"].get("verified_success") is True
+                            for item in queue_tasks
+                        ),
+                        "report_root": report_root_evidence,
                     }
                 except (OSError, MemoryError, QueueError, ValueError, TypeError) as exc:
                     queue_snapshot = {
@@ -468,6 +485,7 @@ def run_order_spool(
                     }
 
                 states = [item.get("status") for item in queue_snapshot.get("tasks", [])]
+                all_reports_verified = queue_snapshot.get("all_reports_verified") is True
                 if binding_mismatches:
                     next_action = {
                         "actor": "local_operator",
@@ -478,13 +496,29 @@ def run_order_spool(
                             "the response's mismatched fields as trustworthy."
                         ),
                     }
-                elif task_ids and queue_snapshot.get("status") == "inspected" and states == ["succeeded"] * len(task_ids):
+                elif (
+                    task_ids and queue_snapshot.get("status") == "inspected"
+                    and states == ["succeeded"] * len(task_ids) and all_reports_verified
+                ):
                     next_action = {
                         "actor": "local_operator",
                         "action": "verify_reports_and_close_interrupted_run",
                         "message": (
-                            "All order task IDs are marked succeeded in the durable queue, but the original response was not finalized. "
-                            "Inspect the listed reports/verification, then submit a new order only if further work is needed."
+                            "Every order task is succeeded and its bounded report confirms task identity plus passing acceptance checks. "
+                            "The original response was not finalized; review the report hashes and workspace diff before closing the interrupted run. "
+                            "This report audit is evidence, not a cryptographic signature over local files."
+                        ),
+                    }
+                elif (
+                    task_ids and queue_snapshot.get("status") == "inspected"
+                    and states == ["succeeded"] * len(task_ids)
+                ):
+                    next_action = {
+                        "actor": "local_operator",
+                        "action": "inspect_task_report_evidence",
+                        "message": (
+                            "The queue marks tasks succeeded but one or more bounded task reports are missing, inconsistent, or not verified. "
+                            "Inspect evidence.report_evidence and the registered workspace; do not treat queue status alone as proof of success."
                         ),
                     }
                 elif "running" in states:
@@ -505,13 +539,23 @@ def run_order_spool(
                             "before any retry. The spool did not rerun the order."
                         ),
                     }
+                elif any(state in {"failed", "blocked"} for state in states):
+                    next_action = {
+                        "actor": "architect",
+                        "action": "create_revised_order_from_failure_evidence",
+                        "message": (
+                            "One or more order tasks failed or were blocked. Use the bounded report failure fields and verification evidence "
+                            "to diagnose the cause, then submit a revised order with a new order_id and task IDs where work must change. "
+                            "Do not retry the same failed task payload blindly; local approvals remain separate."
+                        ),
+                    }
                 else:
                     next_action = {
                         "actor": "local_operator",
                         "action": "reconcile_queue_before_retry",
                         "message": (
-                            "The original execution has no final response and the queue is not fully succeeded. Review each task state, "
-                            "reports and possible side effects before deciding whether to create a revised order."
+                            "The original execution has no final response and the queue is incomplete or unresolved. Review each task state, "
+                            "report hashes, verification evidence, and possible side effects before deciding whether to create a revised order."
                         ),
                     }
 
@@ -548,6 +592,7 @@ def run_order_spool(
                             if not binding_mismatches and isinstance(previous_response.get("workspace"), dict)
                             else None
                         ),
+                        "report_root_validation": report_root_evidence,
                         "queue_snapshot": queue_snapshot,
                     },
                     "execution": None,
