@@ -1,4 +1,4 @@
-# Architect-order contract — Phase 71
+# Architect-order contract and response — Phases 71–72
 
 ## Goal
 
@@ -62,3 +62,33 @@ Unknown fields are rejected, including fields such as `approved`, `execute`, `sh
 - `succeeded`, `failed`, `blocked`, or `incomplete`: execution result from the existing order pipeline. Reports include per-task status, attempts, verification evidence and failure diagnostics.
 
 The order source label is untrusted text. This contract validates the structure and declared intent but does not prove that the architecture bot is honest, that its design is correct, or that the selected project's acceptance criteria are complete. The local operator remains responsible for reviewing scope, permissions, and the target directory.
+
+
+## Phase 72 — durable architect response and evidence hand-back
+
+A validated order can now produce a separate, machine-readable response file for an external architect to consume. This closes the *file protocol* loop: order in, bounded execution/evidence out, next step encoded in the result. It does not silently connect BotPyton to a model, call an AI API, or autonomously authorize another order.
+
+Validation-only response:
+
+~~~powershell
+python -m bot.main --architect-order .cerebro/examples/architect-order.json --architect-response .cerebro/reports/ARCH-ORDER-DEMO-001-response.json
+~~~
+
+After reviewing the exact payload and approving its required capabilities, explicitly execute and persist a separate response. For this read-only example no write/code approvals are needed:
+
+~~~powershell
+python -m bot.main --architect-order .cerebro/examples/architect-order.json --execute-architect-order --project-root "C:\projects\sample" --memory .cerebro/memory/state.json --architect-response .cerebro/reports/ARCH-ORDER-DEMO-001-execution.json
+~~~
+
+The parent directory must already exist and the output path must not exist. BotPyton uses exclusive file creation and refuses to overwrite an earlier response. Choose a unique response filename for each submission. Before starting execution, the file is durably populated with an `execution_in_progress` marker; after the run, BotPyton replaces its contents through the same owned file handle and flushes it to disk. If the process is interrupted, the marker says that execution started and queue mutation is unknown—inspect the queue and any per-task reports before retrying.
+
+Every response includes:
+
+- `response_type` and `schema_version` so a receiver can identify the response contract.
+- `order_id`, untrusted source labels, and `request_sha256`: SHA-256 of the exact bounded input bytes that were parsed.
+- Final status, whether execution started, queue-mutation state, the local approval flags passed on the command line, and the permissions still required by the task actions.
+- Per-task state and attempt summaries plus the existing verification details and report paths returned by the order pipeline.
+- A machine-readable `next_action` identifying who should act next (`architect`, `local_operator`, or recovery review) and what step is recommended.
+- Explicit safety declarations: packet data cannot grant permissions, BotPyton itself makes no model/API/network request here, and no merge is performed.
+
+Response statuses include `validated_for_review`, `needs_input`, `execution_in_progress`, `succeeded`, `failed`, `blocked`, `incomplete`, and `execution_error`. If the status is `execution_error`, queue mutation is reported as unknown because the failure may have occurred before or after queue persistence; inspect state before resubmitting. The request hash links the response to the exact input bytes but does not authenticate the architect's identity, prove the design correct, or make report files tamper-proof. The receiver should validate the response schema and inspect referenced evidence before planning the next order.
