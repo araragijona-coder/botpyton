@@ -173,3 +173,23 @@ A reviewed patch requires `--authorize-local-writes` and a clean Git target. BOT
 For example, one task can use `allowed_actions: ["apply_reviewed_patch", "prepare_report"]`, a `reviewed_patch` string, and verification checks `{"type":"patch_applied"}` plus `{"type":"python_syntax"}`. This performs no project-code execution: static parsing and Git operations only. If the order also runs tests/build scripts, it must separately request `run_tests` or `run_project_check` and the operator must separately approve `--execute-project-code`; code executed by a project check is not network-sandboxed.
 
 BOTPYTON does not commit, push, publish a PR, merge, install dependencies, or run shell commands embedded in the diff. The patch target is explicitly required to be a linked `botpyton/*` worktree, not the primary source checkout. Passing the static checks is evidence, not proof of correctness; inspect the candidate diff and reports before authorizing release.
+
+### Example reviewed_patch task fragment
+
+~~~json
+{
+  "id": "PATCH-001",
+  "goal": "Change one tracked Python constant and verify syntax.",
+  "depends_on": [],
+  "allowed_actions": ["apply_reviewed_patch", "prepare_report"],
+  "success_conditions": ["patch_applied", "python_syntax"],
+  "max_attempts": 1,
+  "verification_checks": [
+    {"type": "patch_applied"},
+    {"type": "python_syntax"}
+  ],
+  "reviewed_patch": "diff --git a/app.py b/app.py\n--- a/app.py\n+++ b/app.py\n@@ -1 +1 @@\n-VALUE = 1\n+VALUE = 2\n"
+}
+~~~
+
+The complete order still needs the outer Phase 71 fields (schema_version, order_id, source, summary, status, and tasks). Replace app.py and the example hunk with files/content that actually exist in the selected clean repository; a stale or inapplicable patch is rejected before queue mutation.
