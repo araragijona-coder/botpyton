@@ -7,9 +7,10 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import stat
 import tempfile
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any, Callable
 
 from .application_cache import _is_link_or_reparse
@@ -22,8 +23,11 @@ from .architect_order_response import (
 from .bounded_io import BoundedReadError, enforce_json_depth, read_bounded_bytes
 from .memory import JsonMemory, MemoryError
 from .queue import QueueError, TaskQueue
+from .workspace import _git
 
 MAX_SPOOL_DIRECTORY_ENTRIES = 5_000
+MAX_TASK_REPORT_BYTES = 1_000_000
+_TASK_REPORT_PATH = re.compile(r"^\.cerebro/reports/[0-9a-f]{16}\.json$")
 MAX_SPOOL_ORDERS = 500
 MAX_ORDER_BYTES = 600_000
 class ArchitectSpoolError(ValueError):
@@ -121,6 +125,181 @@ def _read_existing_response(path: Path, expected_sha256: str) -> dict[str, Any]:
             f"Existing response does not match the expected order hash/schema: {path.name}"
         )
     return value
+
+
+def _registered_workspace_root(
+    project_root: str | Path,
+    previous_response: dict[str, Any],
+    binding_mismatches: list[str],
+) -> tuple[Path | None, dict[str, Any]]:
+    """Return a report root only when the response's worktree is registered by Git."""
+    try:
+        source = Path(project_root).expanduser().resolve(strict=True)
+    except (OSError, RuntimeError, ValueError) as exc:
+        return None, {"status": "source_root_unavailable", "error": type(exc).__name__}
+    if not source.is_dir():
+        return None, {"status": "source_root_unavailable", "error": "not_a_directory"}
+
+    workspace_claim = previous_response.get("workspace")
+    if not isinstance(workspace_claim, dict) or not workspace_claim.get("workspace_path"):
+        return source, {"status": "source_root", "registered": True}
+    if binding_mismatches:
+        return None, {
+            "status": "response_binding_mismatch",
+            "registered": False,
+            "claim_trusted": False,
+        }
+
+    candidate_text = workspace_claim.get("workspace_path")
+    if not isinstance(candidate_text, str) or not candidate_text.strip():
+        return None, {"status": "invalid_workspace_claim", "registered": False}
+    candidate_input = Path(candidate_text).expanduser()
+    try:
+        if _is_link_or_reparse(candidate_input):
+            return None, {"status": "workspace_link_blocked", "registered": False}
+        candidate = candidate_input.resolve(strict=True)
+    except (OSError, RuntimeError, ValueError) as exc:
+        return None, {"status": "workspace_unavailable", "registered": False, "error": type(exc).__name__}
+    if not candidate.is_dir() or candidate == source:
+        return None, {"status": "workspace_not_isolated", "registered": False}
+
+    top = _git(source, ["rev-parse", "--show-toplevel"])
+    listed = _git(source, ["worktree", "list", "--porcelain"])
+    if top["exit_code"] != 0 or listed["exit_code"] != 0:
+        return None, {"status": "git_worktree_registry_unavailable", "registered": False}
+    try:
+        if Path(top["stdout"].strip()).resolve() != source:
+            return None, {"status": "source_root_not_repository_root", "registered": False}
+    except (OSError, RuntimeError, ValueError):
+        return None, {"status": "source_root_not_repository_root", "registered": False}
+
+    for block in listed["stdout"].split("\\n\\n"):
+        lines = block.splitlines()
+        worktree_line = next((line[len("worktree "):] for line in lines if line.startswith("worktree ")), None)
+        if worktree_line is None:
+            continue
+        try:
+            registered_path = Path(worktree_line).resolve()
+        except (OSError, RuntimeError, ValueError):
+            continue
+        if registered_path != candidate:
+            continue
+        branch_ref = next((line[len("branch "):] for line in lines if line.startswith("branch ")), "")
+        if not branch_ref.startswith("refs/heads/botpyton/"):
+            return None, {"status": "workspace_branch_not_allowlisted", "registered": False}
+        current_branch = _git(candidate, ["symbolic-ref", "--short", "HEAD"])
+        current_head = _git(candidate, ["rev-parse", "HEAD"])
+        if (
+            current_branch["exit_code"] != 0
+            or current_head["exit_code"] != 0
+            or current_branch["stdout"].strip() != branch_ref.removeprefix("refs/heads/")
+            or not re.fullmatch(r"[0-9a-f]{40}", current_head["stdout"].strip())
+        ):
+            return None, {"status": "workspace_identity_mismatch", "registered": False}
+        return candidate, {
+            "status": "registered_git_worktree",
+            "registered": True,
+            "branch": current_branch["stdout"].strip(),
+            "head_sha": current_head["stdout"].strip(),
+        }
+    return None, {"status": "workspace_not_registered", "registered": False}
+
+
+def _inspect_task_report(
+    report_root: Path | None,
+    task_id: str,
+    report_path: object,
+) -> dict[str, Any]:
+    """Read one strictly allowlisted task report and verify task/result/acceptance identity."""
+    if report_root is None:
+        return {"status": "report_root_unavailable", "verified_success": False}
+    if not isinstance(report_path, str) or not report_path.strip():
+        return {"status": "report_path_missing", "verified_success": False}
+    normalized = report_path.replace("\\\\", "/")
+    if not _TASK_REPORT_PATH.fullmatch(normalized):
+        return {"status": "unsafe_report_reference", "verified_success": False}
+    relative = PurePosixPath(normalized)
+    if relative.as_posix() != normalized or ".." in relative.parts:
+        return {"status": "unsafe_report_reference", "verified_success": False}
+
+    target = report_root
+    for part in relative.parts:
+        target = target / part
+        if _is_link_or_reparse(target):
+            return {"status": "report_link_blocked", "verified_success": False}
+    try:
+        info = target.lstat()
+    except FileNotFoundError:
+        return {"status": "report_missing", "verified_success": False, "path": normalized}
+    except OSError as exc:
+        return {"status": "report_unreadable", "verified_success": False, "error": type(exc).__name__}
+    if not stat.S_ISREG(info.st_mode) or info.st_size < 0 or info.st_size > MAX_TASK_REPORT_BYTES:
+        return {"status": "report_invalid_file", "verified_success": False, "path": normalized}
+    try:
+        raw = read_bounded_bytes(
+            target, limit_bytes=MAX_TASK_REPORT_BYTES, label="task recovery report"
+        )
+        value = json.loads(raw.decode("utf-8"))
+        enforce_json_depth(value, label="task recovery report")
+    except (BoundedReadError, UnicodeError, json.JSONDecodeError, RecursionError, OSError) as exc:
+        return {
+            "status": "report_invalid_json",
+            "verified_success": False,
+            "path": normalized,
+            "error": type(exc).__name__,
+        }
+    if not isinstance(value, dict) or value.get("task_id") != task_id:
+        return {
+            "status": "report_task_id_mismatch",
+            "verified_success": False,
+            "path": normalized,
+            "report_task_id": value.get("task_id") if isinstance(value, dict) else None,
+        }
+
+    verification = value.get("verification")
+    checks = verification.get("checks") if isinstance(verification, dict) else None
+    all_checks_passed = (
+        isinstance(checks, list) and bool(checks)
+        and all(isinstance(check, dict) and check.get("ok") is True for check in checks)
+    )
+    succeeded = (
+        value.get("status") == "succeeded"
+        and value.get("ok") is True
+        and isinstance(verification, dict)
+        and verification.get("all_passed") is True
+        and all_checks_passed
+    )
+    failed_checks = [
+        {
+            "type": check.get("type"),
+            "reason": str(check.get("reason", ""))[:300],
+        }
+        for check in checks if isinstance(check, dict) and check.get("ok") is not True
+    ] if isinstance(checks, list) else []
+    return {
+        "status": "verified_success" if succeeded else (
+            "report_failure_or_unverified" if value.get("status") != "succeeded" or value.get("ok") is not True
+            else "verification_missing_or_failed"
+        ),
+        "verified_success": succeeded,
+        "path": normalized,
+        "sha256": hashlib.sha256(raw).hexdigest(),
+        "report_status": value.get("status"),
+        "report_ok": value.get("ok") is True,
+        "failed_action": str(value.get("failed_action") or "")[:200] or None,
+        "error": str(value.get("error") or "")[:1_000] or None,
+        "verification_status": verification.get("status") if isinstance(verification, dict) else None,
+        "verification_all_passed": verification.get("all_passed") if isinstance(verification, dict) else None,
+        "verification_checks": [
+            {
+                "type": check.get("type"),
+                "ok": check.get("ok") is True,
+                "reason": str(check.get("reason", ""))[:300],
+            }
+            for check in checks[:20] if isinstance(check, dict)
+        ] if isinstance(checks, list) else [],
+        "failed_checks": failed_checks[:20],
+    }
 
 
 def _write_response(path: Path, response: dict[str, Any]) -> None:
