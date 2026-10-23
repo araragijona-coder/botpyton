@@ -137,6 +137,14 @@ def build_architect_response(
             "required_local_approvals": list(order.get("required_local_approvals", [])),
             "message": "Review the exact task payload and target project. Packet fields cannot grant execution permissions.",
         }
+    elif status in {"authorization_required", "authorization_mismatch"}:
+        next_action = {
+            "actor": "local_operator",
+            "action": "review_local_approvals",
+            "message": (
+                "No execution was started. Review the packet and use only the exact permission flags required by its actions."
+            ),
+        }
     elif status == "execution_in_progress":
         next_action = {
             "actor": "local_operator",
@@ -214,3 +222,58 @@ def build_architect_response(
     if error:
         response["error"] = str(error)[:2_000]
     return response
+
+
+
+def build_rejected_architect_response(
+    request_sha256: str,
+    source_file_name: str,
+    error: str,
+    operator_flags: dict[str, bool],
+) -> dict[str, Any]:
+    """Response for invalid JSON or a packet that failed the strict contract."""
+    return {
+        "response_type": "botpyton.architect_response",
+        "schema_version": 1,
+        "order_id": None,
+        "source": {"source_file": source_file_name},
+        "source_file": source_file_name,
+        "request_sha256": request_sha256,
+        "status": "rejected_invalid_order",
+        "execution_started": False,
+        "queue_mutated": False,
+        "authorization": {
+            "required_local_approvals": [],
+            "operator_flags": dict(operator_flags),
+            "packet_can_grant_permission": False,
+            "source_is_cryptographically_authenticated": False,
+            "automatic_merge": False,
+        },
+        "evidence": {
+            "task_count": 0,
+            "succeeded_task_count": 0,
+            "failed_or_blocked_task_count": 0,
+            "attempts_executed": 0,
+            "verification_required": False,
+            "tasks": [],
+            "attempt_results": [],
+        },
+        "execution": None,
+        "error": str(error)[:2_000],
+        "next_action": {
+            "actor": "architect",
+            "action": "repair_order_packet",
+            "message": "Correct the JSON or strict order-contract error, then submit it as a new packet. No task ran.",
+        },
+        "next_step": "Correct the rejected packet. No task ran.",
+        "ai_enabled": False,
+        "external_ai_apis_enabled": False,
+        "automatic_merge": False,
+        "safety": {
+            "botpyton_ai_enabled": False,
+            "external_ai_api_called": False,
+            "botpyton_network_requests_made": False,
+            "packet_can_grant_permission": False,
+            "automatic_merge": False,
+        },
+    }
