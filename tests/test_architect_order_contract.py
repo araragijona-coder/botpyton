@@ -2,6 +2,8 @@ import contextlib
 import hashlib
 import io
 import json
+import shutil
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -244,7 +246,122 @@ class ArchitectOrderContractTests(unittest.TestCase):
                 result["tasks_for_review"][0]["local_change_plan"]["changes"][0]["content"],
                 text,
             )
+            self.assertTrue(result["workspace_policy"]["required_for_execution"])
+            self.assertEqual(result["workspace_policy"]["mode"], "isolated_git_worktree")
+            self.assertFalse(result["workspace_policy"]["prepared"])
             self.assertFalse((root / "generated.py").exists())
+
+    def test_file_write_order_executes_in_isolated_worktree_and_returns_diff_evidence(self):
+        if not shutil.which("git"):
+            self.skipTest("Git is required for isolated architect workspace tests")
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            project = root / "project"
+            project.mkdir()
+
+            def git(*args):
+                subprocess.run(
+                    ["git", *args], cwd=project, stdin=subprocess.DEVNULL,
+                    stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, check=True,
+                )
+
+            git("init", "-b", "main")
+            git("config", "user.email", "botpyton-test@example.invalid")
+            git("config", "user.name", "BotPyton Tests")
+            (project / "sample.py").write_text("VALUE = 1\\n", encoding="utf-8")
+            git("add", "sample.py")
+            git("commit", "-m", "baseline")
+
+            task_value = task(
+                "ARCH-WRITE-003",
+                actions=["apply_local_plan", "prepare_report"],
+                checks=[
+                    {"type": "local_plan_applied"},
+                    {"type": "file_exists", "path": "generated.py"},
+                ],
+            )
+            task_value["success_conditions"] = ["local_plan_applied", "file_exists"]
+            task_value["local_change_plan"] = {
+                "schema_version": 1,
+                "task_id": "ARCH-WRITE-003",
+                "changes": [{"path": "generated.py", "content": "VALUE = 2\\n"}],
+            }
+            order_path = root / "architect-order.json"
+            queue_path = root / "queue.json"
+            response_path = root / "architect-response.json"
+            workspace_parent = root / "workspaces"
+            order_path.write_text(json.dumps(packet([task_value])), encoding="utf-8")
+
+            output = io.StringIO()
+            with contextlib.redirect_stdout(output), contextlib.redirect_stderr(output):
+                code = main([
+                    "--architect-order", str(order_path),
+                    "--execute-architect-order", "--authorize-local-writes",
+                    "--architect-response", str(response_path),
+                    "--project-root", str(project), "--memory", str(queue_path),
+                    "--architect-workspace-parent", str(workspace_parent),
+                ])
+            result = json.loads(output.getvalue())
+            self.assertEqual(code, 0, output.getvalue())
+            self.assertEqual(result["status"], "succeeded")
+            self.assertTrue(result["workspace_policy"]["prepared"])
+            self.assertEqual(result["workspace"]["status"], "inspection_complete")
+            self.assertFalse(result["workspace"]["merge_performed"])
+            self.assertFalse(result["workspace"]["push_performed"])
+            self.assertTrue(result["workspace"]["final_inspection"]["has_changes"])
+            self.assertIn("generated.py", result["workspace"]["final_inspection"]["working_tree_status"])
+            workspace = Path(result["workspace"]["workspace_path"])
+            self.assertTrue((workspace / "generated.py").is_file())
+            self.assertEqual((workspace / "generated.py").read_text(encoding="utf-8"), "VALUE = 2\\n")
+            self.assertFalse((project / "generated.py").exists())
+            self.assertEqual(
+                json.loads(response_path.read_text(encoding="utf-8")),
+                result,
+            )
+
+    def test_file_write_order_refuses_non_git_project_before_queue_mutation(self):
+        if not shutil.which("git"):
+            self.skipTest("Git is required for isolated architect workspace tests")
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            project = root / "project"
+            project.mkdir()
+            task_value = task(
+                "ARCH-WRITE-004",
+                actions=["apply_local_plan", "prepare_report"],
+                checks=[
+                    {"type": "local_plan_applied"},
+                    {"type": "file_exists", "path": "generated.py"},
+                ],
+            )
+            task_value["success_conditions"] = ["local_plan_applied", "file_exists"]
+            task_value["local_change_plan"] = {
+                "schema_version": 1,
+                "task_id": "ARCH-WRITE-004",
+                "changes": [{"path": "generated.py", "content": "VALUE = 4\\n"}],
+            }
+            order_path = root / "architect-order.json"
+            queue_path = root / "queue.json"
+            response_path = root / "architect-response.json"
+            order_path.write_text(json.dumps(packet([task_value])), encoding="utf-8")
+
+            output = io.StringIO()
+            with contextlib.redirect_stdout(output), contextlib.redirect_stderr(output):
+                code = main([
+                    "--architect-order", str(order_path),
+                    "--execute-architect-order", "--authorize-local-writes",
+                    "--architect-response", str(response_path),
+                    "--project-root", str(project), "--memory", str(queue_path),
+                ])
+            result = json.loads(output.getvalue())
+            self.assertEqual(code, 1, output.getvalue())
+            self.assertEqual(result["status"], "execution_error")
+            self.assertEqual(result["workspace"]["status"], "setup_failed")
+            self.assertFalse(result["execution_started"])
+            self.assertFalse(result["queue_mutated"])
+            self.assertFalse(queue_path.exists())
+            self.assertFalse((project / "generated.py").exists())
+            self.assertEqual(json.loads(response_path.read_text(encoding="utf-8")), result)
 
     def test_cli_executes_only_after_explicit_order_approval(self):
         with tempfile.TemporaryDirectory() as temp:

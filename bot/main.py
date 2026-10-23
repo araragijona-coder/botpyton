@@ -185,6 +185,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--create-workspace", metavar="TASK_ID", help="create a Git worktree on a dedicated local branch from a clean project")
     parser.add_argument("--workspace-status", metavar="PATH", help="inspect a worktree's current status and diff summary")
     parser.add_argument("--workspace-parent", metavar="PATH", help="directory outside the source repository for --create-workspace")
+    parser.add_argument("--architect-workspace-parent", metavar="PATH",
+                        help="optional directory outside the target Git repository for isolated workspaces used by architect file-write orders")
     parser.add_argument("--apply-reviewed-patch", metavar="PATCH_PATH", help="validate and apply a reviewed unified diff only inside an isolated Git worktree; never merges or pushes")
     parser.add_argument("--patch-task-id", metavar="TASK_ID", help="safe task identifier required by --apply-reviewed-patch")
     parser.add_argument("--patch-check", metavar="CHECK_ID", help="run one discovered check on baseline and candidate worktrees; requires --execute-project-code")
@@ -271,6 +273,10 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     response_writer: ArchitectResponseWriter | None = None
     try:
+        if args.architect_workspace_parent is not None and not (args.architect_order or args.architect_inbox):
+            raise ArchitectOrderError(
+                "--architect-workspace-parent requires --architect-order or --architect-inbox"
+            )
         if bool(args.architect_inbox) != bool(args.architect_outbox):
             raise ArchitectSpoolError("--architect-inbox and --architect-outbox must be supplied together")
         if args.architect_inbox:
@@ -278,6 +284,7 @@ def main(argv: list[str] | None = None) -> int:
                 "architect_inbox", "architect_outbox", "execute_architect_order",
                 "authorize_local_writes", "execute_project_code", "project_root",
                 "memory", "check_timeout", "child_memory_limit_mb",
+                "architect_workspace_parent",
             }
             conflicts = [
                 name.replace("_", "-")
@@ -300,6 +307,8 @@ def main(argv: list[str] | None = None) -> int:
                     "--memory", args.memory,
                     "--check-timeout", str(args.check_timeout),
                 ]
+                if args.architect_workspace_parent is not None:
+                    child_args.extend(["--architect-workspace-parent", args.architect_workspace_parent])
                 if flags["execute_architect_order"]:
                     child_args.append("--execute-architect-order")
                 if flags["authorize_local_writes"]:
@@ -343,6 +352,7 @@ def main(argv: list[str] | None = None) -> int:
                 "architect_order", "architect_response", "execute_architect_order",
                 "authorize_local_writes", "execute_project_code", "project_root",
                 "memory", "check_timeout", "child_memory_limit_mb",
+                "architect_workspace_parent",
             }
             conflicts = [
                 name.replace("_", "-")
@@ -357,6 +367,21 @@ def main(argv: list[str] | None = None) -> int:
             packet, request_sha256 = _read_architect_packet(args.architect_order)
             order = validate_architect_order(packet)
             public_order = {key: value for key, value in order.items() if key != "normalized_tasks"}
+            requires_isolated_workspace = "local_file_write" in order["required_local_approvals"]
+            requested_workspace_parent = (
+                str(Path(args.architect_workspace_parent).expanduser())
+                if args.architect_workspace_parent is not None
+                else "~/.botpyton/workspaces"
+            )
+            workspace_policy = {
+                "mode": "isolated_git_worktree" if requires_isolated_workspace else "not_required",
+                "required_for_execution": requires_isolated_workspace,
+                "prepared": False,
+                "workspace_parent": requested_workspace_parent if requires_isolated_workspace else None,
+                "source_repository_must_be_clean": requires_isolated_workspace,
+                "automatic_merge": False,
+                "automatic_push": False,
+            }
             operator_flags = {
                 "execute_architect_order": bool(args.execute_architect_order),
                 "authorize_local_writes": bool(args.authorize_local_writes),
@@ -371,6 +396,7 @@ def main(argv: list[str] | None = None) -> int:
                 response.update({key: value for key, value in public_order.items() if key != "status"})
                 response["order_status"] = order["status"]
                 response["validation"] = public_order
+                response["workspace_policy"] = workspace_policy
                 if args.architect_response:
                     with ArchitectResponseWriter(args.architect_response) as writer:
                         writer.write(response)
@@ -387,6 +413,7 @@ def main(argv: list[str] | None = None) -> int:
                 response["order_status"] = order["status"]
                 response["validation"] = public_order
                 response["summary"] = order["summary"]
+                response["workspace_policy"] = workspace_policy
                 if args.architect_response:
                     with ArchitectResponseWriter(args.architect_response) as writer:
                         writer.write(response)
@@ -418,19 +445,64 @@ def main(argv: list[str] | None = None) -> int:
                 pending_response["order_status"] = order["status"]
                 pending_response["validation"] = public_order
                 pending_response["summary"] = order["summary"]
+                pending_response["workspace_policy"] = workspace_policy
+                if requires_isolated_workspace:
+                    pending_response["workspace"] = {
+                        "status": "preparation_pending",
+                        "mode": "isolated_git_worktree",
+                        "automatic_merge": False,
+                        "automatic_push": False,
+                    }
                 response_writer.write(pending_response)
 
+            workspace_evidence: dict | None = None
+            workspace_setup_attempted = False
+            task_execution_started = False
+            queue_mutation_possible = False
+            execution_root = Path(args.project_root).expanduser().resolve()
             try:
+                if requires_isolated_workspace:
+                    workspace_setup_attempted = True
+                    workspace_evidence = create_isolated_workspace(
+                        execution_root,
+                        f"architect-order-{request_sha256[:20]}",
+                        workspace_parent=args.architect_workspace_parent,
+                    )
+                    workspace_policy["prepared"] = True
+                    if response_writer is not None:
+                        pending_response["workspace_policy"] = workspace_policy
+                        pending_response["workspace"] = workspace_evidence
+                        response_writer.write(pending_response)
+                    execution_root = Path(workspace_evidence["workspace_path"])
+
+                queue_mutation_possible = True
                 queue = TaskQueue(JsonMemory(args.memory))
                 executor = TaskExecutor(
-                    Path(args.project_root).expanduser().resolve(),
+                    execution_root,
                     test_timeout_seconds=args.check_timeout,
                 )
+                task_execution_started = True
                 execution = run_order_batch(order["normalized_tasks"], queue=queue, executor=executor)
+
+                if workspace_evidence is not None:
+                    try:
+                        inspection = inspect_workspace(execution_root)
+                        workspace_evidence["status"] = "inspection_complete"
+                        workspace_evidence["final_inspection"] = {
+                            "head_sha": inspection["head_sha"],
+                            "working_tree_status": inspection["working_tree_status"],
+                            "diff_stat": inspection["diff_stat"],
+                            "has_changes": inspection["has_changes"],
+                        }
+                    except WorkspaceError as inspection_error:
+                        workspace_evidence["status"] = "inspection_failed"
+                        workspace_evidence["inspection_error"] = str(inspection_error)[:2_000]
+
             except Exception as exc:
                 response = build_architect_response(
                     order, request_sha256, status="execution_error",
-                    execution_started=True, queue_mutated=None,
+                    execution_started=task_execution_started,
+                    queue_mutated=None if queue_mutation_possible else False,
                     operator_flags=operator_flags,
                     error=f"{type(exc).__name__}: {exc}",
                 )
@@ -438,6 +510,17 @@ def main(argv: list[str] | None = None) -> int:
                 response["order_status"] = order["status"]
                 response["validation"] = public_order
                 response["summary"] = order["summary"]
+                response["workspace_policy"] = workspace_policy
+                if workspace_evidence is not None:
+                    response["workspace"] = workspace_evidence
+                elif workspace_setup_attempted:
+                    response["workspace"] = {
+                        "status": "setup_failed",
+                        "mode": "isolated_git_worktree",
+                        "error": f"{type(exc).__name__}: {exc}"[:2_000],
+                        "automatic_merge": False,
+                        "automatic_push": False,
+                    }
                 if response_writer is not None:
                     try:
                         response_writer.write(response)
@@ -453,6 +536,9 @@ def main(argv: list[str] | None = None) -> int:
             )
             response["validation"] = public_order
             response["summary"] = order["summary"]
+            response["workspace_policy"] = workspace_policy
+            if workspace_evidence is not None:
+                response["workspace"] = workspace_evidence
             if response_writer is not None:
                 try:
                     response_writer.write(response)

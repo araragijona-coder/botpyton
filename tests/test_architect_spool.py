@@ -2,6 +2,8 @@ import contextlib
 import hashlib
 import io
 import json
+import shutil
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -139,6 +141,73 @@ class ArchitectSpoolTests(unittest.TestCase):
             self.assertEqual(permitted["spool_status"], "processed")
             self.assertNotEqual(blocked["response_file"], permitted["response_file"])
             self.assertEqual(permitted["status"], "succeeded")
+
+    def test_spool_propagates_workspace_parent_for_authorized_file_write(self):
+        if not shutil.which("git"):
+            self.skipTest("Git is required for isolated architect workspace tests")
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            project = root / "project"
+            inbox, outbox = root / "inbox", root / "outbox"
+            workspace_parent = root / "workspaces"
+            project.mkdir()
+            inbox.mkdir()
+            outbox.mkdir()
+
+            def git(*args):
+                subprocess.run(
+                    ["git", *args], cwd=project, stdin=subprocess.DEVNULL,
+                    stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, check=True,
+                )
+
+            git("init", "-b", "main")
+            git("config", "user.email", "botpyton-test@example.invalid")
+            git("config", "user.name", "BotPyton Tests")
+            (project / "sample.py").write_text("VALUE = 1\\n", encoding="utf-8")
+            git("add", "sample.py")
+            git("commit", "-m", "baseline")
+
+            write_task = {
+                "id": "SPOOL-WRITE-001",
+                "goal": "Create one reviewed source file in an isolated workspace.",
+                "depends_on": [],
+                "allowed_actions": ["apply_local_plan", "prepare_report"],
+                "success_conditions": ["local_plan_applied", "file_exists"],
+                "max_attempts": 1,
+                "verification_checks": [
+                    {"type": "local_plan_applied"},
+                    {"type": "file_exists", "path": "generated.py"},
+                ],
+                "local_change_plan": {
+                    "schema_version": 1,
+                    "task_id": "SPOOL-WRITE-001",
+                    "changes": [{"path": "generated.py", "content": "VALUE = 9\\n"}],
+                },
+            }
+            packet_value = packet("SPOOL-WRITE-001", actions=["apply_local_plan", "prepare_report"])
+            packet_value["tasks"] = [write_task]
+            (inbox / "write.json").write_text(json.dumps(packet_value), encoding="utf-8")
+
+            output = io.StringIO()
+            with contextlib.redirect_stdout(output), contextlib.redirect_stderr(output):
+                code = main([
+                    "--architect-inbox", str(inbox),
+                    "--architect-outbox", str(outbox),
+                    "--project-root", str(project),
+                    "--memory", str(outbox / "queue.json"),
+                    "--architect-workspace-parent", str(workspace_parent),
+                    "--execute-architect-order", "--authorize-local-writes",
+                ])
+            result = json.loads(output.getvalue())
+            self.assertEqual(code, 0, output.getvalue())
+            self.assertEqual(result["status"], "succeeded")
+            self.assertEqual(result["response"]["workspace"]["status"], "inspection_complete")
+            workspace = Path(result["response"]["workspace"]["workspace_path"])
+            self.assertTrue(workspace.is_relative_to(workspace_parent.resolve()))
+            self.assertTrue((workspace / "generated.py").is_file())
+            self.assertFalse((project / "generated.py").exists())
+            self.assertFalse(result["response"]["workspace"]["merge_performed"])
+            self.assertFalse(result["response"]["workspace"]["push_performed"])
 
     def test_interrupted_execution_creates_recovery_evidence_without_replaying(self):
         with tempfile.TemporaryDirectory() as temp:
