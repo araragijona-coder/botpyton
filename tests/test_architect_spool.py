@@ -304,7 +304,27 @@ class ArchitectSpoolTests(unittest.TestCase):
             queue.enqueue_many(order["normalized_tasks"])
             queue.claim_next(allowed_task_ids=set(order["task_ids"]))
             task_id = order["task_ids"][0]
-            queue.complete(task_id, {"report_path": "verified-report.json", "verification": {"ok": True}})
+            safe_id = hashlib.sha256(task_id.encode("utf-8")).hexdigest()[:16]
+            report_path = f".cerebro/reports/{safe_id}.json"
+            report_file = inbox / report_path
+            report_file.parent.mkdir(parents=True, exist_ok=True)
+            report_value = {
+                "task_id": task_id,
+                "status": "succeeded",
+                "ok": True,
+                "failed_action": None,
+                "error": None,
+                "verification": {
+                    "status": "passed",
+                    "all_passed": True,
+                    "checks": [{"type": "python_syntax", "ok": True, "reason": "no syntax errors"}],
+                },
+            }
+            report_file.write_text(json.dumps(report_value), encoding="utf-8")
+            queue.complete(task_id, {
+                "report_path": report_path,
+                "verification": report_value["verification"],
+            })
 
             result = run_order_spool(
                 inbox_path=inbox, outbox_path=outbox,
@@ -319,7 +339,105 @@ class ArchitectSpoolTests(unittest.TestCase):
             )
             record = result["response"]["evidence"]["queue_snapshot"]["tasks"][0]
             self.assertEqual(record["status"], "succeeded")
-            self.assertEqual(record["report_path"], "verified-report.json")
+            self.assertEqual(record["report_path"], report_path)
+            self.assertEqual(record["report_evidence"]["status"], "verified_success")
+            self.assertTrue(record["report_evidence"]["verified_success"])
+            self.assertRegex(record["report_evidence"]["sha256"], r"^[0-9a-f]{64}$")
+            self.assertTrue(result["response"]["evidence"]["queue_snapshot"]["all_reports_verified"])
+    def test_succeeded_queue_with_missing_report_does_not_claim_verified_success(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            inbox, outbox = root / "inbox", root / "outbox"
+            inbox.mkdir()
+            outbox.mkdir()
+            raw = json.dumps(packet(), indent=2).encode("utf-8")
+            (inbox / "interrupted.json").write_bytes(raw)
+            request_hash = hashlib.sha256(raw).hexdigest()
+            flags = {
+                "execute_architect_order": True,
+                "authorize_local_writes": False,
+                "execute_project_code": False,
+            }
+            order = validate_architect_order(json.loads(raw.decode("utf-8")))
+            response_path = _response_path(outbox, request_hash, "execute-w0-c0")
+            pending = build_architect_response(
+                order, request_hash, status="execution_in_progress",
+                execution_started=True, queue_mutated=None, operator_flags=flags,
+            )
+            pending["validation"] = {
+                key: value for key, value in order.items() if key != "normalized_tasks"
+            }
+            with ArchitectResponseWriter(response_path) as writer:
+                writer.write(pending)
+
+            queue_path = outbox / "queue.json"
+            queue = TaskQueue(JsonMemory(queue_path))
+            queue.enqueue_many(order["normalized_tasks"])
+            queue.claim_next(allowed_task_ids=set(order["task_ids"]))
+            task_id = order["task_ids"][0]
+            safe_id = hashlib.sha256(task_id.encode("utf-8")).hexdigest()[:16]
+            queue.complete(task_id, {
+                "report_path": f".cerebro/reports/{safe_id}.json",
+                "verification": {"all_passed": True, "checks": [{"ok": True}]},
+            })
+
+            result = run_order_spool(
+                inbox_path=inbox, outbox_path=outbox,
+                execute=True, authorize_local_writes=False, execute_project_code=False,
+                project_root=str(inbox), memory_path=str(queue_path), check_timeout=10,
+                run_order=lambda *_: self.fail("recovery must not rerun the succeeded task"),
+            )
+            record = result["response"]["evidence"]["queue_snapshot"]["tasks"][0]
+            self.assertEqual(record["status"], "succeeded")
+            self.assertEqual(record["report_evidence"]["status"], "report_missing")
+            self.assertFalse(record["report_evidence"]["verified_success"])
+            self.assertFalse(result["response"]["evidence"]["queue_snapshot"]["all_reports_verified"])
+            self.assertEqual(result["next_action"]["action"], "inspect_task_report_evidence")
+            self.assertFalse(result["execution_replayed"])
+
+    def test_failed_queue_task_recommends_revised_order_not_blind_replay(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            inbox, outbox = root / "inbox", root / "outbox"
+            inbox.mkdir()
+            outbox.mkdir()
+            raw = json.dumps(packet(), indent=2).encode("utf-8")
+            (inbox / "failed.json").write_bytes(raw)
+            request_hash = hashlib.sha256(raw).hexdigest()
+            flags = {
+                "execute_architect_order": True,
+                "authorize_local_writes": False,
+                "execute_project_code": False,
+            }
+            order = validate_architect_order(json.loads(raw.decode("utf-8")))
+            response_path = _response_path(outbox, request_hash, "execute-w0-c0")
+            pending = build_architect_response(
+                order, request_hash, status="execution_in_progress",
+                execution_started=True, queue_mutated=None, operator_flags=flags,
+            )
+            pending["validation"] = {
+                key: value for key, value in order.items() if key != "normalized_tasks"
+            }
+            with ArchitectResponseWriter(response_path) as writer:
+                writer.write(pending)
+
+            queue_path = outbox / "queue.json"
+            queue = TaskQueue(JsonMemory(queue_path))
+            queue.enqueue_many(order["normalized_tasks"])
+            record = queue.claim_next(allowed_task_ids=set(order["task_ids"]))
+            queue.fail(record["id"], "test failure", retryable=False)
+
+            result = run_order_spool(
+                inbox_path=inbox, outbox_path=outbox,
+                execute=True, authorize_local_writes=False, execute_project_code=False,
+                project_root=str(inbox), memory_path=str(queue_path), check_timeout=10,
+                run_order=lambda *_: self.fail("recovery must not rerun a failed task"),
+            )
+            self.assertEqual(result["next_action"]["action"], "create_revised_order_from_failure_evidence")
+            self.assertFalse(result["execution_replayed"])
+            evidence = result["response"]["evidence"]["queue_snapshot"]["tasks"][0]["report_evidence"]
+            self.assertEqual(evidence["status"], "report_path_missing")
+
     def test_direct_module_rejects_overlapping_directories(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
