@@ -474,6 +474,28 @@ def main(argv: list[str] | None = None) -> int:
                         pending_response["workspace"] = workspace_evidence
                         response_writer.write(pending_response)
                     execution_root = Path(workspace_evidence["workspace_path"])
+                    patch_tasks = [
+                        task for task in order["normalized_tasks"]
+                        if "apply_reviewed_patch" in task.get("allowed_actions", [])
+                    ]
+                    if patch_tasks:
+                        from .patch_cycle import preflight_reviewed_patch_in_workspace
+                        patch_preflight_results = []
+                        try:
+                            for patch_task in patch_tasks:
+                                patch_preflight_results.append({
+                                    "task_id": patch_task["id"],
+                                    **preflight_reviewed_patch_in_workspace(
+                                        patch_task.get("reviewed_patch"), execution_root
+                                    ),
+                                })
+                        except Exception as patch_error:
+                            workspace_evidence["status"] = "patch_preflight_failed"
+                            workspace_evidence["patch_preflight_error"] = (
+                                f"{type(patch_error).__name__}: {patch_error}"
+                            )[:2_000]
+                            raise
+                        workspace_evidence["patch_preflight"] = patch_preflight_results
 
                 queue_mutation_possible = True
                 queue = TaskQueue(JsonMemory(args.memory))
