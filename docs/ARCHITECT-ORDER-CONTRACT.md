@@ -124,3 +124,14 @@ Rules:
 - The spool makes no network request and calls no AI. BotPyton runs only when explicitly invoked; an external architect must produce/read these files itself.
 
 The spool closes the bounded file protocol for one order at a time. It does not certify an actual external architect identity, nor does it automatically plan, authorize, or submit a following task. See the existing authorization, subprocess/network, and evidence caveats above.
+
+
+## Phase 74 — recovery after an interrupted execution
+
+If an order's durable response is still `execution_in_progress`, the spool no longer silently treats it as an ordinary completed input. It emits `spool_status: "recovery_required"` and writes a separate immutable recovery response linked to the same request SHA-256. The original in-progress response is left unchanged, and the executor callback is not invoked again.
+
+Recovery responses include a read-only snapshot of the queue records for the task IDs stored in the order's original validation metadata: current state, attempt count, last error, recorded report path, and whether verification metadata is present. If the queue says all tasks succeeded, the next action still asks an operator to inspect reports and verification, because the final response may have failed after queue completion. If a task is running, failed, pending, blocked, or missing—or the queue cannot be read safely—the response makes that condition explicit and asks for reconciliation.
+
+Each recovery report filename is derived from both the original order hash/profile and the queue snapshot hash. A later invocation can record a changed queue state as a new recovery report without overwriting old evidence. Repeating the same recovery snapshot reuses the prior report. Recovery is read-only: it neither calls `resume` nor reruns the order, resets tasks, mutates queue state, modifies the input packet, or removes the original response.
+
+This deliberately favors at-most-once behavior over automatic retries. The operator should inspect the queue/report paths and determine whether side effects completed before preparing any new order.
