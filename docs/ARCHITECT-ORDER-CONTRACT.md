@@ -143,3 +143,21 @@ Recovery now re-parses the exact inbox bytes and revalidates the strict order co
 If these fields disagree, BOTPYTON still does not replay any task. It emits `status: "recovery_required"`, marks `evidence.response_binding_status: "mismatch"`, lists only the mismatched field names, and directs the local operator to `inspect_response_integrity`. The original response and inbox packet remain unchanged; the recovery report continues to be content-addressed by the request and queue snapshot.
 
 The request SHA-256 is a correlation digest, **not** a digital signature and does not authenticate the external architect or all local response bytes. This phase detects important mismatches in a persisted interrupted response and prevents its mutable task-ID list from steering recovery. It does not claim tamper-proof storage or replace review of task reports and possible side effects.
+
+## Phase 76 — isolate file-writing architect orders
+
+Any executable architect order that requests `apply_local_plan` or `apply_known_fix` now runs in a dedicated Git worktree instead of changing the selected source checkout. This is mandatory for those actions; the order's dry-run response declares `workspace_policy.required_for_execution: true` without creating a branch, folder, queue or modifying files.
+
+Example:
+
+~~~powershell
+python -m bot.main --architect-order order.json --execute-architect-order --authorize-local-writes --project-root "C:\projects\sample" --architect-response response.json
+~~~
+
+The default worktree parent is `~/.botpyton/workspaces` (on Windows, beneath the current user's home directory). Override it with `--architect-workspace-parent "D:\BotPytonWorkspaces"`; the selected directory must resolve outside the target source repository. In inbox/outbox mode, supply the same flag alongside `--architect-inbox` and `--architect-outbox` and it is propagated to the child order invocation.
+
+The selected project must be the root of an existing Git repository with a resolvable HEAD and a clean working tree. If Git is unavailable, the source is dirty, or isolation cannot be prepared, BotPyton fails closed before constructing or mutating the task queue; it does not fall back to writing directly into the source checkout. Keep the order file, durable queue/memory, response, and inbox/outbox artifacts outside the target Git repository so those files do not make the source tree dirty before the worktree check. This is especially important when BotPyton is asked to modify its own repository.
+
+The final response carries the local workspace path, branch name, base SHA, and a read-only final inspection (HEAD SHA, working-tree status, diff summary, and whether changes remain). The worktree is a review candidate, not an approved release: BotPyton never commits, pushes, opens a PR, or merges it automatically. Review the diff and verification reports before separately approving publication. If an order also runs tests/build scripts, the separate `--execute-project-code` approval remains mandatory.
+
+For an interrupted execution, recovery may expose the previous workspace locator under `evidence.workspace_claim_from_original_response`, explicitly labeled untrusted. It helps an operator find evidence but is not a signed attestation that those bytes came from that worktree. Keep the no-replay rule: inspect the reported queue, workspace and per-task outputs before deciding how to continue.
