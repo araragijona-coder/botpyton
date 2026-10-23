@@ -6,9 +6,11 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from bot.architect_spool import ArchitectSpoolError, run_order_spool
+from bot.architect_spool import ArchitectSpoolError, _response_path, run_order_spool
 from bot.architect_order_contract import validate_architect_order
 from bot.architect_order_response import ArchitectResponseWriter, build_architect_response
+from bot.memory import JsonMemory
+from bot.queue import TaskQueue
 from bot.main import main
 
 
@@ -138,6 +140,117 @@ class ArchitectSpoolTests(unittest.TestCase):
             self.assertNotEqual(blocked["response_file"], permitted["response_file"])
             self.assertEqual(permitted["status"], "succeeded")
 
+    def test_interrupted_execution_creates_recovery_evidence_without_replaying(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            inbox, outbox = root / "inbox", root / "outbox"
+            inbox.mkdir()
+            outbox.mkdir()
+            packet_path = inbox / "interrupted.json"
+            raw = json.dumps(packet(), indent=2).encode("utf-8")
+            packet_path.write_bytes(raw)
+            request_hash = hashlib.sha256(raw).hexdigest()
+            flags = {
+                "execute_architect_order": True,
+                "authorize_local_writes": False,
+                "execute_project_code": False,
+            }
+            order = validate_architect_order(json.loads(raw.decode("utf-8")))
+            existing_response_path = _response_path(outbox, request_hash, "execute-w0-c0")
+            pending = build_architect_response(
+                order, request_hash, status="execution_in_progress",
+                execution_started=True, queue_mutated=None, operator_flags=flags,
+            )
+            pending["validation"] = {
+                key: value for key, value in order.items() if key != "normalized_tasks"
+            }
+            pending["summary"] = order["summary"]
+            with ArchitectResponseWriter(existing_response_path) as writer:
+                writer.write(pending)
+
+            queue_path = outbox / "queue.json"
+            queue = TaskQueue(JsonMemory(queue_path))
+            queue.enqueue_many(order["normalized_tasks"])
+            queue.claim_next(allowed_task_ids=set(order["task_ids"]))
+
+            def no_replay(*_args):
+                self.fail("an interrupted execution must never be replayed automatically")
+
+            result = run_order_spool(
+                inbox_path=inbox, outbox_path=outbox,
+                execute=True, authorize_local_writes=False, execute_project_code=False,
+                project_root=str(inbox), memory_path=str(queue_path), check_timeout=10,
+                run_order=no_replay,
+            )
+            self.assertEqual(result["spool_status"], "recovery_required")
+            self.assertEqual(result["status"], "recovery_required")
+            self.assertFalse(result["processed"])
+            self.assertFalse(result["execution_replayed"])
+            self.assertEqual(result["response"]["evidence"]["queue_snapshot"]["tasks"][0]["status"], "running")
+            self.assertEqual(result["next_action"]["action"], "inspect_running_task")
+            self.assertTrue((outbox / result["recovery_report_file"]).is_file())
+            saved_original = json.loads(existing_response_path.read_text(encoding="utf-8"))
+            self.assertEqual(saved_original["status"], "execution_in_progress")
+            saved_recovery = json.loads((outbox / result["recovery_report_file"]).read_text(encoding="utf-8"))
+            self.assertEqual(saved_recovery["status"], "recovery_required")
+            self.assertEqual(saved_recovery["request_sha256"], request_hash)
+
+            repeated = run_order_spool(
+                inbox_path=inbox, outbox_path=outbox,
+                execute=True, authorize_local_writes=False, execute_project_code=False,
+                project_root=str(inbox), memory_path=str(queue_path), check_timeout=10,
+                run_order=no_replay,
+            )
+            self.assertEqual(repeated["recovery_report_file"], result["recovery_report_file"])
+            self.assertFalse(repeated["execution_replayed"])
+
+    def test_interrupted_execution_with_completed_queue_tasks_still_requires_report_review(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            inbox, outbox = root / "inbox", root / "outbox"
+            inbox.mkdir()
+            outbox.mkdir()
+            raw = json.dumps(packet(), indent=2).encode("utf-8")
+            (inbox / "interrupted.json").write_bytes(raw)
+            request_hash = hashlib.sha256(raw).hexdigest()
+            flags = {
+                "execute_architect_order": True,
+                "authorize_local_writes": False,
+                "execute_project_code": False,
+            }
+            order = validate_architect_order(json.loads(raw.decode("utf-8")))
+            existing_response_path = _response_path(outbox, request_hash, "execute-w0-c0")
+            pending = build_architect_response(
+                order, request_hash, status="execution_in_progress",
+                execution_started=True, queue_mutated=None, operator_flags=flags,
+            )
+            pending["validation"] = {
+                key: value for key, value in order.items() if key != "normalized_tasks"
+            }
+            with ArchitectResponseWriter(existing_response_path) as writer:
+                writer.write(pending)
+
+            queue_path = outbox / "queue.json"
+            queue = TaskQueue(JsonMemory(queue_path))
+            queue.enqueue_many(order["normalized_tasks"])
+            queue.claim_next(allowed_task_ids=set(order["task_ids"]))
+            task_id = order["task_ids"][0]
+            queue.complete(task_id, {"report_path": "verified-report.json", "verification": {"ok": True}})
+
+            result = run_order_spool(
+                inbox_path=inbox, outbox_path=outbox,
+                execute=True, authorize_local_writes=False, execute_project_code=False,
+                project_root=str(inbox), memory_path=str(queue_path), check_timeout=10,
+                run_order=lambda *_: self.fail("completed queue work must not be replayed"),
+            )
+            self.assertEqual(result["status"], "recovery_required")
+            self.assertEqual(
+                result["response"]["next_action"]["action"],
+                "verify_reports_and_close_interrupted_run",
+            )
+            record = result["response"]["evidence"]["queue_snapshot"]["tasks"][0]
+            self.assertEqual(record["status"], "succeeded")
+            self.assertEqual(record["report_path"], "verified-report.json")
     def test_direct_module_rejects_overlapping_directories(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
