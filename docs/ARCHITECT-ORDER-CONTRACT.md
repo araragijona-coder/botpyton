@@ -135,3 +135,11 @@ Recovery responses include a read-only snapshot of the queue records for the tas
 Each recovery report filename is derived from both the original order hash/profile and the queue snapshot hash. A later invocation can record a changed queue state as a new recovery report without overwriting old evidence. Repeating the same recovery snapshot reuses the prior report. Recovery is read-only: it neither calls `resume` nor reruns the order, resets tasks, mutates queue state, modifies the input packet, or removes the original response.
 
 This deliberately favors at-most-once behavior over automatic retries. The operator should inspect the queue/report paths and determine whether side effects completed before preparing any new order.
+
+## Phase 75 — bind interrupted-order recovery to the original request
+
+Recovery now re-parses the exact inbox bytes and revalidates the strict order contract before selecting task IDs from a prior `execution_in_progress` response. The task IDs used for the read-only queue snapshot always come from that canonical order, never from the stored response. BOTPYTON compares the response's order ID, source metadata, task IDs, required local approvals, operator flags and in-progress state markers against the canonical packet and the current invocation profile.
+
+If these fields disagree, BOTPYTON still does not replay any task. It emits `status: "recovery_required"`, marks `evidence.response_binding_status: "mismatch"`, lists only the mismatched field names, and directs the local operator to `inspect_response_integrity`. The original response and inbox packet remain unchanged; the recovery report continues to be content-addressed by the request and queue snapshot.
+
+The request SHA-256 is a correlation digest, **not** a digital signature and does not authenticate the external architect or all local response bytes. This phase detects important mismatches in a persisted interrupted response and prevents its mutable task-ID list from steering recovery. It does not claim tamper-proof storage or replace review of task reports and possible side effects.
