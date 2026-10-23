@@ -15,7 +15,6 @@ from typing import Any, Callable
 from .application_cache import _is_link_or_reparse
 from .architect_order_contract import ArchitectOrderError, validate_architect_order
 from .architect_order_response import (
-    ArchitectResponseError,
     ArchitectResponseWriter,
     build_architect_response,
     build_rejected_architect_response,
@@ -25,9 +24,6 @@ from .bounded_io import BoundedReadError, enforce_json_depth, read_bounded_bytes
 MAX_SPOOL_DIRECTORY_ENTRIES = 5_000
 MAX_SPOOL_ORDERS = 500
 MAX_ORDER_BYTES = 600_000
-ORDER_READ_ERROR_STATUSES = frozenset({"rejected_invalid_order", "authorization_required", "authorization_mismatch"})
-
-
 class ArchitectSpoolError(ValueError):
     """Raised when inbox/outbox cannot be accessed within the spool safety policy."""
 
@@ -280,7 +276,14 @@ def run_order_spool(
                 stream.write(raw)
                 stream.flush()
                 os.fsync(stream.fileno())
-            child = run_order(snapshot, response_path, flags)
+            try:
+                child = run_order(snapshot, response_path, flags)
+            except Exception as exc:
+                child = {
+                    "exit_code": 1,
+                    "stdout": "",
+                    "stderr": f"{type(exc).__name__}: {exc}",
+                }
             try:
                 response = _read_existing_response(response_path, request_sha256)
             except ArchitectSpoolError:
