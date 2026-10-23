@@ -594,3 +594,16 @@ The local agent now builds the next bounded audit log as a fully verified same-d
 
 The process runner bounds time, output, and (on Windows) child memory, but it does not create a network sandbox. Project tests/build scripts may contact remote hosts when explicitly authorized. On Windows, a registered `.bat` or `.cmd` tool wrapper may invoke `cmd.exe` even though BOTPYTON calls Python `Popen` with `shell=False`; the JSON result now reports this condition. Review `network_isolation_enforced`, `child_may_access_network`, and `windows_batch_wrapper_may_use_cmd` in process reports. See [Phase 61 process-boundary audit](docs/research/PHASE-61-PROCESS-BOUNDARY-AUDIT.md).
 
+
+
+## Phase 71: external architect-order contract
+
+An external architecture bot can hand BOTPYTON a bounded JSON order without turning task text into shell commands. The packet is validated against BOTPYTON's existing action allowlist, dependency rules, substantive machine-verifiable checks and size limits.
+
+Default is validation-only; it does not mutate the queue or execute project code:
+
+~~~powershell
+python -m bot.main --architect-order .cerebro/examples/architect-order.json
+~~~
+
+Execution requires `--execute-architect-order`. File-writing actions additionally require `--authorize-local-writes`; test/build actions additionally require `--execute-project-code`. Incoming JSON cannot grant any of these approvals. Orders with `status: "needs_input"` must contain questions and no executable tasks. Unknown fields—including `approved`, `execute`, and `shell`—are rejected. See [the Phase 71 contract](docs/ARCHITECT-ORDER-CONTRACT.md).

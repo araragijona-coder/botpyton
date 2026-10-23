@@ -27,6 +27,7 @@ from .orchestration import (
     validate_task_batch,
 )
 from .order_pipeline import run_order_batch
+from .architect_order_contract import ArchitectOrderError, validate_architect_order
 from .planner import order_tasks
 from .repository_analyzer import inspect_repository
 from .process_runner import ProcessRunnerError, run_tool_probe
@@ -181,6 +182,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--investigation-observed", metavar="TEXT", help="observed behavior and reproducible failure summary")
     parser.add_argument("--run-order", metavar="TASKS_JSON",
                         help="validate, enqueue and execute a bounded task batch with explicit machine-verifiable acceptance checks")
+    parser.add_argument("--architect-order", metavar="ORDER_JSON",
+                        help="validate an external architect's strict JSON order; dry-run by default")
+    parser.add_argument("--execute-architect-order", action="store_true",
+                        help="execute a validated architect order only after local approval gates are satisfied")
+    parser.add_argument("--authorize-local-writes", action="store_true",
+                        help="explicitly authorize local file-writing actions in --architect-order")
     parser.add_argument("--enqueue", metavar="PATH", help="idempotently enqueue one task or a JSON array")
     parser.add_argument("--queue", action="store_true", help="list durable queue records")
     parser.add_argument("--claim-next", action="store_true", help="claim and print the next ready task")
@@ -239,6 +246,86 @@ def main(argv: list[str] | None = None) -> int:
         })
         return 2
     try:
+        if args.execute_architect_order and not args.architect_order:
+            raise ArchitectOrderError("--execute-architect-order requires --architect-order ORDER_JSON")
+        if args.authorize_local_writes and not args.architect_order:
+            raise ArchitectOrderError("--authorize-local-writes requires --architect-order ORDER_JSON")
+        if args.architect_order:
+            allowed_order_args = {
+                "architect_order", "execute_architect_order", "authorize_local_writes",
+                "execute_project_code", "project_root", "memory", "check_timeout",
+                "child_memory_limit_mb",
+            }
+            conflicts = [
+                name.replace("_", "-")
+                for name, value in vars(args).items()
+                if name not in allowed_order_args and value != parser.get_default(name)
+            ]
+            if conflicts:
+                raise ArchitectOrderError(
+                    "--architect-order must be a standalone operation; conflicting options: "
+                    + ", ".join(sorted(conflicts))
+                )
+            packet = _read_bounded_json(args.architect_order, limit_bytes=600_000)
+            order = validate_architect_order(packet)
+            public_order = {key: value for key, value in order.items() if key != "normalized_tasks"}
+            if order["status"] == "needs_input":
+                _print_json({
+                    **public_order, "status": "needs_input",
+                    "execution_started": False, "queue_mutated": False,
+                    "next_step": "Answer the listed questions, then submit a new ready packet.",
+                })
+                return 2
+            task_previews = [
+                {
+                    "id": task["id"], "goal": task["goal"],
+                    "depends_on": task.get("depends_on", []),
+                    "allowed_actions": task["allowed_actions"],
+                    "verification_checks": task["verification_checks"],
+                    "max_attempts": task.get("max_attempts", 3),
+                }
+                for task in order["normalized_tasks"]
+            ]
+            if not args.execute_architect_order:
+                _print_json({
+                    **public_order, "status": "validated_for_review",
+                    "tasks_preview": task_previews,
+                    "execution_started": False, "queue_mutated": False,
+                    "next_step": (
+                        "Review the exact task payloads and add --execute-architect-order only "
+                        "when the operation and project root are approved."
+                    ),
+                })
+                return 0
+            required_approvals = set(order["required_local_approvals"])
+            if "local_file_write" in required_approvals and not args.authorize_local_writes:
+                raise ArchitectOrderError(
+                    "This order includes file-writing actions; add --authorize-local-writes only "
+                    "after reviewing the proposed changes."
+                )
+            if "project_code_execution" in required_approvals and not args.execute_project_code:
+                raise ArchitectOrderError(
+                    "This order runs project code/tests; add --execute-project-code only after review."
+                )
+            if args.authorize_local_writes and "local_file_write" not in required_approvals:
+                raise ArchitectOrderError("--authorize-local-writes was supplied but no write action was requested")
+            if args.execute_project_code and "project_code_execution" not in required_approvals:
+                raise ArchitectOrderError("--execute-project-code was supplied but no project-code action was requested")
+            queue = TaskQueue(JsonMemory(args.memory))
+            executor = TaskExecutor(
+                Path(args.project_root).expanduser().resolve(),
+                test_timeout_seconds=args.check_timeout,
+            )
+            execution = run_order_batch(order["normalized_tasks"], queue=queue, executor=executor)
+            _print_json({
+                "schema_version": 1, "status": execution["status"],
+                "order_id": order["order_id"], "source": order["source"],
+                "summary": order["summary"], "validation": public_order,
+                "execution": execution, "execution_started": True, "queue_mutated": True,
+                "ai_enabled": False, "external_ai_apis_enabled": False, "automatic_merge": False,
+            })
+            return 0 if execution["status"] == "succeeded" else 1
+
         if args.github_preflight:
             allowed_preflight_args = {"github_preflight", "github_branch", "github_intent"}
             conflicts = [

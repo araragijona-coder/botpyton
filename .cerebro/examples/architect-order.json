@@ -1,0 +1,32 @@
+{
+  "schema_version": 1,
+  "order_id": "ARCH-ORDER-DEMO-001",
+  "source": {
+    "agent_id": "external-architect-demo",
+    "plan_id": "PLAN-DEMO-001"
+  },
+  "summary": "Inspect the selected project and return a verified report.",
+  "status": "ready",
+  "tasks": [
+    {
+      "id": "ARCH-DEMO-TASK-001",
+      "goal": "Inspect the repository, validate this task, and prepare a report.",
+      "depends_on": [],
+      "allowed_actions": [
+        "inspect_repository",
+        "validate_task",
+        "prepare_report"
+      ],
+      "success_conditions": [
+        "repository_inspected",
+        "task_validated",
+        "report_created"
+      ],
+      "max_attempts": 1,
+      "verification_checks": [
+        {"type": "python_syntax"}
+      ]
+    }
+  ],
+  "questions": []
+}

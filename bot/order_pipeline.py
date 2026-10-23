@@ -44,6 +44,11 @@ def _normalize_order(value: Any) -> list[dict[str, Any]]:
     return tasks
 
 
+def validate_order_tasks(value: Any) -> list[dict[str, Any]]:
+    """Public, side-effect-free task/order preflight shared by all order adapters."""
+    return _normalize_order(value)
+
+
 def run_order_batch(
     value: Any, *, queue: TaskQueue, executor: TaskExecutor
 ) -> dict[str, Any]:
@@ -53,7 +58,7 @@ def run_order_batch(
     dependencies must already be succeeded; unrelated pending queue work is left
     untouched. A failed preflight does not enqueue or execute anything.
     """
-    tasks = _normalize_order(value)
+    tasks = validate_order_tasks(value)
     target_ids = {task["id"] for task in tasks}
     persisted = {record["id"]: record for record in queue.list_tasks()}
 
