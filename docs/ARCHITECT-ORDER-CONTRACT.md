@@ -71,13 +71,13 @@ A validated order can now produce a separate, machine-readable response file for
 Validation-only response:
 
 ~~~powershell
-python -m bot.main --architect-order .cerebro/examples/architect-order.json --architect-response .cerebro/reports/ARCH-ORDER-DEMO-001-response.json
+python -m bot.main --architect-order .cerebro/examples/architect-order.json --architect-response ARCH-ORDER-DEMO-001-response.json
 ~~~
 
 After reviewing the exact payload and approving its required capabilities, explicitly execute and persist a separate response. For this read-only example no write/code approvals are needed:
 
 ~~~powershell
-python -m bot.main --architect-order .cerebro/examples/architect-order.json --execute-architect-order --project-root "C:\projects\sample" --memory .cerebro/memory/state.json --architect-response .cerebro/reports/ARCH-ORDER-DEMO-001-execution.json
+python -m bot.main --architect-order .cerebro/examples/architect-order.json --execute-architect-order --project-root "C:\projects\sample" --memory .cerebro/memory/state.json --architect-response ARCH-ORDER-DEMO-001-execution.json
 ~~~
 
 The parent directory must already exist and the output path must not exist. BotPyton uses exclusive file creation and refuses to overwrite an earlier response. Choose a unique response filename for each submission. Before starting execution, the file is durably populated with an `execution_in_progress` marker; after the run, BotPyton replaces its contents through the same owned file handle and flushes it to disk. If the process is interrupted, the marker says that execution started and queue mutation is unknown—inspect the queue and any per-task reports before retrying.
