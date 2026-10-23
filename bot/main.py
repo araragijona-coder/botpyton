@@ -300,6 +300,8 @@ def main(argv: list[str] | None = None) -> int:
                     execution_started=False, queue_mutated=False,
                     operator_flags=operator_flags,
                 )
+                response.update({key: value for key, value in public_order.items() if key != "status"})
+                response["order_status"] = order["status"]
                 response["validation"] = public_order
                 if args.architect_response:
                     with ArchitectResponseWriter(args.architect_response) as writer:
@@ -313,6 +315,8 @@ def main(argv: list[str] | None = None) -> int:
                     operator_flags=operator_flags,
                     tasks_for_review=order["normalized_tasks"],
                 )
+                response.update({key: value for key, value in public_order.items() if key != "status"})
+                response["order_status"] = order["status"]
                 response["validation"] = public_order
                 response["summary"] = order["summary"]
                 if args.architect_response:
@@ -342,6 +346,8 @@ def main(argv: list[str] | None = None) -> int:
                     execution_started=True, queue_mutated=None,
                     operator_flags=operator_flags,
                 )
+                pending_response.update({key: value for key, value in public_order.items() if key != "status"})
+                pending_response["order_status"] = order["status"]
                 pending_response["validation"] = public_order
                 pending_response["summary"] = order["summary"]
                 response_writer.write(pending_response)
@@ -360,6 +366,8 @@ def main(argv: list[str] | None = None) -> int:
                     operator_flags=operator_flags,
                     error=f"{type(exc).__name__}: {exc}",
                 )
+                response.update({key: value for key, value in public_order.items() if key != "status"})
+                response["order_status"] = order["status"]
                 response["validation"] = public_order
                 response["summary"] = order["summary"]
                 if response_writer is not None:
