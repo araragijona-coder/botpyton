@@ -152,6 +152,21 @@ class TaskExecutor:
             if not isinstance(plan, dict):
                 raise PolicyError("apply_local_plan requires a local_change_plan object")
             return apply_local_change_plan(plan, self.root)
+        if action == "apply_reviewed_patch":
+            from .patch_cycle import PatchCycleError, apply_patch_to_workspace
+            try:
+                result = apply_patch_to_workspace(task.get("reviewed_patch"), self.root)
+            except PatchCycleError as exc:
+                raise ActionFailure(
+                    f"Reviewed patch failed: {exc}",
+                    log_text=str(exc)[-50_000:],
+                ) from exc
+            if result.get("patch_applied") is not True:
+                raise ActionFailure(
+                    "Reviewed patch did not produce a verified change",
+                    log_text=str(result)[-50_000:],
+                )
+            return result
         if action == "apply_known_fix":
             previous_error = record.get("last_error") or task.get("failure_context")
             if not previous_error:

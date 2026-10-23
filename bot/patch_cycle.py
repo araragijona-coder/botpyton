@@ -163,6 +163,173 @@ def _verify_changed_files(root: Path, paths: list[str]) -> list[dict[str, Any]]:
     return results
 
 
+def validate_reviewed_patch_text(patch_text: object) -> list[str]:
+    """Validate the bounded, path-safe shape of an inline reviewed diff."""
+    if not isinstance(patch_text, str) or not patch_text:
+        raise PatchCycleError("reviewed_patch must be a non-empty UTF-8 string")
+    try:
+        raw = patch_text.encode("utf-8")
+    except UnicodeEncodeError as exc:
+        raise PatchCycleError("reviewed_patch contains text that cannot be encoded as UTF-8") from exc
+    if len(raw) > MAX_PATCH_BYTES:
+        raise PatchCycleError(f"reviewed_patch exceeds {MAX_PATCH_BYTES} bytes")
+    if b"\x00" in raw:
+        raise PatchCycleError("Binary patch data is not supported")
+    return _diff_paths(patch_text)
+
+
+def _isolated_candidate_root(workspace_path: str | Path) -> Path:
+    """Require a non-primary BOTPYTON worktree, not the original checkout."""
+    requested = Path(workspace_path).expanduser()
+    try:
+        _reject_link_components(requested, "Patch worktree")
+        root = requested.resolve(strict=True)
+    except (LocalChangeError, OSError, RuntimeError, ValueError) as exc:
+        raise PatchCycleError(f"Patch worktree cannot be resolved safely ({type(exc).__name__})") from None
+    if not root.is_dir():
+        raise PatchCycleError("Patch worktree must be an existing directory")
+    top = _git(root, ["rev-parse", "--show-toplevel"])
+    branch = _git(root, ["symbolic-ref", "--short", "HEAD"])
+    listed = _git(root, ["worktree", "list", "--porcelain"])
+    if any(item["exit_code"] != 0 for item in (top, branch, listed)):
+        raise PatchCycleError("Patch target must be a valid, attached Git worktree")
+    try:
+        if Path(top["stdout"].strip()).resolve() != root:
+            raise PatchCycleError("Patch target must be the root of its Git worktree")
+    except (OSError, RuntimeError, ValueError) as exc:
+        raise PatchCycleError("Could not confirm the patch worktree root") from exc
+    branch_name = branch["stdout"].strip()
+    if not branch_name.startswith("botpyton/"):
+        raise PatchCycleError("Reviewed patches may only run on a dedicated botpyton/* worktree branch")
+    blocks = [
+        block for block in listed["stdout"].split("\n\n")
+        if any(line.startswith("worktree ") for line in block.splitlines())
+    ]
+    current_index = None
+    for index, block in enumerate(blocks):
+        worktree_line = next((line[len("worktree "):] for line in block.splitlines()
+                              if line.startswith("worktree ")), None)
+        if worktree_line is None:
+            continue
+        try:
+            if Path(worktree_line).resolve() == root:
+                current_index = index
+                block_branch = next((line[len("branch "):] for line in block.splitlines()
+                                     if line.startswith("branch ")), "")
+                if block_branch != f"refs/heads/{branch_name}":
+                    raise PatchCycleError("Git worktree branch metadata is inconsistent")
+                break
+        except (OSError, RuntimeError, ValueError) as exc:
+            raise PatchCycleError("Could not confirm Git worktree identity") from exc
+    if current_index is None or current_index == 0 or len(blocks) < 2:
+        raise PatchCycleError("Patch application is blocked in the primary source checkout; use an isolated worktree")
+    return root
+
+
+def preflight_reviewed_patch_in_workspace(
+    patch_text: object, workspace_path: str | Path
+) -> dict[str, Any]:
+    """Check patch shape, target identity and applicability without changing the worktree."""
+    raw_text = patch_text
+    paths = validate_reviewed_patch_text(raw_text)
+    raw = raw_text.encode("utf-8")
+    root = _isolated_candidate_root(workspace_path)
+    _check_existing_targets(root, paths)
+    for relative in paths:
+        tracked = _git(root, ["ls-files", "--error-unmatch", "--", relative])
+        if tracked["exit_code"] != 0:
+            raise PatchCycleError(f"Reviewed patch target must be an existing tracked file: {relative}")
+    temporary_patch: str | None = None
+    try:
+        with tempfile.NamedTemporaryFile(prefix="botpyton-order-", suffix=".patch", delete=False) as stream:
+            temporary_patch = stream.name
+            stream.write(raw)
+        checked = _git(
+            root, ["apply", "--check", "--whitespace=error", temporary_patch], timeout_seconds=45
+        )
+        if checked["exit_code"] != 0:
+            reason = (checked.get("stderr") or checked.get("stdout") or "git apply --check rejected the patch").strip()
+            raise PatchCycleError(reason[-2_000:])
+    finally:
+        if temporary_patch:
+            try:
+                Path(temporary_patch).unlink()
+            except OSError:
+                pass
+    return {
+        "patch_sha256": hashlib.sha256(raw).hexdigest(),
+        "patch_bytes": len(raw),
+        "files": paths,
+        "applicable": True,
+        "source_checkout_modified": False,
+    }
+
+
+def apply_patch_to_workspace(patch_text: object, workspace_path: str | Path) -> dict[str, Any]:
+    """Apply one bounded unified diff to the caller's isolated worktree; never create or merge branches."""
+    preflight = preflight_reviewed_patch_in_workspace(patch_text, workspace_path)
+    raw = patch_text.encode("utf-8")
+    root = _isolated_candidate_root(workspace_path)
+    temporary_patch: str | None = None
+    try:
+        with tempfile.NamedTemporaryFile(prefix="botpyton-order-", suffix=".patch", delete=False) as stream:
+            temporary_patch = stream.name
+            stream.write(raw)
+        # Recheck applicability immediately before applying the exact same bytes.
+        checked = _git(
+            root, ["apply", "--check", "--whitespace=error", temporary_patch], timeout_seconds=45
+        )
+        if checked["exit_code"] != 0:
+            reason = (checked.get("stderr") or checked.get("stdout") or "git apply --check rejected the patch").strip()
+            raise PatchCycleError(reason[-2_000:])
+        applied = _git(root, ["apply", "--whitespace=error", temporary_patch], timeout_seconds=45)
+        if applied["exit_code"] != 0:
+            reason = (applied.get("stderr") or applied.get("stdout") or "git apply failed").strip()
+            raise PatchCycleError(reason[-2_000:])
+    finally:
+        if temporary_patch:
+            try:
+                Path(temporary_patch).unlink()
+            except OSError:
+                pass
+
+    diff_check = _git(root, ["diff", "--check"])
+    if diff_check["exit_code"] != 0:
+        reason = (diff_check.get("stderr") or diff_check.get("stdout") or "git diff --check failed").strip()
+        raise PatchCycleError(reason[-2_000:])
+    static = _verify_changed_files(root, preflight["files"])
+    failures = [item for item in static if item.get("ok") is not True]
+    if failures:
+        raise PatchCycleError(
+            "Reviewed patch failed bounded static verification: "
+            + json.dumps(failures, ensure_ascii=False)[:2_000]
+        )
+    changed = _git(root, ["diff", "--name-only"])
+    if changed["exit_code"] != 0:
+        raise PatchCycleError("Could not enumerate candidate changes after patch application")
+    changed_paths = sorted(line for line in changed["stdout"].splitlines() if line)
+    if not set(preflight["files"]).issubset(set(changed_paths)):
+        raise PatchCycleError("Candidate diff does not contain every path declared by the reviewed patch")
+    return {
+        "status": "patch_applied",
+        "patch_applied": True,
+        "patch_sha256": preflight["patch_sha256"],
+        "patch_bytes": preflight["patch_bytes"],
+        "files": preflight["files"],
+        "git_apply_check": True,
+        "git_diff_check": True,
+        "static_verification": static,
+        "changed_paths": changed_paths,
+        "candidate_workspace": str(root),
+        "target_worktree_only": True,
+        "source_checkout_modified": False,
+        "merge_performed": False,
+        "push_performed": False,
+        "network_used": False,
+        "ai_enabled": False,
+    }
+
+
 def _check_summary(result: dict[str, Any]) -> dict[str, Any]:
     """Keep CI/program output bounded while retaining useful failure evidence."""
     return {

@@ -136,6 +136,15 @@ def evaluate_verification_checks(
                 ]
                 result.update({"ok": bool(candidates),
                                "reason": "local plan applied" if candidates else "no local plan was applied"})
+            elif check_type == "patch_applied":
+                candidates = [
+                    item for item in action_results
+                    if item.get("action") == "apply_reviewed_patch"
+                    and item.get("ok") and isinstance(item.get("details"), dict)
+                    and item["details"].get("patch_applied") is True
+                ]
+                result.update({"ok": bool(candidates),
+                               "reason": "reviewed patch applied in isolated worktree" if candidates else "no reviewed patch was applied"})
             elif check_type == "report_exists":
                 path = _target(base, report_path) if report_path else None
                 ok = bool(path and path.is_file())

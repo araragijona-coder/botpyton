@@ -11,6 +11,7 @@ ALLOWED_ACTIONS = frozenset({
     "run_project_check",
     "apply_known_fix",
     "apply_local_plan",
+    "apply_reviewed_patch",
     "prepare_report",
 })
 PROTECTED_PATH_PREFIXES = (
@@ -65,11 +66,21 @@ def validate_task(task: dict[str, Any]) -> None:
             or not 64 <= memory_limit <= 1024
         ):
             raise PolicyError("child_memory_limit_mb must be an integer from 64 to 1024")
+    if "apply_reviewed_patch" in actions:
+        patch_text = task.get("reviewed_patch")
+        try:
+            from .patch_cycle import PatchCycleError, validate_reviewed_patch_text
+            validate_reviewed_patch_text(patch_text)
+        except (PatchCycleError, UnicodeError, TypeError, ValueError) as exc:
+            raise PolicyError(f"Invalid reviewed_patch: {str(exc)[:1_000]}") from exc
+    elif "reviewed_patch" in task:
+        raise PolicyError("reviewed_patch is only allowed with apply_reviewed_patch")
+
     verification_checks = task.get("verification_checks")
     if verification_checks is not None:
         allowed_check_types = {
             "file_exists", "file_sha256", "python_syntax", "json_valid",
-            "tests_pass", "project_check_pass", "local_plan_applied", "report_exists",
+            "tests_pass", "project_check_pass", "local_plan_applied", "patch_applied", "report_exists",
         }
         if not isinstance(verification_checks, list) or not 1 <= len(verification_checks) <= 20:
             raise PolicyError("verification_checks must contain 1–20 check objects")
@@ -104,6 +115,12 @@ def validate_task(task: dict[str, Any]) -> None:
         types = {item.get("type") for item in (verification_checks or []) if isinstance(item, dict)}
         if not types.intersection({"project_check_pass", "tests_pass"}):
             raise PolicyError("run_project_check requires a project_check_pass or tests_pass verification check")
+    if "apply_reviewed_patch" in actions:
+        types = {item.get("type") for item in (verification_checks or []) if isinstance(item, dict)}
+        if "patch_applied" not in types:
+            raise PolicyError("apply_reviewed_patch requires a patch_applied verification check")
+        if not types.intersection({"file_exists", "file_sha256", "python_syntax", "json_valid"}):
+            raise PolicyError("apply_reviewed_patch requires a separate artifact or syntax verification check")
 
 
 def validate_relative_path(path: str) -> str:

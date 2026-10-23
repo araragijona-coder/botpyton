@@ -268,7 +268,7 @@ class ArchitectOrderContractTests(unittest.TestCase):
             git("init", "-b", "main")
             git("config", "user.email", "botpyton-test@example.invalid")
             git("config", "user.name", "BotPyton Tests")
-            (project / "sample.py").write_text("VALUE = 1\\n", encoding="utf-8")
+            (project / "sample.py").write_text("VALUE = 1\n", encoding="utf-8")
             git("add", "sample.py")
             git("commit", "-m", "baseline")
 
@@ -284,7 +284,7 @@ class ArchitectOrderContractTests(unittest.TestCase):
             task_value["local_change_plan"] = {
                 "schema_version": 1,
                 "task_id": "ARCH-WRITE-003",
-                "changes": [{"path": "generated.py", "content": "VALUE = 2\\n"}],
+                "changes": [{"path": "generated.py", "content": "VALUE = 2\n"}],
             }
             order_path = root / "architect-order.json"
             queue_path = root / "queue.json"
@@ -312,7 +312,7 @@ class ArchitectOrderContractTests(unittest.TestCase):
             self.assertIn("generated.py", result["workspace"]["final_inspection"]["working_tree_status"])
             workspace = Path(result["workspace"]["workspace_path"])
             self.assertTrue((workspace / "generated.py").is_file())
-            self.assertEqual((workspace / "generated.py").read_text(encoding="utf-8"), "VALUE = 2\\n")
+            self.assertEqual((workspace / "generated.py").read_text(encoding="utf-8"), "VALUE = 2\n")
             self.assertFalse((project / "generated.py").exists())
             self.assertEqual(
                 json.loads(response_path.read_text(encoding="utf-8")),
@@ -338,7 +338,7 @@ class ArchitectOrderContractTests(unittest.TestCase):
             task_value["local_change_plan"] = {
                 "schema_version": 1,
                 "task_id": "ARCH-WRITE-004",
-                "changes": [{"path": "generated.py", "content": "VALUE = 4\\n"}],
+                "changes": [{"path": "generated.py", "content": "VALUE = 4\n"}],
             }
             order_path = root / "architect-order.json"
             queue_path = root / "queue.json"
@@ -361,6 +361,217 @@ class ArchitectOrderContractTests(unittest.TestCase):
             self.assertFalse(result["queue_mutated"])
             self.assertFalse(queue_path.exists())
             self.assertFalse((project / "generated.py").exists())
+            self.assertEqual(json.loads(response_path.read_text(encoding="utf-8")), result)
+
+    def test_reviewed_patch_requires_local_write_approval_and_static_acceptance(self):
+        patch_text = (
+            "diff --git a/app.py b/app.py\n"
+            "--- a/app.py\n"
+            "+++ b/app.py\n"
+            "@@ -1 +1 @@\n"
+            "-VALUE = 1\n"
+            "+VALUE = 2\n"
+        )
+        patch_task = task(
+            "ARCH-PATCH-SCHEMA-001",
+            actions=["apply_reviewed_patch", "prepare_report"],
+            checks=[{"type": "patch_applied"}, {"type": "python_syntax"}],
+        )
+        patch_task["success_conditions"] = ["patch_applied", "python_syntax"]
+        patch_task["reviewed_patch"] = patch_text
+        validated = validate_architect_order(packet([patch_task]))
+        self.assertEqual(validated["required_local_approvals"], ["local_file_write"])
+        self.assertFalse(validated["external_authorization_trusted"])
+        self.assertFalse(validated["packet_can_enable_execution"])
+
+        unsafe = task(
+            "ARCH-PATCH-UNSAFE-001",
+            actions=["apply_reviewed_patch", "prepare_report"],
+            checks=[{"type": "patch_applied"}, {"type": "python_syntax"}],
+        )
+        unsafe["reviewed_patch"] = (
+            "diff --git a/../outside.py b/../outside.py\n"
+            "--- a/../outside.py\n"
+            "+++ b/../outside.py\n"
+            "@@ -1 +1 @@\n-old\n+new\n"
+        )
+        with self.assertRaisesRegex(ArchitectOrderError, "Task batch failed strict validation|unsafe relative path|canonical relative path"):
+            validate_architect_order(packet([unsafe]))
+
+    def test_reviewed_patch_tasks_cannot_overlap_even_with_windows_case_variants(self):
+        patch_template = (
+            "diff --git a/{path} b/{path}\n"
+            "--- a/{path}\n"
+            "+++ b/{path}\n"
+            "@@ -1 +1 @@\n"
+            "-VALUE = 1\n"
+            "+VALUE = 2\n"
+        )
+        first = task(
+            "ARCH-PATCH-OVERLAP-A",
+            actions=["apply_reviewed_patch", "prepare_report"],
+            checks=[{"type": "patch_applied"}, {"type": "python_syntax"}],
+        )
+        second = task(
+            "ARCH-PATCH-OVERLAP-B",
+            actions=["apply_reviewed_patch", "prepare_report"],
+            checks=[{"type": "patch_applied"}, {"type": "python_syntax"}],
+        )
+        first["success_conditions"] = ["patch_applied", "python_syntax"]
+        second["success_conditions"] = ["patch_applied", "python_syntax"]
+        first["reviewed_patch"] = patch_template.format(path="App.py")
+        second["reviewed_patch"] = patch_template.format(path="app.py")
+        with self.assertRaisesRegex(ArchitectOrderError, "both change"):
+            validate_architect_order(packet([first, second]))
+
+    def test_inline_reviewed_patch_is_preflighted_and_applied_only_in_order_worktree(self):
+        if not shutil.which("git"):
+            self.skipTest("Git is required for isolated architect workspace tests")
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            project = root / "project"
+            project.mkdir()
+
+            def git(*args):
+                subprocess.run(
+                    ["git", *args], cwd=project, stdin=subprocess.DEVNULL,
+                    stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, check=True,
+                )
+
+            git("init", "-b", "main")
+            git("config", "user.email", "botpyton-test@example.invalid")
+            git("config", "user.name", "BotPyton Tests")
+            source_file = project / "app.py"
+            source_file.write_text("VALUE = 1\n", encoding="utf-8")
+            git("add", "app.py")
+            git("commit", "-m", "baseline")
+
+            patch_task = task(
+                "ARCH-PATCH-EXEC-001",
+                actions=["apply_reviewed_patch", "prepare_report"],
+                checks=[{"type": "patch_applied"}, {"type": "python_syntax"}],
+            )
+            patch_task["success_conditions"] = ["patch_applied", "python_syntax"]
+            patch_task["reviewed_patch"] = (
+                "diff --git a/app.py b/app.py\n"
+                "--- a/app.py\n"
+                "+++ b/app.py\n"
+                "@@ -1 +1 @@\n"
+                "-VALUE = 1\n"
+                "+VALUE = 2\n"
+            )
+            order_path = root / "order.json"
+            queue_path = root / "queue.json"
+            response_path = root / "response.json"
+            workspace_parent = root / "workspaces"
+            order_path.write_text(json.dumps(packet([patch_task])), encoding="utf-8")
+
+            preview = io.StringIO()
+            with contextlib.redirect_stdout(preview), contextlib.redirect_stderr(preview):
+                preview_code = main([
+                    "--architect-order", str(order_path), "--project-root", str(project),
+                    "--memory", str(queue_path),
+                ])
+            preview_result = json.loads(preview.getvalue())
+            self.assertEqual(preview_code, 0, preview.getvalue())
+            self.assertTrue(preview_result["workspace_policy"]["required_for_execution"])
+            self.assertFalse(preview_result["workspace_policy"]["prepared"])
+            self.assertFalse(workspace_parent.exists())
+            self.assertFalse(queue_path.exists())
+            self.assertEqual(source_file.read_text(encoding="utf-8"), "VALUE = 1\n")
+
+            output = io.StringIO()
+            with contextlib.redirect_stdout(output), contextlib.redirect_stderr(output):
+                code = main([
+                    "--architect-order", str(order_path),
+                    "--execute-architect-order", "--authorize-local-writes",
+                    "--architect-response", str(response_path),
+                    "--project-root", str(project), "--memory", str(queue_path),
+                    "--architect-workspace-parent", str(workspace_parent),
+                ])
+            result = json.loads(output.getvalue())
+            self.assertEqual(code, 0, output.getvalue())
+            self.assertEqual(result["status"], "succeeded")
+            workspace = Path(result["workspace"]["workspace_path"])
+            self.assertEqual(result["workspace"]["status"], "inspection_complete")
+            self.assertEqual(result["workspace"]["patch_preflight"][0]["task_id"], "ARCH-PATCH-EXEC-001")
+            self.assertEqual(result["workspace"]["patch_preflight"][0]["files"], ["app.py"])
+            self.assertTrue(result["workspace"]["patch_preflight"][0]["applicable"])
+            self.assertTrue(result["workspace"]["final_inspection"]["has_changes"])
+            self.assertEqual(source_file.read_text(encoding="utf-8"), "VALUE = 1\n")
+            self.assertEqual((workspace / "app.py").read_text(encoding="utf-8"), "VALUE = 2\n")
+            report_path = Path(result["execution"]["tasks"][0]["report_path"])
+            if not report_path.is_absolute():
+                report_path = workspace / report_path
+            report = json.loads(report_path.read_text(encoding="utf-8"))
+            patch_action = next(item for item in report["actions"] if item["action"] == "apply_reviewed_patch")
+            self.assertTrue(patch_action["ok"])
+            self.assertTrue(patch_action["details"]["patch_applied"])
+            self.assertTrue(patch_action["details"]["git_diff_check"])
+            self.assertFalse(result["automatic_merge"])
+            self.assertFalse(result["workspace"]["merge_performed"])
+            self.assertEqual(json.loads(response_path.read_text(encoding="utf-8")), result)
+
+    def test_unapplicable_reviewed_patch_stops_before_queue_mutation(self):
+        if not shutil.which("git"):
+            self.skipTest("Git is required for isolated architect workspace tests")
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            project = root / "project"
+            project.mkdir()
+
+            def git(*args):
+                subprocess.run(
+                    ["git", *args], cwd=project, stdin=subprocess.DEVNULL,
+                    stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, check=True,
+                )
+
+            git("init", "-b", "main")
+            git("config", "user.email", "botpyton-test@example.invalid")
+            git("config", "user.name", "BotPyton Tests")
+            source_file = project / "app.py"
+            source_file.write_text("VALUE = 1\n", encoding="utf-8")
+            git("add", "app.py")
+            git("commit", "-m", "baseline")
+
+            patch_task = task(
+                "ARCH-PATCH-STALE-001",
+                actions=["apply_reviewed_patch", "prepare_report"],
+                checks=[{"type": "patch_applied"}, {"type": "python_syntax"}],
+            )
+            patch_task["success_conditions"] = ["patch_applied", "python_syntax"]
+            patch_task["reviewed_patch"] = (
+                "diff --git a/app.py b/app.py\n"
+                "--- a/app.py\n"
+                "+++ b/app.py\n"
+                "@@ -1 +1 @@\n"
+                "-VALUE = 999\n"
+                "+VALUE = 2\n"
+            )
+            order_path = root / "stale-order.json"
+            queue_path = root / "queue.json"
+            response_path = root / "response.json"
+            workspace_parent = root / "workspaces"
+            order_path.write_text(json.dumps(packet([patch_task])), encoding="utf-8")
+
+            output = io.StringIO()
+            with contextlib.redirect_stdout(output), contextlib.redirect_stderr(output):
+                code = main([
+                    "--architect-order", str(order_path),
+                    "--execute-architect-order", "--authorize-local-writes",
+                    "--architect-response", str(response_path),
+                    "--project-root", str(project), "--memory", str(queue_path),
+                    "--architect-workspace-parent", str(workspace_parent),
+                ])
+            result = json.loads(output.getvalue())
+            self.assertEqual(code, 1, output.getvalue())
+            self.assertEqual(result["status"], "execution_error")
+            self.assertFalse(result["execution_started"])
+            self.assertFalse(result["queue_mutated"])
+            self.assertEqual(result["workspace"]["status"], "patch_preflight_failed")
+            self.assertIn("patch_preflight_error", result["workspace"])
+            self.assertFalse(queue_path.exists())
+            self.assertEqual(source_file.read_text(encoding="utf-8"), "VALUE = 1\n")
             self.assertEqual(json.loads(response_path.read_text(encoding="utf-8")), result)
 
     def test_cli_executes_only_after_explicit_order_approval(self):
