@@ -324,6 +324,7 @@ class ArchitectSpoolTests(unittest.TestCase):
                 key: value for key, value in order.items() if key != "normalized_tasks"
             }
             pending["validation"]["task_ids"] = ["FORGED-TASK-ID"]
+            pending["queue_mutated"] = True
             pending["summary"] = order["summary"]
             with ArchitectResponseWriter(response_path) as writer:
                 writer.write(pending)
@@ -343,6 +344,8 @@ class ArchitectSpoolTests(unittest.TestCase):
             evidence = response["evidence"]
             self.assertEqual(evidence["response_binding_status"], "mismatch")
             self.assertIn("validation.task_ids", evidence["response_binding_mismatches"])
+            self.assertIn("queue_mutated", evidence["response_binding_mismatches"])
+            self.assertIsNone(response["queue_mutated"])
             self.assertEqual(evidence["task_ids_from_order"], ["SPOOL-TASK-001"])
             self.assertEqual(evidence["queue_snapshot"]["tasks"][0]["task_id"], "SPOOL-TASK-001")
             self.assertEqual(evidence["queue_snapshot"]["tasks"][0]["status"], "pending")
