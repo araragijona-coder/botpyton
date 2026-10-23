@@ -296,5 +296,63 @@ class ArchitectSpoolTests(unittest.TestCase):
             self.assertEqual(code, 2)
 
 
+    def test_recovery_uses_original_order_not_tampered_response_task_ids(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            inbox, outbox = root / "inbox", root / "outbox"
+            inbox.mkdir()
+            outbox.mkdir()
+            raw = json.dumps(packet(), indent=2).encode("utf-8")
+            (inbox / "interrupted.json").write_bytes(raw)
+            request_hash = hashlib.sha256(raw).hexdigest()
+            order = validate_architect_order(json.loads(raw.decode("utf-8")))
+            queue_path = outbox / "queue.json"
+            queue = TaskQueue(JsonMemory(queue_path))
+            queue.enqueue_many(order["normalized_tasks"])
+
+            flags = {
+                "execute_architect_order": True,
+                "authorize_local_writes": False,
+                "execute_project_code": False,
+            }
+            response_path = _response_path(outbox, request_hash, "execute-w0-c0")
+            pending = build_architect_response(
+                order, request_hash, status="execution_in_progress",
+                execution_started=True, queue_mutated=None, operator_flags=flags,
+            )
+            pending["validation"] = {
+                key: value for key, value in order.items() if key != "normalized_tasks"
+            }
+            pending["validation"]["task_ids"] = ["FORGED-TASK-ID"]
+            pending["queue_mutated"] = True
+            pending["summary"] = order["summary"]
+            with ArchitectResponseWriter(response_path) as writer:
+                writer.write(pending)
+
+            def no_replay(*_args):
+                self.fail("response-integrity mismatch must not replay project tasks")
+
+            result = run_order_spool(
+                inbox_path=inbox, outbox_path=outbox,
+                execute=True, authorize_local_writes=False, execute_project_code=False,
+                project_root=str(inbox), memory_path=str(queue_path), check_timeout=10,
+                run_order=no_replay,
+            )
+            self.assertEqual(result["status"], "recovery_required")
+            self.assertFalse(result["execution_replayed"])
+            response = result["response"]
+            evidence = response["evidence"]
+            self.assertEqual(evidence["response_binding_status"], "mismatch")
+            self.assertIn("validation.task_ids", evidence["response_binding_mismatches"])
+            self.assertIn("queue_mutated", evidence["response_binding_mismatches"])
+            self.assertIsNone(response["queue_mutated"])
+            self.assertEqual(evidence["task_ids_from_order"], ["SPOOL-TASK-001"])
+            self.assertEqual(evidence["queue_snapshot"]["tasks"][0]["task_id"], "SPOOL-TASK-001")
+            self.assertEqual(evidence["queue_snapshot"]["tasks"][0]["status"], "pending")
+            self.assertEqual(response["next_action"]["action"], "inspect_response_integrity")
+            saved_original = json.loads(response_path.read_text(encoding="utf-8"))
+            self.assertEqual(saved_original["validation"]["task_ids"], ["FORGED-TASK-ID"])
+
+
 if __name__ == "__main__":
     unittest.main()

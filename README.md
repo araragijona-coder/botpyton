@@ -635,3 +635,7 @@ The command is review-only by default. To execute, add `--execute-architect-orde
 ## Phase 74: recovery evidence for interrupted orders
 
 When the spool sees a prior `execution_in_progress` response, it does not silently skip it or run the same order again. It returns `recovery_required`, reads current task states from the durable queue without changing them, and records an immutable recovery report keyed by the request and queue-state hashes. This distinguishes running, failed, missing, and succeeded task states while requiring review of existing verification/report evidence before further work. The original response and inbox packet remain untouched. See the recovery section in [the architect-order contract](docs/ARCHITECT-ORDER-CONTRACT.md).
+
+## Phase 75 — integrity-bound recovery for architect orders
+
+Interrupted-order recovery revalidates the original inbox packet and derives queue task IDs from that packet rather than trusting the saved response. It checks the response's order/source, task list, local approvals, operator flags and in-progress markers. A mismatch yields immutable `recovery_required` evidence and `inspect_response_integrity`; the order is never replayed automatically and existing evidence is not overwritten. The request hash provides correlation, not architect authentication or tamper-proof storage. Details: [architect-order contract](docs/ARCHITECT-ORDER-CONTRACT.md).
