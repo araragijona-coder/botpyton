@@ -268,7 +268,7 @@ class ArchitectOrderContractTests(unittest.TestCase):
             git("init", "-b", "main")
             git("config", "user.email", "botpyton-test@example.invalid")
             git("config", "user.name", "BotPyton Tests")
-            (project / "sample.py").write_text("VALUE = 1\\n", encoding="utf-8")
+            (project / "sample.py").write_text("VALUE = 1\n", encoding="utf-8")
             git("add", "sample.py")
             git("commit", "-m", "baseline")
 
@@ -284,7 +284,7 @@ class ArchitectOrderContractTests(unittest.TestCase):
             task_value["local_change_plan"] = {
                 "schema_version": 1,
                 "task_id": "ARCH-WRITE-003",
-                "changes": [{"path": "generated.py", "content": "VALUE = 2\\n"}],
+                "changes": [{"path": "generated.py", "content": "VALUE = 2\n"}],
             }
             order_path = root / "architect-order.json"
             queue_path = root / "queue.json"
@@ -312,7 +312,7 @@ class ArchitectOrderContractTests(unittest.TestCase):
             self.assertIn("generated.py", result["workspace"]["final_inspection"]["working_tree_status"])
             workspace = Path(result["workspace"]["workspace_path"])
             self.assertTrue((workspace / "generated.py").is_file())
-            self.assertEqual((workspace / "generated.py").read_text(encoding="utf-8"), "VALUE = 2\\n")
+            self.assertEqual((workspace / "generated.py").read_text(encoding="utf-8"), "VALUE = 2\n")
             self.assertFalse((project / "generated.py").exists())
             self.assertEqual(
                 json.loads(response_path.read_text(encoding="utf-8")),
@@ -338,7 +338,7 @@ class ArchitectOrderContractTests(unittest.TestCase):
             task_value["local_change_plan"] = {
                 "schema_version": 1,
                 "task_id": "ARCH-WRITE-004",
-                "changes": [{"path": "generated.py", "content": "VALUE = 4\\n"}],
+                "changes": [{"path": "generated.py", "content": "VALUE = 4\n"}],
             }
             order_path = root / "architect-order.json"
             queue_path = root / "queue.json"
@@ -365,12 +365,12 @@ class ArchitectOrderContractTests(unittest.TestCase):
 
     def test_reviewed_patch_requires_local_write_approval_and_static_acceptance(self):
         patch_text = (
-            "diff --git a/app.py b/app.py\\n"
-            "--- a/app.py\\n"
-            "+++ b/app.py\\n"
-            "@@ -1 +1 @@\\n"
-            "-VALUE = 1\\n"
-            "+VALUE = 2\\n"
+            "diff --git a/app.py b/app.py\n"
+            "--- a/app.py\n"
+            "+++ b/app.py\n"
+            "@@ -1 +1 @@\n"
+            "-VALUE = 1\n"
+            "+VALUE = 2\n"
         )
         patch_task = task(
             "ARCH-PATCH-SCHEMA-001",
@@ -390,10 +390,10 @@ class ArchitectOrderContractTests(unittest.TestCase):
             checks=[{"type": "patch_applied"}, {"type": "python_syntax"}],
         )
         unsafe["reviewed_patch"] = (
-            "diff --git a/../outside.py b/../outside.py\\n"
-            "--- a/../outside.py\\n"
-            "+++ b/../outside.py\\n"
-            "@@ -1 +1 @@\\n-old\\n+new\\n"
+            "diff --git a/../outside.py b/../outside.py\n"
+            "--- a/../outside.py\n"
+            "+++ b/../outside.py\n"
+            "@@ -1 +1 @@\n-old\n+new\n"
         )
         with self.assertRaisesRegex(ArchitectOrderError, "Task batch failed strict validation|unsafe relative path|canonical relative path"):
             validate_architect_order(packet([unsafe]))
@@ -416,7 +416,7 @@ class ArchitectOrderContractTests(unittest.TestCase):
             git("config", "user.email", "botpyton-test@example.invalid")
             git("config", "user.name", "BotPyton Tests")
             source_file = project / "app.py"
-            source_file.write_text("VALUE = 1\\n", encoding="utf-8")
+            source_file.write_text("VALUE = 1\n", encoding="utf-8")
             git("add", "app.py")
             git("commit", "-m", "baseline")
 
@@ -427,12 +427,12 @@ class ArchitectOrderContractTests(unittest.TestCase):
             )
             patch_task["success_conditions"] = ["patch_applied", "python_syntax"]
             patch_task["reviewed_patch"] = (
-                "diff --git a/app.py b/app.py\\n"
-                "--- a/app.py\\n"
-                "+++ b/app.py\\n"
-                "@@ -1 +1 @@\\n"
-                "-VALUE = 1\\n"
-                "+VALUE = 2\\n"
+                "diff --git a/app.py b/app.py\n"
+                "--- a/app.py\n"
+                "+++ b/app.py\n"
+                "@@ -1 +1 @@\n"
+                "-VALUE = 1\n"
+                "+VALUE = 2\n"
             )
             order_path = root / "order.json"
             queue_path = root / "queue.json"
@@ -452,7 +452,7 @@ class ArchitectOrderContractTests(unittest.TestCase):
             self.assertFalse(preview_result["workspace_policy"]["prepared"])
             self.assertFalse(workspace_parent.exists())
             self.assertFalse(queue_path.exists())
-            self.assertEqual(source_file.read_text(encoding="utf-8"), "VALUE = 1\\n")
+            self.assertEqual(source_file.read_text(encoding="utf-8"), "VALUE = 1\n")
 
             output = io.StringIO()
             with contextlib.redirect_stdout(output), contextlib.redirect_stderr(output):
@@ -472,8 +472,8 @@ class ArchitectOrderContractTests(unittest.TestCase):
             self.assertEqual(result["workspace"]["patch_preflight"][0]["files"], ["app.py"])
             self.assertTrue(result["workspace"]["patch_preflight"][0]["applicable"])
             self.assertTrue(result["workspace"]["final_inspection"]["has_changes"])
-            self.assertEqual(source_file.read_text(encoding="utf-8"), "VALUE = 1\\n")
-            self.assertEqual((workspace / "app.py").read_text(encoding="utf-8"), "VALUE = 2\\n")
+            self.assertEqual(source_file.read_text(encoding="utf-8"), "VALUE = 1\n")
+            self.assertEqual((workspace / "app.py").read_text(encoding="utf-8"), "VALUE = 2\n")
             report_path = Path(result["execution"]["tasks"][0]["report_path"])
             report = json.loads(report_path.read_text(encoding="utf-8"))
             patch_action = next(item for item in report["actions"] if item["action"] == "apply_reviewed_patch")
@@ -502,7 +502,7 @@ class ArchitectOrderContractTests(unittest.TestCase):
             git("config", "user.email", "botpyton-test@example.invalid")
             git("config", "user.name", "BotPyton Tests")
             source_file = project / "app.py"
-            source_file.write_text("VALUE = 1\\n", encoding="utf-8")
+            source_file.write_text("VALUE = 1\n", encoding="utf-8")
             git("add", "app.py")
             git("commit", "-m", "baseline")
 
@@ -513,12 +513,12 @@ class ArchitectOrderContractTests(unittest.TestCase):
             )
             patch_task["success_conditions"] = ["patch_applied", "python_syntax"]
             patch_task["reviewed_patch"] = (
-                "diff --git a/app.py b/app.py\\n"
-                "--- a/app.py\\n"
-                "+++ b/app.py\\n"
-                "@@ -1 +1 @@\\n"
-                "-VALUE = 999\\n"
-                "+VALUE = 2\\n"
+                "diff --git a/app.py b/app.py\n"
+                "--- a/app.py\n"
+                "+++ b/app.py\n"
+                "@@ -1 +1 @@\n"
+                "-VALUE = 999\n"
+                "+VALUE = 2\n"
             )
             order_path = root / "stale-order.json"
             queue_path = root / "queue.json"
@@ -543,7 +543,7 @@ class ArchitectOrderContractTests(unittest.TestCase):
             self.assertEqual(result["workspace"]["status"], "patch_preflight_failed")
             self.assertIn("patch_preflight_error", result["workspace"])
             self.assertFalse(queue_path.exists())
-            self.assertEqual(source_file.read_text(encoding="utf-8"), "VALUE = 1\\n")
+            self.assertEqual(source_file.read_text(encoding="utf-8"), "VALUE = 1\n")
             self.assertEqual(json.loads(response_path.read_text(encoding="utf-8")), result)
 
     def test_cli_executes_only_after_explicit_order_approval(self):
