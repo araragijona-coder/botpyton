@@ -20,6 +20,8 @@ from .architect_order_response import (
     build_rejected_architect_response,
 )
 from .bounded_io import BoundedReadError, enforce_json_depth, read_bounded_bytes
+from .memory import JsonMemory, MemoryError
+from .queue import QueueError, TaskQueue
 
 MAX_SPOOL_DIRECTORY_ENTRIES = 5_000
 MAX_SPOOL_ORDERS = 500
@@ -99,7 +101,7 @@ def _read_existing_response(path: Path, expected_sha256: str) -> dict[str, Any]:
             f"Existing response for this order is not a valid bounded JSON record: {path.name}: {exc}"
         ) from exc
     valid_statuses = {
-        "validated_for_review", "needs_input", "execution_in_progress",
+        "validated_for_review", "needs_input", "execution_in_progress", "recovery_required",
         "succeeded", "failed", "blocked", "incomplete", "execution_error",
         "authorization_required", "authorization_mismatch", "rejected_invalid_order",
     }
@@ -189,7 +191,166 @@ def run_order_spool(
         except OSError as exc:
             raise ArchitectSpoolError(f"Cannot inspect outbox target {response_path.name}: {exc}") from exc
         if response_exists:
-            _read_existing_response(response_path, request_sha256)
+            previous_response = _read_existing_response(response_path, request_sha256)
+            if previous_response["status"] == "execution_in_progress":
+                validation = previous_response.get("validation", {})
+                task_ids = validation.get("task_ids", []) if isinstance(validation, dict) else []
+                if (
+                    not isinstance(task_ids, list)
+                    or not task_ids
+                    or len(task_ids) > 25
+                    or any(not isinstance(task_id, str) or not task_id for task_id in task_ids)
+                ):
+                    task_ids = []
+
+                queue_snapshot: dict[str, Any] = {
+                    "status": "unavailable",
+                    "tasks": [],
+                }
+                try:
+                    task_records = TaskQueue(JsonMemory(memory_path)).list_tasks()
+                    indexed = {
+                        record["id"]: record for record in task_records
+                        if isinstance(record, dict) and isinstance(record.get("id"), str)
+                    }
+                    queue_tasks: list[dict[str, Any]] = []
+                    for task_id in task_ids:
+                        record = indexed.get(task_id)
+                        if record is None:
+                            queue_tasks.append({"task_id": task_id, "status": "not_found"})
+                            continue
+                        result = record.get("result")
+                        queue_tasks.append({
+                            "task_id": task_id,
+                            "status": record.get("status"),
+                            "attempts": record.get("attempts"),
+                            "last_error": record.get("last_error"),
+                            "report_path": result.get("report_path") if isinstance(result, dict) else None,
+                            "verification_recorded": (
+                                isinstance(result, dict) and isinstance(result.get("verification"), dict)
+                            ),
+                        })
+                    queue_snapshot = {
+                        "status": "inspected",
+                        "task_count": len(task_ids),
+                        "tasks": queue_tasks,
+                    }
+                except (OSError, MemoryError, QueueError, ValueError, TypeError) as exc:
+                    queue_snapshot = {
+                        "status": "unavailable",
+                        "tasks": [],
+                        "error": f"{type(exc).__name__}: {exc}"[:1_000],
+                    }
+
+                states = [item.get("status") for item in queue_snapshot.get("tasks", [])]
+                if task_ids and queue_snapshot.get("status") == "inspected" and states == ["succeeded"] * len(task_ids):
+                    next_action = {
+                        "actor": "local_operator",
+                        "action": "verify_reports_and_close_interrupted_run",
+                        "message": (
+                            "All order task IDs are marked succeeded in the durable queue, but the original response was not finalized. "
+                            "Inspect the listed reports/verification, then submit a new order only if further work is needed."
+                        ),
+                    }
+                elif "running" in states:
+                    next_action = {
+                        "actor": "local_operator",
+                        "action": "inspect_running_task",
+                        "message": (
+                            "At least one task remains running. Do not replay the order. Inspect its task report and queue record; "
+                            "use the existing queue recovery procedure only after determining whether side effects completed."
+                        ),
+                    }
+                elif queue_snapshot.get("status") != "inspected":
+                    next_action = {
+                        "actor": "local_operator",
+                        "action": "repair_or_inspect_queue",
+                        "message": (
+                            "The task queue could not be read safely. Preserve the original response and repair/inspect queue integrity "
+                            "before any retry. The spool did not rerun the order."
+                        ),
+                    }
+                else:
+                    next_action = {
+                        "actor": "local_operator",
+                        "action": "reconcile_queue_before_retry",
+                        "message": (
+                            "The original execution has no final response and the queue is not fully succeeded. Review each task state, "
+                            "reports and possible side effects before deciding whether to create a revised order."
+                        ),
+                    }
+
+                recovery_core = {
+                    "response_type": "botpyton.architect_response",
+                    "schema_version": 1,
+                    "order_id": previous_response.get("order_id"),
+                    "source": previous_response.get("source", {}),
+                    "source_file": candidate.name,
+                    "request_sha256": request_sha256,
+                    "status": "recovery_required",
+                    "execution_started": True,
+                    "queue_mutated": previous_response.get("queue_mutated"),
+                    "authorization": previous_response.get("authorization", {}),
+                    "evidence": {
+                        "original_status": previous_response.get("status"),
+                        "original_response_file": response_path.name,
+                        "task_ids_from_order": task_ids,
+                        "queue_snapshot": queue_snapshot,
+                    },
+                    "execution": previous_response.get("execution"),
+                    "next_action": next_action,
+                    "next_step": next_action["message"],
+                    "ai_enabled": False,
+                    "external_ai_apis_enabled": False,
+                    "automatic_merge": False,
+                    "safety": previous_response.get("safety", {
+                        "botpyton_ai_enabled": False,
+                        "external_ai_api_called": False,
+                        "botpyton_network_requests_made": False,
+                        "automatic_merge": False,
+                    }),
+                }
+                snapshot_json = json.dumps(
+                    queue_snapshot, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+                )
+                snapshot_hash = hashlib.sha256(snapshot_json.encode("utf-8")).hexdigest()[:16]
+                recovery_path = outbox / (
+                    f"order-{request_sha256}.{profile}.recovery-{snapshot_hash}.response.json"
+                )
+                try:
+                    recovery_path.lstat()
+                    recovery_exists = True
+                except FileNotFoundError:
+                    recovery_exists = False
+                except OSError as exc:
+                    raise ArchitectSpoolError(
+                        f"Cannot inspect recovery output {recovery_path.name}: {exc}"
+                    ) from exc
+                if recovery_exists:
+                    recovery_response = _read_existing_response(recovery_path, request_sha256)
+                    if recovery_response.get("status") != "recovery_required":
+                        raise ArchitectSpoolError(
+                            f"Recovery output has an unexpected status: {recovery_path.name}"
+                        )
+                else:
+                    _write_response(recovery_path, recovery_core)
+                    recovery_response = _read_existing_response(recovery_path, request_sha256)
+
+                return {
+                    "spool_status": "recovery_required",
+                    "status": "recovery_required",
+                    "processed": False,
+                    "execution_replayed": False,
+                    "input_file": candidate.name,
+                    "request_sha256": request_sha256,
+                    "response_file": response_path.name,
+                    "recovery_report_file": recovery_path.name,
+                    "response": recovery_response,
+                    "already_responded_skipped": already_responded,
+                    "skipped_inputs": skipped,
+                    "unreadable_inputs": unreadable,
+                    "next_action": next_action,
+                }
             already_responded.append(candidate.name)
             continue
 
