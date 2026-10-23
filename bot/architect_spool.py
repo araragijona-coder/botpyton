@@ -361,6 +361,14 @@ def run_order_spool(
                         "task_ids_from_order": task_ids,
                         "response_binding_status": "mismatch" if binding_mismatches else "matched",
                         "response_binding_mismatches": binding_mismatches,
+                        # This is a locator copied from a local response file, not a
+                        # signed attestation of which worktree was actually used.
+                        "workspace_claim_trusted": False,
+                        "workspace_claim_from_original_response": (
+                            previous_response.get("workspace")
+                            if not binding_mismatches and isinstance(previous_response.get("workspace"), dict)
+                            else None
+                        ),
                         "queue_snapshot": queue_snapshot,
                     },
                     "execution": None,
