@@ -501,6 +501,8 @@ class ArchitectOrderContractTests(unittest.TestCase):
             self.assertEqual(source_file.read_text(encoding="utf-8"), "VALUE = 1\n")
             self.assertEqual((workspace / "app.py").read_text(encoding="utf-8"), "VALUE = 2\n")
             report_path = Path(result["execution"]["tasks"][0]["report_path"])
+            if not report_path.is_absolute():
+                report_path = workspace / report_path
             report = json.loads(report_path.read_text(encoding="utf-8"))
             patch_action = next(item for item in report["actions"] if item["action"] == "apply_reviewed_patch")
             self.assertTrue(patch_action["ok"])
