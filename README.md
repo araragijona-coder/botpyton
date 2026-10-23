@@ -639,3 +639,9 @@ When the spool sees a prior `execution_in_progress` response, it does not silent
 ## Phase 75 — integrity-bound recovery for architect orders
 
 Interrupted-order recovery revalidates the original inbox packet and derives queue task IDs from that packet rather than trusting the saved response. It checks the response's order/source, task list, local approvals, operator flags and in-progress markers. A mismatch yields immutable `recovery_required` evidence and `inspect_response_integrity`; the order is never replayed automatically and existing evidence is not overwritten. The request hash provides correlation, not architect authentication or tamper-proof storage. Details: [architect-order contract](docs/ARCHITECT-ORDER-CONTRACT.md).
+
+## Phase 76 — isolated workspaces for code-writing orders
+
+Architect orders that write source files or apply a known fix now execute in a dedicated Git worktree, not in the selected source checkout. Dry-run previews this requirement without creating anything. Execution fails closed if the target is not a clean Git repository or the workspace cannot be prepared; there is no fallback to direct source writes.
+
+Use `--architect-workspace-parent` to override the default `~/.botpyton/workspaces` directory. Keep the order, queue/memory, response and inbox/outbox outside the target repository to preserve the clean-source precondition. The final machine response records branch, base SHA, workspace path and read-only diff/status evidence. It does not commit, push, open a PR or merge: those actions require separate human review/approval. Project tests/builds still require `--execute-project-code`. Details: [architect-order contract](docs/ARCHITECT-ORDER-CONTRACT.md).
