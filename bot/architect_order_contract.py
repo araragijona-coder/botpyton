@@ -19,6 +19,11 @@ _ORDER_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$")
 _ALLOWED_FIELDS = frozenset({
     "schema_version", "order_id", "source", "summary", "status", "tasks", "questions",
 })
+_ALLOWED_TASK_FIELDS = frozenset({
+    "id", "goal", "depends_on", "allowed_actions", "success_conditions", "max_attempts",
+    "verification_checks", "local_change_plan", "allow_project_code_execution",
+    "project_check_id", "child_memory_limit_mb", "check_timeout_seconds", "failure_context",
+})
 
 
 class ArchitectOrderError(OrchestrationError):
@@ -110,6 +115,14 @@ def validate_architect_order(value: Any) -> dict[str, Any]:
             raise ArchitectOrderError("ready orders must contain at least one task")
         if questions:
             raise ArchitectOrderError("ready orders must not contain unresolved questions")
+        for index, task in enumerate(tasks_value):
+            if isinstance(task, dict):
+                unknown_task_fields = set(task) - _ALLOWED_TASK_FIELDS
+                if unknown_task_fields:
+                    raise ArchitectOrderError(
+                        f"Task {index} has unknown fields: "
+                        + ", ".join(sorted(map(str, unknown_task_fields)))
+                    )
         try:
             tasks = validate_order_tasks(tasks_value)
             batch = validate_task_batch(tasks)

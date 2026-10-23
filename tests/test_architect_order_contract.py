@@ -64,6 +64,12 @@ class ArchitectOrderContractTests(unittest.TestCase):
                 with self.assertRaisesRegex(ArchitectOrderError, "Unknown architect-order fields"):
                     validate_architect_order(raw)
 
+    def test_unknown_task_fields_are_rejected(self):
+        raw = packet()
+        raw["tasks"][0]["shell"] = "whoami"
+        with self.assertRaisesRegex(ArchitectOrderError, "Task 0 has unknown fields"):
+            validate_architect_order(raw)
+
     def test_source_does_not_accept_extra_authority_fields(self):
         raw = packet()
         raw["source"]["authorized"] = True
