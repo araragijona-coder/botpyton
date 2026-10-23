@@ -216,7 +216,7 @@ class ToolchainMatrixTests(unittest.TestCase):
 
         def replace_before_descent(base, current, root_identity, expected_identity):
             nonlocal swapped
-            if current == child and not swapped:
+            if current.resolve(strict=True) == child.resolve(strict=True) and not swapped:
                 swapped = True
                 child.rename(moved)
                 try:
@@ -267,7 +267,7 @@ class ToolchainMatrixTests(unittest.TestCase):
         original_scandir = matrix_module._scandir_project_directory
 
         def deny_child(base, current, root_identity, expected_identity):
-            if current == child:
+            if current.resolve(strict=True) == child.resolve(strict=True):
                 raise PermissionError("simulated inaccessible directory")
             return original_scandir(base, current, root_identity, expected_identity)
 
