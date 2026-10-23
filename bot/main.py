@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import sys
 from pathlib import Path
@@ -28,6 +29,9 @@ from .orchestration import (
 )
 from .order_pipeline import run_order_batch
 from .architect_order_contract import ArchitectOrderError, validate_architect_order
+from .architect_order_response import (
+    ArchitectResponseWriter, build_architect_response,
+)
 from .planner import order_tasks
 from .repository_analyzer import inspect_repository
 from .process_runner import ProcessRunnerError, run_tool_probe
@@ -92,6 +96,17 @@ def _run_claimed(queue: TaskQueue, record: dict, executor: TaskExecutor) -> dict
         "failed_action": outcome.get("failed_action"),
         "diagnostic": outcome.get("diagnostic"),
     }
+
+
+def _read_architect_packet(path_text: str, *, limit_bytes: int = 600_000) -> tuple[object, str]:
+    """Parse one bounded packet and hash the exact same bytes used for validation."""
+    try:
+        raw = read_bounded_bytes(path_text, limit_bytes=limit_bytes, label="Architect order JSON")
+        value = json.loads(raw.decode("utf-8"))
+        enforce_json_depth(value, label="Architect order JSON")
+        return value, hashlib.sha256(raw).hexdigest()
+    except (BoundedReadError, UnicodeError, json.JSONDecodeError, RecursionError) as exc:
+        raise OrchestrationError(f"Invalid or unsafe architect-order JSON: {exc}") from exc
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -184,6 +199,8 @@ def main(argv: list[str] | None = None) -> int:
                         help="validate, enqueue and execute a bounded task batch with explicit machine-verifiable acceptance checks")
     parser.add_argument("--architect-order", metavar="ORDER_JSON",
                         help="validate an external architect's strict JSON order; dry-run by default")
+    parser.add_argument("--architect-response", metavar="RESPONSE_JSON",
+                        help="persist a machine-readable architect response; output path must not already exist")
     parser.add_argument("--execute-architect-order", action="store_true",
                         help="execute a validated architect order only after local approval gates are satisfied")
     parser.add_argument("--authorize-local-writes", action="store_true",
@@ -245,16 +262,19 @@ def main(argv: list[str] | None = None) -> int:
             },
         })
         return 2
+    response_writer: ArchitectResponseWriter | None = None
     try:
+        if args.architect_response and not args.architect_order:
+            raise ArchitectOrderError('--architect-response requires --architect-order ORDER_JSON')
         if args.execute_architect_order and not args.architect_order:
             raise ArchitectOrderError("--execute-architect-order requires --architect-order ORDER_JSON")
         if args.authorize_local_writes and not args.architect_order:
             raise ArchitectOrderError("--authorize-local-writes requires --architect-order ORDER_JSON")
         if args.architect_order:
             allowed_order_args = {
-                "architect_order", "execute_architect_order", "authorize_local_writes",
-                "execute_project_code", "project_root", "memory", "check_timeout",
-                "child_memory_limit_mb",
+                "architect_order", "architect_response", "execute_architect_order",
+                "authorize_local_writes", "execute_project_code", "project_root",
+                "memory", "check_timeout", "child_memory_limit_mb",
             }
             conflicts = [
                 name.replace("_", "-")
@@ -266,26 +286,39 @@ def main(argv: list[str] | None = None) -> int:
                     "--architect-order must be a standalone operation; conflicting options: "
                     + ", ".join(sorted(conflicts))
                 )
-            packet = _read_bounded_json(args.architect_order, limit_bytes=600_000)
+            packet, request_sha256 = _read_architect_packet(args.architect_order)
             order = validate_architect_order(packet)
             public_order = {key: value for key, value in order.items() if key != "normalized_tasks"}
+            operator_flags = {
+                "execute_architect_order": bool(args.execute_architect_order),
+                "authorize_local_writes": bool(args.authorize_local_writes),
+                "execute_project_code": bool(args.execute_project_code),
+            }
             if order["status"] == "needs_input":
-                _print_json({
-                    **public_order, "status": "needs_input",
-                    "execution_started": False, "queue_mutated": False,
-                    "next_step": "Answer the listed questions, then submit a new ready packet.",
-                })
+                response = build_architect_response(
+                    order, request_sha256, status="needs_input",
+                    execution_started=False, queue_mutated=False,
+                    operator_flags=operator_flags,
+                )
+                response["validation"] = public_order
+                if args.architect_response:
+                    with ArchitectResponseWriter(args.architect_response) as writer:
+                        writer.write(response)
+                _print_json(response)
                 return 2
             if not args.execute_architect_order:
-                _print_json({
-                    **public_order, "status": "validated_for_review",
-                    "tasks_for_review": order["normalized_tasks"],
-                    "execution_started": False, "queue_mutated": False,
-                    "next_step": (
-                        "Review the exact task payloads and add --execute-architect-order only "
-                        "when the operation and project root are approved."
-                    ),
-                })
+                response = build_architect_response(
+                    order, request_sha256, status="validated_for_review",
+                    execution_started=False, queue_mutated=False,
+                    operator_flags=operator_flags,
+                    tasks_for_review=order["normalized_tasks"],
+                )
+                response["validation"] = public_order
+                response["summary"] = order["summary"]
+                if args.architect_response:
+                    with ArchitectResponseWriter(args.architect_response) as writer:
+                        writer.write(response)
+                _print_json(response)
                 return 0
             required_approvals = set(order["required_local_approvals"])
             if "local_file_write" in required_approvals and not args.authorize_local_writes:
@@ -301,19 +334,55 @@ def main(argv: list[str] | None = None) -> int:
                 raise ArchitectOrderError("--authorize-local-writes was supplied but no write action was requested")
             if args.execute_project_code and "project_code_execution" not in required_approvals:
                 raise ArchitectOrderError("--execute-project-code was supplied but no project-code action was requested")
-            queue = TaskQueue(JsonMemory(args.memory))
-            executor = TaskExecutor(
-                Path(args.project_root).expanduser().resolve(),
-                test_timeout_seconds=args.check_timeout,
+
+            if args.architect_response:
+                response_writer = ArchitectResponseWriter(args.architect_response)
+                pending_response = build_architect_response(
+                    order, request_sha256, status="execution_in_progress",
+                    execution_started=True, queue_mutated=None,
+                    operator_flags=operator_flags,
+                )
+                pending_response["validation"] = public_order
+                pending_response["summary"] = order["summary"]
+                response_writer.write(pending_response)
+
+            try:
+                queue = TaskQueue(JsonMemory(args.memory))
+                executor = TaskExecutor(
+                    Path(args.project_root).expanduser().resolve(),
+                    test_timeout_seconds=args.check_timeout,
+                )
+                execution = run_order_batch(order["normalized_tasks"], queue=queue, executor=executor)
+            except Exception as exc:
+                response = build_architect_response(
+                    order, request_sha256, status="execution_error",
+                    execution_started=True, queue_mutated=None,
+                    operator_flags=operator_flags,
+                    error=f"{type(exc).__name__}: {exc}",
+                )
+                response["validation"] = public_order
+                response["summary"] = order["summary"]
+                if response_writer is not None:
+                    try:
+                        response_writer.write(response)
+                    finally:
+                        response_writer.close()
+                _print_json(response)
+                return 1
+
+            response = build_architect_response(
+                order, request_sha256, status=execution["status"],
+                execution_started=True, queue_mutated=True,
+                operator_flags=operator_flags, execution=execution,
             )
-            execution = run_order_batch(order["normalized_tasks"], queue=queue, executor=executor)
-            _print_json({
-                "schema_version": 1, "status": execution["status"],
-                "order_id": order["order_id"], "source": order["source"],
-                "summary": order["summary"], "validation": public_order,
-                "execution": execution, "execution_started": True, "queue_mutated": True,
-                "ai_enabled": False, "external_ai_apis_enabled": False, "automatic_merge": False,
-            })
+            response["validation"] = public_order
+            response["summary"] = order["summary"]
+            if response_writer is not None:
+                try:
+                    response_writer.write(response)
+                finally:
+                    response_writer.close()
+            _print_json(response)
             return 0 if execution["status"] == "succeeded" else 1
 
         if args.github_preflight:
