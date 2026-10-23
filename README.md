@@ -607,3 +607,14 @@ python -m bot.main --architect-order .cerebro/examples/architect-order.json
 ~~~
 
 Execution requires `--execute-architect-order`. File-writing actions additionally require `--authorize-local-writes`; test/build actions additionally require `--execute-project-code`. Incoming JSON cannot grant any of these approvals. Orders with `status: "needs_input"` must contain questions and no executable tasks. Unknown fields—including `approved`, `execute`, and `shell`—are rejected. See [the Phase 71 contract](docs/ARCHITECT-ORDER-CONTRACT.md).
+
+
+## Phase 72: architect response and evidence hand-back
+
+Structured orders can now return a persistent JSON response for the external architect to review. The response correlates to the exact packet via SHA-256, reports task/verification outcomes and report paths, and gives a machine-readable `next_action`. Existing response files are never overwritten. The command remains review-only by default:
+
+~~~powershell
+python -m bot.main --architect-order .cerebro/examples/architect-order.json --architect-response ARCH-ORDER-DEMO-001-response.json
+~~~
+
+After reviewing the payload, add `--execute-architect-order`; separately grant `--authorize-local-writes` for local write actions and `--execute-project-code` for test/build execution. Execution responses are first marked `execution_in_progress` so an interrupted operation is not mistaken for success. BotPyton itself remains deterministic/offline; this is a file-based hand-back protocol, not an automatic connection to an AI architect. See [Phase 71–72 contract and response](docs/ARCHITECT-ORDER-CONTRACT.md).

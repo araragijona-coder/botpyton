@@ -1,4 +1,5 @@
 import contextlib
+import hashlib
 import io
 import json
 import tempfile
@@ -6,6 +7,7 @@ import unittest
 from pathlib import Path
 
 from bot.architect_order_contract import ArchitectOrderError, validate_architect_order
+from bot.architect_order_response import ArchitectResponseError, ArchitectResponseWriter
 from bot.main import main
 
 
@@ -250,11 +252,14 @@ class ArchitectOrderContractTests(unittest.TestCase):
             (root / "sample.py").write_text("VALUE = 7\n", encoding="utf-8")
             order_path = root / "architect-order.json"
             queue_path = root / "queue.json"
+            response_path = root / "architect-response.json"
             order_path.write_text(json.dumps(packet()), encoding="utf-8")
+            request_hash = hashlib.sha256(order_path.read_bytes()).hexdigest()
             output = io.StringIO()
             with contextlib.redirect_stdout(output), contextlib.redirect_stderr(output):
                 code = main([
                     "--architect-order", str(order_path), "--execute-architect-order",
+                    "--architect-response", str(response_path),
                     "--project-root", str(root), "--memory", str(queue_path),
                     "--check-timeout", "10",
                 ])
@@ -265,6 +270,66 @@ class ArchitectOrderContractTests(unittest.TestCase):
             self.assertTrue(result["queue_mutated"])
             self.assertFalse(result["automatic_merge"])
             self.assertEqual(result["execution"]["tasks"][0]["status"], "succeeded")
+            self.assertEqual(result["response_type"], "botpyton.architect_response")
+            self.assertEqual(result["request_sha256"], request_hash)
+            self.assertEqual(json.loads(response_path.read_text(encoding="utf-8")), result)
+            self.assertEqual(result["evidence"]["succeeded_task_count"], 1)
+            self.assertEqual(result["next_action"]["action"], "review_execution_evidence")
+
+    def test_cli_writes_a_correlated_review_response_without_queue_mutation(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            order_path = root / "order.json"
+            response_path = root / "response.json"
+            queue_path = root / "queue.json"
+            raw = json.dumps(packet(), indent=2).encode("utf-8")
+            order_path.write_bytes(raw)
+            expected_hash = hashlib.sha256(raw).hexdigest()
+            output = io.StringIO()
+            with contextlib.redirect_stdout(output), contextlib.redirect_stderr(output):
+                code = main([
+                    "--architect-order", str(order_path),
+                    "--architect-response", str(response_path),
+                    "--memory", str(queue_path),
+                ])
+            result = json.loads(output.getvalue())
+            self.assertEqual(code, 0, output.getvalue())
+            self.assertEqual(result, json.loads(response_path.read_text(encoding="utf-8")))
+            self.assertEqual(result["request_sha256"], expected_hash)
+            self.assertEqual(result["status"], "validated_for_review")
+            self.assertFalse(result["execution_started"])
+            self.assertFalse(result["queue_mutated"])
+            self.assertFalse(queue_path.exists())
+            self.assertFalse(result["authorization"]["packet_can_grant_permission"])
+            self.assertEqual(result["next_action"]["action"], "review_and_authorize")
+
+    def test_response_path_is_never_overwritten(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            order_path = root / "order.json"
+            response_path = root / "response.json"
+            order_path.write_text(json.dumps(packet()), encoding="utf-8")
+            response_path.write_text("keep-existing-evidence", encoding="utf-8")
+            output = io.StringIO()
+            with contextlib.redirect_stdout(output), contextlib.redirect_stderr(output):
+                code = main([
+                    "--architect-order", str(order_path),
+                    "--architect-response", str(response_path),
+                ])
+            self.assertEqual(code, 2)
+            self.assertEqual(response_path.read_text(encoding="utf-8"), "keep-existing-evidence")
+            self.assertIn("already exists", output.getvalue())
+
+    def test_response_writer_can_replace_its_own_in_progress_record(self):
+        with tempfile.TemporaryDirectory() as temp:
+            response_path = Path(temp) / "response.json"
+            with ArchitectResponseWriter(response_path) as writer:
+                writer.write({"response_type": "botpyton.architect_response", "status": "execution_in_progress"})
+                writer.write({"response_type": "botpyton.architect_response", "status": "succeeded"})
+            self.assertEqual(
+                json.loads(response_path.read_text(encoding="utf-8"))["status"],
+                "succeeded",
+            )
 
     def test_execute_flags_require_the_architect_order(self):
         output = io.StringIO()
