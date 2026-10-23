@@ -345,7 +345,9 @@ def run_order_spool(
                     "request_sha256": request_sha256,
                     "status": "recovery_required",
                     "execution_started": True,
-                    "queue_mutated": previous_response.get("queue_mutated"),
+                    # The old response is mutable and has failed binding checks;
+                    # queue mutation must therefore remain explicitly unknown.
+                    "queue_mutated": None,
                     "authorization": {
                         "required_local_approvals": canonical_order["required_local_approvals"],
                         "operator_flags": flags,
