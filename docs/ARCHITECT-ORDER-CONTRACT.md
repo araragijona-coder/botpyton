@@ -193,3 +193,18 @@ BOTPYTON does not commit, push, publish a PR, merge, install dependencies, or ru
 ~~~
 
 The complete order still needs the outer Phase 71 fields (schema_version, order_id, source, summary, status, and tasks). Replace app.py and the example hunk with files/content that actually exist in the selected clean repository; a stale or inapplicable patch is rejected before queue mutation.
+
+## Phase 78 — report-backed recovery and revised-order feedback
+
+When an `execution_in_progress` response is recovered, BOTPYTON audits each actual task report instead of treating the durable queue's `succeeded` state as sufficient proof. It accepts only the fixed path shape `.cerebro/reports/<16 lowercase hexadecimal characters>.json`, blocks link/reparse components and non-regular or oversized files, performs a bounded JSON/depth-checked read, confirms the embedded `task_id`, and requires `status: succeeded`, `ok: true`, `verification.all_passed: true`, plus a non-empty list of checks where every check has `ok: true`. The report SHA-256, bounded error/failed-action fields and verification summaries become recovery evidence. Queue-only verification metadata cannot satisfy this report audit.
+
+For worktree-backed tasks, recovery does not blindly open the `workspace_path` copied from the response. When the original response matches the validated order and current permission profile, BOTPYTON resolves that locator and confirms it appears in the source repository's `git worktree list --porcelain`, uses a dedicated `botpyton/*` branch, and has consistent branch/HEAD metadata. If response binding or worktree registration fails, it refuses to read reports from the claimed workspace and records why.
+
+Next-action decisions are evidence-backed:
+
+- Every task is succeeded and every report verifies: `verify_reports_and_close_interrupted_run`. Human review of report hashes and workspace diff is still required; this is not a digital signature.
+- Queue says succeeded, but a report is missing, invalid, inconsistent or unverified: `inspect_task_report_evidence`. Do not claim success from queue state alone.
+- One or more tasks failed or were blocked: `create_revised_order_from_failure_evidence`. The architect should use bounded failure/check evidence to create a revised order with a new order ID and changed task IDs as needed. Do not blindly replay the same failed payload.
+- A task is still running, queue integrity is unavailable or response binding mismatches: retain the appropriate inspection/repair action and do not replay the order.
+
+Recovery remains read-only: it does not execute code, repair queue files, mutate reports or responses, delete a candidate worktree, roll back unknown side effects or close a run automatically. SHA-256 provides integrity/correlation evidence, not cryptographic authentication of local files.
