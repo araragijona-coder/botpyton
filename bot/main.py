@@ -273,6 +273,10 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     response_writer: ArchitectResponseWriter | None = None
     try:
+        if args.architect_workspace_parent is not None and not (args.architect_order or args.architect_inbox):
+            raise ArchitectOrderError(
+                "--architect-workspace-parent requires --architect-order or --architect-inbox"
+            )
         if bool(args.architect_inbox) != bool(args.architect_outbox):
             raise ArchitectSpoolError("--architect-inbox and --architect-outbox must be supplied together")
         if args.architect_inbox:
