@@ -653,3 +653,9 @@ Architect orders may include a bounded `reviewed_patch` string with the `apply_r
 The patch is limited to 250 KB, 20 files and 20,000 lines; it cannot add/delete/rename files, alter modes, change binary content, target unsafe/protected paths, or overlap another patch task in the same order. Patch orders require `--authorize-local-writes`; tests/builds require separate `--execute-project-code`. No install, commit, push, PR publication or merge occurs automatically. Details and limitations: [architect-order contract](docs/ARCHITECT-ORDER-CONTRACT.md).
 
 Example patch tasks use allowed_actions ["apply_reviewed_patch", "prepare_report"], success_conditions ["patch_applied", "python_syntax"], matching verification checks, and the plain reviewed_patch diff text. The patch must match existing tracked files in the selected repository; see the contract example in docs/ARCHITECT-ORDER-CONTRACT.md.
+
+## Phase 78 — recovery checks task reports
+
+Interrupted-order recovery now validates each real task report: allowed report path, bounded JSON, matching task ID, successful status, and every machine-verifiable acceptance check. It records report SHA-256 and compact failure/verification evidence. For a previous architect worktree, the locator is used only after Git confirms it is a registered `botpyton/*` worktree of the selected source repository.
+
+If every report verifies, BotPyton still requests evidence review before the operator closes the interrupted run. If a report is missing or does not prove success, it returns `inspect_task_report_evidence`. If queue tasks failed or were blocked, it recommends `create_revised_order_from_failure_evidence`, so the architect issues a revised order instead of repeating failed work blindly. Recovery is read-only: it never reruns tasks, rewrites the original response or queue, or rolls back unknown side effects. See [the architect-order contract](docs/ARCHITECT-ORDER-CONTRACT.md).
