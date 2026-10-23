@@ -237,16 +237,24 @@ def _inspect_task_report(
         return {"status": "unsafe_report_reference", "verified_success": False}
 
     target = report_root
+    info = None
     for part in relative.parts:
         target = target / part
+        try:
+            info = target.lstat()
+        except FileNotFoundError:
+            return {"status": "report_missing", "verified_success": False, "path": normalized}
+        except OSError as exc:
+            return {
+                "status": "report_unreadable",
+                "verified_success": False,
+                "path": normalized,
+                "error": type(exc).__name__,
+            }
         if _is_link_or_reparse(target):
-            return {"status": "report_link_blocked", "verified_success": False}
-    try:
-        info = target.lstat()
-    except FileNotFoundError:
+            return {"status": "report_link_blocked", "verified_success": False, "path": normalized}
+    if info is None:
         return {"status": "report_missing", "verified_success": False, "path": normalized}
-    except OSError as exc:
-        return {"status": "report_unreadable", "verified_success": False, "error": type(exc).__name__}
     if not stat.S_ISREG(info.st_mode) or info.st_size < 0 or info.st_size > MAX_TASK_REPORT_BYTES:
         return {"status": "report_invalid_file", "verified_success": False, "path": normalized}
     try:
