@@ -143,6 +143,10 @@ def run_order_spool(
     if inbox == outbox or inbox.is_relative_to(outbox) or outbox.is_relative_to(inbox):
         raise ArchitectSpoolError("Inbox and outbox must be distinct directories and must not contain one another")
 
+    if not execute and (authorize_local_writes or execute_project_code):
+        raise ArchitectSpoolError(
+            "Local-write/project-code permissions require --execute-architect-order"
+        )
     profile = _profile(
         execute=execute,
         authorize_local_writes=authorize_local_writes,
@@ -170,7 +174,14 @@ def run_order_spool(
             continue
         request_sha256 = hashlib.sha256(raw).hexdigest()
         response_path = _response_path(outbox, request_sha256, profile)
-        if response_path.exists() or _is_link_or_reparse(response_path):
+        try:
+            response_path.lstat()
+            response_exists = True
+        except FileNotFoundError:
+            response_exists = False
+        except OSError as exc:
+            raise ArchitectSpoolError(f"Cannot inspect outbox target {response_path.name}: {exc}") from exc
+        if response_exists:
             _read_existing_response(response_path, request_sha256)
             already_responded.append(candidate.name)
             continue
