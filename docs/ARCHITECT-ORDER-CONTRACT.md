@@ -92,3 +92,35 @@ Every response includes:
 - Explicit safety declarations: packet data cannot grant permissions, BotPyton itself makes no model/API/network request here, and no merge is performed.
 
 Response statuses include `validated_for_review`, `needs_input`, `execution_in_progress`, `succeeded`, `failed`, `blocked`, `incomplete`, and `execution_error`. If the status is `execution_error`, queue mutation is reported as unknown because the failure may have occurred before or after queue persistence; inspect state before resubmitting. The request hash links the response to the exact input bytes but does not authenticate the architect's identity, prove the design correct, or make report files tamper-proof. The receiver should validate the response schema and inspect referenced evidence before planning the next order.
+
+
+## Phase 73 — on-demand inbox/outbox spool
+
+Use separate, pre-existing folders to hand orders to BOTPYTON and collect responses. This is a one-order-per-invocation spool, **not** a watcher or background service.
+
+~~~powershell
+New-Item -ItemType Directory -Force .cerebro\architect-inbox, .cerebro\architect-outbox | Out-Null
+# Copy one architect-produced *.json packet into .cerebro\architect-inbox, then:
+python -m bot.main --architect-inbox .cerebro\architect-inbox --architect-outbox .cerebro\architect-outbox
+~~~
+
+The default mode validates and returns a review response only. After inspecting the packet and its required permissions, an operator may explicitly run:
+
+~~~powershell
+python -m bot.main --architect-inbox .cerebro\architect-inbox --architect-outbox .cerebro\architect-outbox --execute-architect-order
+~~~
+
+For orders requiring local file changes, separately add `--authorize-local-writes`. For orders that run tests/build scripts, separately add `--execute-project-code`. Do not add permissions simply to clear a blocked status; review the packet first.
+
+Rules:
+
+- Inbox and outbox must already exist, be distinct real directories, and neither may contain the other. The spool never creates folders, polls, recurses into subfolders, or launches a background worker.
+- Only top-level regular `.json` files are considered; input size is capped at 600,000 bytes. Selection order is deterministic by filename (case-insensitive). A single invocation processes at most one pending packet.
+- Input files are not moved or deleted. Unsafe links/reparse points and oversized or unreadable inputs are skipped and reported; no project task is started from them.
+- Each response name includes the SHA-256 of the exact packet bytes plus an authorization profile: `review` or `execute-wX-cY`. A separate profile lets a blocked order be reconsidered after the operator deliberately supplies missing permissions; review and execute responses do not suppress one another.
+- A prior response is skipped only if it is a bounded JSON response with the expected `botpyton.architect_response` schema and matching request hash. Malformed or mismatched existing output is an error; it is never overwritten. Each exact order + profile is processed at most once, which prevents accidental replay of side effects.
+- Invalid JSON or strict-contract failures receive a durable `rejected_invalid_order` response and no task runs. Missing or surplus permissions receive a clear blocked response and no queue mutation.
+- If no pending packet remains, the command returns `idle`. If execution fails or is interrupted, inspect the queue and response evidence before creating a revised packet. Do not replay an unchanged order to repeat side effects.
+- The spool makes no network request and calls no AI. BotPyton runs only when explicitly invoked; an external architect must produce/read these files itself.
+
+The spool closes the bounded file protocol for one order at a time. It does not certify an actual external architect identity, nor does it automatically plan, authorize, or submit a following task. See the existing authorization, subprocess/network, and evidence caveats above.

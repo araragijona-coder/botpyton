@@ -2,7 +2,9 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
 import hashlib
+import io
 import json
 import sys
 from pathlib import Path
@@ -32,6 +34,7 @@ from .architect_order_contract import ArchitectOrderError, validate_architect_or
 from .architect_order_response import (
     ArchitectResponseWriter, build_architect_response,
 )
+from .architect_spool import ArchitectSpoolError, run_order_spool
 from .planner import order_tasks
 from .repository_analyzer import inspect_repository
 from .process_runner import ProcessRunnerError, run_tool_probe
@@ -197,6 +200,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--investigation-observed", metavar="TEXT", help="observed behavior and reproducible failure summary")
     parser.add_argument("--run-order", metavar="TASKS_JSON",
                         help="validate, enqueue and execute a bounded task batch with explicit machine-verifiable acceptance checks")
+    parser.add_argument("--architect-inbox", metavar="DIR",
+                        help="process at most one new structured order from this existing inbox directory")
+    parser.add_argument("--architect-outbox", metavar="DIR",
+                        help="existing directory where immutable structured architect responses are written")
     parser.add_argument("--architect-order", metavar="ORDER_JSON",
                         help="validate an external architect's strict JSON order; dry-run by default")
     parser.add_argument("--architect-response", metavar="RESPONSE_JSON",
@@ -264,6 +271,67 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     response_writer: ArchitectResponseWriter | None = None
     try:
+        if bool(args.architect_inbox) != bool(args.architect_outbox):
+            raise ArchitectSpoolError("--architect-inbox and --architect-outbox must be supplied together")
+        if args.architect_inbox:
+            allowed_spool_args = {
+                "architect_inbox", "architect_outbox", "execute_architect_order",
+                "authorize_local_writes", "execute_project_code", "project_root",
+                "memory", "check_timeout", "child_memory_limit_mb",
+            }
+            conflicts = [
+                name.replace("_", "-")
+                for name, value in vars(args).items()
+                if name not in allowed_spool_args and value != parser.get_default(name)
+            ]
+            if conflicts:
+                raise ArchitectSpoolError(
+                    "Architect inbox/outbox must be a standalone operation; conflicting options: "
+                    + ", ".join(sorted(conflicts))
+                )
+
+            def _run_spooled_order(
+                snapshot: Path, response_path: Path, flags: dict[str, bool]
+            ) -> dict[str, object]:
+                child_args = [
+                    "--architect-order", str(snapshot),
+                    "--architect-response", str(response_path),
+                    "--project-root", args.project_root,
+                    "--memory", args.memory,
+                    "--check-timeout", str(args.check_timeout),
+                ]
+                if flags["execute_architect_order"]:
+                    child_args.append("--execute-architect-order")
+                if flags["authorize_local_writes"]:
+                    child_args.append("--authorize-local-writes")
+                if flags["execute_project_code"]:
+                    child_args.append("--execute-project-code")
+                captured_stdout = io.StringIO()
+                captured_stderr = io.StringIO()
+                with contextlib.redirect_stdout(captured_stdout), contextlib.redirect_stderr(captured_stderr):
+                    exit_code = main(child_args)
+                return {
+                    "exit_code": exit_code,
+                    "stdout": captured_stdout.getvalue()[-12_000:],
+                    "stderr": captured_stderr.getvalue()[-4_000:],
+                }
+
+            spool_result = run_order_spool(
+                inbox_path=args.architect_inbox,
+                outbox_path=args.architect_outbox,
+                execute=args.execute_architect_order,
+                authorize_local_writes=args.authorize_local_writes,
+                execute_project_code=args.execute_project_code,
+                project_root=args.project_root,
+                memory_path=args.memory,
+                check_timeout=args.check_timeout,
+                run_order=_run_spooled_order,
+            )
+            _print_json(spool_result)
+            if spool_result["spool_status"] == "processed":
+                return int(spool_result.get("exit_code", 1))
+            return 2 if spool_result["spool_status"] == "blocked" else 0
+
         if args.architect_response and not args.architect_order:
             raise ArchitectOrderError('--architect-response requires --architect-order ORDER_JSON')
         if args.execute_architect_order and not args.architect_order:
