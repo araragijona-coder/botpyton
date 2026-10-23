@@ -630,3 +630,8 @@ python -m bot.main --architect-inbox .cerebro\architect-inbox --architect-outbox
 ~~~
 
 The command is review-only by default. To execute, add `--execute-architect-order`; also add `--authorize-local-writes` for file-writing actions and/or `--execute-project-code` for project tests/builds when required by the order. The folders must already exist and must not overlap. Input files stay in place; identical orders with an already recorded response are skipped to prevent accidental replay. This is on-demand file hand-off, not a daemon, AI integration, or automatic merge. Full behavior and limits: [architect order contract](docs/ARCHITECT-ORDER-CONTRACT.md).
+
+
+## Phase 74: recovery evidence for interrupted orders
+
+When the spool sees a prior `execution_in_progress` response, it does not silently skip it or run the same order again. It returns `recovery_required`, reads current task states from the durable queue without changing them, and records an immutable recovery report keyed by the request and queue-state hashes. This distinguishes running, failed, missing, and succeeded task states while requiring review of existing verification/report evidence before further work. The original response and inbox packet remain untouched. See the recovery section in [the architect-order contract](docs/ARCHITECT-ORDER-CONTRACT.md).
