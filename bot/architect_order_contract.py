@@ -21,6 +21,7 @@ _ALLOWED_FIELDS = frozenset({
 })
 _ALLOWED_TASK_FIELDS = frozenset({
     "id", "goal", "depends_on", "allowed_actions", "success_conditions", "max_attempts",
+    "verification_checks", "local_change_plan", "reviewed_patch", "allow_project_code_execution",
     "verification_checks", "local_change_plan", "allow_project_code_execution",
     "project_check_id", "child_memory_limit_mb", "check_timeout_seconds", "failure_context",
 })
