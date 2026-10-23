@@ -12,6 +12,7 @@ MAX_REVISION_TASKS = 25
 MAX_REVISION_CHECKS = 10
 MAX_TEXT_LENGTH = 240
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
+_GIT_SHA = re.compile(r"^(?:[0-9a-f]{40}|[0-9a-f]{64})$")
 _TASK_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$")
 _ORDER_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$")
 _BRANCH = re.compile(r"^botpyton/[A-Za-z0-9._/-]{1,120}$")
@@ -83,9 +84,9 @@ def _workspace_summary(value: object) -> dict[str, Any]:
     branch = value.get("branch")
     if isinstance(branch, str) and _BRANCH.fullmatch(branch):
         summary["branch"] = branch
-    head_sha = _digest(value.get("head_sha"))
-    if head_sha:
-        summary["head_sha"] = head_sha
+    head_sha_value = value.get("head_sha")
+    if isinstance(head_sha_value, str) and _GIT_SHA.fullmatch(head_sha_value):
+        summary["head_sha"] = head_sha_value
     # Do not copy paths, patch text, full diffs, or unverified workspace claims.
     return summary
 
