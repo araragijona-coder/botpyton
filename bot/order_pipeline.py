@@ -11,6 +11,7 @@ from .queue import TaskQueue
 # were met. Require at least one check that observes a task-relevant outcome.
 _ACCEPTANCE_CHECK_TYPES = frozenset({
     "file_exists", "file_sha256", "python_syntax", "json_valid",
+    "tests_pass", "project_check_pass", "local_plan_applied", "patch_applied",
     "tests_pass", "project_check_pass", "local_plan_applied",
 })
 
