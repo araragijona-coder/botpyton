@@ -193,15 +193,61 @@ def run_order_spool(
         if response_exists:
             previous_response = _read_existing_response(response_path, request_sha256)
             if previous_response["status"] == "execution_in_progress":
-                validation = previous_response.get("validation", {})
-                task_ids = validation.get("task_ids", []) if isinstance(validation, dict) else []
+                # Derive task identity from the exact input bytes, not from the
+                # mutable response file. A matching request hash is correlation,
+                # not an authenticity signature over the response contents.
+                try:
+                    original_packet = json.loads(raw.decode("utf-8"))
+                    enforce_json_depth(original_packet, label="architect inbox packet")
+                    canonical_order = validate_architect_order(original_packet)
+                except (
+                    UnicodeError, json.JSONDecodeError, RecursionError,
+                    BoundedReadError, ArchitectOrderError,
+                ) as exc:
+                    raise ArchitectSpoolError(
+                        "Cannot safely reconcile an in-progress response against its original order"
+                    ) from exc
+                if canonical_order["status"] != "ready":
+                    raise ArchitectSpoolError(
+                        "An in-progress response is bound to an order that is no longer executable"
+                    )
+
+                task_ids = list(canonical_order["task_ids"])
+                recorded_validation = previous_response.get("validation")
+                recorded_authorization = previous_response.get("authorization")
+                binding_mismatches: list[str] = []
+                if previous_response.get("order_id") != canonical_order["order_id"]:
+                    binding_mismatches.append("order_id")
+                if previous_response.get("source") != canonical_order["source"]:
+                    binding_mismatches.append("source")
                 if (
-                    not isinstance(task_ids, list)
-                    or not task_ids
-                    or len(task_ids) > 25
-                    or any(not isinstance(task_id, str) or not task_id for task_id in task_ids)
+                    not isinstance(recorded_validation, dict)
+                    or recorded_validation.get("task_ids") != task_ids
                 ):
-                    task_ids = []
+                    binding_mismatches.append("validation.task_ids")
+                if (
+                    not isinstance(recorded_validation, dict)
+                    or recorded_validation.get("required_local_approvals")
+                    != canonical_order["required_local_approvals"]
+                ):
+                    binding_mismatches.append("validation.required_local_approvals")
+                if (
+                    not isinstance(recorded_authorization, dict)
+                    or recorded_authorization.get("required_local_approvals")
+                    != canonical_order["required_local_approvals"]
+                ):
+                    binding_mismatches.append("authorization.required_local_approvals")
+                if (
+                    not isinstance(recorded_authorization, dict)
+                    or recorded_authorization.get("operator_flags") != flags
+                ):
+                    binding_mismatches.append("authorization.operator_flags")
+                if previous_response.get("execution_started") is not True:
+                    binding_mismatches.append("execution_started")
+                if previous_response.get("queue_mutated") is not None:
+                    binding_mismatches.append("queue_mutated")
+                if previous_response.get("execution") is not None:
+                    binding_mismatches.append("execution")
 
                 queue_snapshot: dict[str, Any] = {
                     "status": "unavailable",
@@ -243,7 +289,17 @@ def run_order_spool(
                     }
 
                 states = [item.get("status") for item in queue_snapshot.get("tasks", [])]
-                if task_ids and queue_snapshot.get("status") == "inspected" and states == ["succeeded"] * len(task_ids):
+                if binding_mismatches:
+                    next_action = {
+                        "actor": "local_operator",
+                        "action": "inspect_response_integrity",
+                        "message": (
+                            "The stored in-progress response does not match the validated order and current authorization profile. "
+                            "No task was replayed. Preserve the original response, inspect queue/report evidence, and do not treat "
+                            "the response's mismatched fields as trustworthy."
+                        ),
+                    }
+                elif task_ids and queue_snapshot.get("status") == "inspected" and states == ["succeeded"] * len(task_ids):
                     next_action = {
                         "actor": "local_operator",
                         "action": "verify_reports_and_close_interrupted_run",
@@ -283,32 +339,41 @@ def run_order_spool(
                 recovery_core = {
                     "response_type": "botpyton.architect_response",
                     "schema_version": 1,
-                    "order_id": previous_response.get("order_id"),
-                    "source": previous_response.get("source", {}),
+                    "order_id": canonical_order["order_id"],
+                    "source": canonical_order["source"],
                     "source_file": candidate.name,
                     "request_sha256": request_sha256,
                     "status": "recovery_required",
                     "execution_started": True,
                     "queue_mutated": previous_response.get("queue_mutated"),
-                    "authorization": previous_response.get("authorization", {}),
+                    "authorization": {
+                        "required_local_approvals": canonical_order["required_local_approvals"],
+                        "operator_flags": flags,
+                        "packet_can_grant_permission": False,
+                        "source_is_cryptographically_authenticated": False,
+                        "automatic_merge": False,
+                    },
                     "evidence": {
                         "original_status": previous_response.get("status"),
                         "original_response_file": response_path.name,
                         "task_ids_from_order": task_ids,
+                        "response_binding_status": "mismatch" if binding_mismatches else "matched",
+                        "response_binding_mismatches": binding_mismatches,
                         "queue_snapshot": queue_snapshot,
                     },
-                    "execution": previous_response.get("execution"),
+                    "execution": None,
                     "next_action": next_action,
                     "next_step": next_action["message"],
                     "ai_enabled": False,
                     "external_ai_apis_enabled": False,
                     "automatic_merge": False,
-                    "safety": previous_response.get("safety", {
+                    "safety": {
                         "botpyton_ai_enabled": False,
                         "external_ai_api_called": False,
                         "botpyton_network_requests_made": False,
+                        "project_code_may_access_network_when_explicitly_authorized": True,
                         "automatic_merge": False,
-                    }),
+                    },
                 }
                 snapshot_json = json.dumps(
                     queue_snapshot, ensure_ascii=False, sort_keys=True, separators=(",", ":")
