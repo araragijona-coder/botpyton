@@ -90,7 +90,7 @@ def validate_architect_order(value: Any) -> dict[str, Any]:
 
     summary = _text(value["summary"], "summary", MAX_SUMMARY_CHARS)
     status = value["status"]
-    if status not in {"ready", "needs_input"}:
+    if not isinstance(status, str) or status not in {"ready", "needs_input"}:
         raise ArchitectOrderError("status must be 'ready' or 'needs_input'")
     tasks_value = value["tasks"]
     if not isinstance(tasks_value, list):

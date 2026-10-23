@@ -276,20 +276,10 @@ def main(argv: list[str] | None = None) -> int:
                     "next_step": "Answer the listed questions, then submit a new ready packet.",
                 })
                 return 2
-            task_previews = [
-                {
-                    "id": task["id"], "goal": task["goal"],
-                    "depends_on": task.get("depends_on", []),
-                    "allowed_actions": task["allowed_actions"],
-                    "verification_checks": task["verification_checks"],
-                    "max_attempts": task.get("max_attempts", 3),
-                }
-                for task in order["normalized_tasks"]
-            ]
             if not args.execute_architect_order:
                 _print_json({
                     **public_order, "status": "validated_for_review",
-                    "tasks_preview": task_previews,
+                    "tasks_for_review": order["normalized_tasks"],
                     "execution_started": False, "queue_mutated": False,
                     "next_step": (
                         "Review the exact task payloads and add --execute-architect-order only "

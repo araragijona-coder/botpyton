@@ -45,7 +45,7 @@ Unknown fields are rejected, including fields such as `approved`, `execute`, `sh
 
 ## Authorization and safety model
 
-- Dry-run is the default. It reports task IDs, dependency order, required local approvals and verification requirements without creating or altering the queue.
+- Dry-run is the default. It reports task IDs, dependency order, required local approvals, verification requirements, and the complete normalized task payload (including declared local-change content) for review, without creating or altering the queue.
 - `--execute-architect-order` is the local operator's explicit decision to execute the reviewed order; no field inside the incoming JSON can replace that flag.
 - `--authorize-local-writes` is separately required for `apply_local_plan` and `apply_known_fix`.
 - `--execute-project-code` is separately required for `run_tests` and `run_project_check`. For `run_project_check`, the existing task field `allow_project_code_execution: true` must also be present; both local approval and task policy are enforced.
