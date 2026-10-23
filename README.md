@@ -618,3 +618,15 @@ python -m bot.main --architect-order .cerebro/examples/architect-order.json --ar
 ~~~
 
 After reviewing the payload, add `--execute-architect-order`; separately grant `--authorize-local-writes` for local write actions and `--execute-project-code` for test/build execution. Execution responses are first marked `execution_in_progress` so an interrupted operation is not mistaken for success. BotPyton itself remains deterministic/offline; this is a file-based hand-back protocol, not an automatic connection to an AI architect. See [Phase 71–72 contract and response](docs/ARCHITECT-ORDER-CONTRACT.md).
+
+
+## Phase 73: on-demand architect inbox/outbox
+
+BOTPYTON can process one pending `.json` architect order per manual invocation and leave a correlated response in a separate existing outbox. It sorts candidates deterministically, limits each input to 600,000 bytes, rejects invalid packets into a durable rejection response, and never overwrites a prior response for the same request hash and authorization profile.
+
+~~~powershell
+New-Item -ItemType Directory -Force .cerebro\architect-inbox, .cerebro\architect-outbox | Out-Null
+python -m bot.main --architect-inbox .cerebro\architect-inbox --architect-outbox .cerebro\architect-outbox
+~~~
+
+The command is review-only by default. To execute, add `--execute-architect-order`; also add `--authorize-local-writes` for file-writing actions and/or `--execute-project-code` for project tests/builds when required by the order. The folders must already exist and must not overlap. Input files stay in place; identical orders with an already recorded response are skipped to prevent accidental replay. This is on-demand file hand-off, not a daemon, AI integration, or automatic merge. Full behavior and limits: [architect order contract](docs/ARCHITECT-ORDER-CONTRACT.md).
