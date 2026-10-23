@@ -142,7 +142,7 @@ def validate_architect_order(value: Any) -> dict[str, Any]:
                 "use one patch plan per affected file set so preflight remains deterministic"
             )
         from .patch_cycle import PatchCycleError, validate_reviewed_patch_text
-        patch_path_owners: dict[str, str] = {}
+        patch_path_owners: dict[str, tuple[str, str]] = {}
         for task in patch_tasks:
             try:
                 patch_paths = validate_reviewed_patch_text(task.get("reviewed_patch"))
@@ -151,13 +151,17 @@ def validate_architect_order(value: Any) -> dict[str, Any]:
                     f"Task {task.get('id')!r} has an invalid reviewed patch: {str(exc)[:1_000]}"
                 ) from exc
             for patch_path in patch_paths:
-                previous_owner = patch_path_owners.get(patch_path)
-                if previous_owner is not None:
+                # Case-fold path ownership for Windows filesystems, where
+                # differently cased spellings can resolve to the same file.
+                key = patch_path.casefold()
+                previous = patch_path_owners.get(key)
+                if previous is not None:
+                    previous_owner, previous_path = previous
                     raise ArchitectOrderError(
                         f"Reviewed patch tasks {previous_owner!r} and {task.get('id')!r} both change "
-                        f"{patch_path!r}; combine edits to each file into one patch task"
+                        f"{previous_path!r}/{patch_path!r}; combine edits to each file into one patch task"
                     )
-                patch_path_owners[patch_path] = task["id"]
+                patch_path_owners[key] = (task["id"], patch_path)
 
     approvals: list[str] = []
     if actions.intersection({"apply_local_plan", "apply_known_fix", "apply_reviewed_patch"}):
