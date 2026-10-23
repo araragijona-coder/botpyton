@@ -484,6 +484,68 @@ class ArchitectOrderContractTests(unittest.TestCase):
             self.assertFalse(result["workspace"]["merge_performed"])
             self.assertEqual(json.loads(response_path.read_text(encoding="utf-8")), result)
 
+    def test_unapplicable_reviewed_patch_stops_before_queue_mutation(self):
+        if not shutil.which("git"):
+            self.skipTest("Git is required for isolated architect workspace tests")
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            project = root / "project"
+            project.mkdir()
+
+            def git(*args):
+                subprocess.run(
+                    ["git", *args], cwd=project, stdin=subprocess.DEVNULL,
+                    stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, check=True,
+                )
+
+            git("init", "-b", "main")
+            git("config", "user.email", "botpyton-test@example.invalid")
+            git("config", "user.name", "BotPyton Tests")
+            source_file = project / "app.py"
+            source_file.write_text("VALUE = 1\\n", encoding="utf-8")
+            git("add", "app.py")
+            git("commit", "-m", "baseline")
+
+            patch_task = task(
+                "ARCH-PATCH-STALE-001",
+                actions=["apply_reviewed_patch", "prepare_report"],
+                checks=[{"type": "patch_applied"}, {"type": "python_syntax"}],
+            )
+            patch_task["success_conditions"] = ["patch_applied", "python_syntax"]
+            patch_task["reviewed_patch"] = (
+                "diff --git a/app.py b/app.py\\n"
+                "--- a/app.py\\n"
+                "+++ b/app.py\\n"
+                "@@ -1 +1 @@\\n"
+                "-VALUE = 999\\n"
+                "+VALUE = 2\\n"
+            )
+            order_path = root / "stale-order.json"
+            queue_path = root / "queue.json"
+            response_path = root / "response.json"
+            workspace_parent = root / "workspaces"
+            order_path.write_text(json.dumps(packet([patch_task])), encoding="utf-8")
+
+            output = io.StringIO()
+            with contextlib.redirect_stdout(output), contextlib.redirect_stderr(output):
+                code = main([
+                    "--architect-order", str(order_path),
+                    "--execute-architect-order", "--authorize-local-writes",
+                    "--architect-response", str(response_path),
+                    "--project-root", str(project), "--memory", str(queue_path),
+                    "--architect-workspace-parent", str(workspace_parent),
+                ])
+            result = json.loads(output.getvalue())
+            self.assertEqual(code, 1, output.getvalue())
+            self.assertEqual(result["status"], "execution_error")
+            self.assertFalse(result["execution_started"])
+            self.assertFalse(result["queue_mutated"])
+            self.assertEqual(result["workspace"]["status"], "patch_preflight_failed")
+            self.assertIn("patch_preflight_error", result["workspace"])
+            self.assertFalse(queue_path.exists())
+            self.assertEqual(source_file.read_text(encoding="utf-8"), "VALUE = 1\\n")
+            self.assertEqual(json.loads(response_path.read_text(encoding="utf-8")), result)
+
     def test_cli_executes_only_after_explicit_order_approval(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
