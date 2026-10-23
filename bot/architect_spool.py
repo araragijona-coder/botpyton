@@ -23,7 +23,7 @@ from .architect_order_response import (
 from .bounded_io import BoundedReadError, enforce_json_depth, read_bounded_bytes
 from .memory import JsonMemory, MemoryError
 from .queue import QueueError, TaskQueue
-from .workspace import _git
+from .workspace import WorkspaceError, _git
 
 MAX_SPOOL_DIRECTORY_ENTRIES = 5_000
 MAX_TASK_REPORT_BYTES = 1_000_000
@@ -163,8 +163,15 @@ def _registered_workspace_root(
     if not candidate.is_dir() or candidate == source:
         return None, {"status": "workspace_not_isolated", "registered": False}
 
-    top = _git(source, ["rev-parse", "--show-toplevel"])
-    listed = _git(source, ["worktree", "list", "--porcelain"])
+    try:
+        top = _git(source, ["rev-parse", "--show-toplevel"])
+        listed = _git(source, ["worktree", "list", "--porcelain"])
+    except WorkspaceError as exc:
+        return None, {
+            "status": "git_worktree_registry_unavailable",
+            "registered": False,
+            "error": str(exc)[:300],
+        }
     if top["exit_code"] != 0 or listed["exit_code"] != 0:
         return None, {"status": "git_worktree_registry_unavailable", "registered": False}
     try:
@@ -187,8 +194,15 @@ def _registered_workspace_root(
         branch_ref = next((line[len("branch "):] for line in lines if line.startswith("branch ")), "")
         if not branch_ref.startswith("refs/heads/botpyton/"):
             return None, {"status": "workspace_branch_not_allowlisted", "registered": False}
-        current_branch = _git(candidate, ["symbolic-ref", "--short", "HEAD"])
-        current_head = _git(candidate, ["rev-parse", "HEAD"])
+        try:
+            current_branch = _git(candidate, ["symbolic-ref", "--short", "HEAD"])
+            current_head = _git(candidate, ["rev-parse", "HEAD"])
+        except WorkspaceError as exc:
+            return None, {
+                "status": "workspace_identity_unavailable",
+                "registered": False,
+                "error": str(exc)[:300],
+            }
         if (
             current_branch["exit_code"] != 0
             or current_head["exit_code"] != 0
