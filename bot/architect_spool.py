@@ -98,11 +98,22 @@ def _read_existing_response(path: Path, expected_sha256: str) -> dict[str, Any]:
         raise ArchitectSpoolError(
             f"Existing response for this order is not a valid bounded JSON record: {path.name}: {exc}"
         ) from exc
+    valid_statuses = {
+        "validated_for_review", "needs_input", "execution_in_progress",
+        "succeeded", "failed", "blocked", "incomplete", "execution_error",
+        "authorization_required", "authorization_mismatch", "rejected_invalid_order",
+    }
     if (
         not isinstance(value, dict)
         or value.get("response_type") != "botpyton.architect_response"
         or value.get("schema_version") != 1
         or value.get("request_sha256") != expected_sha256
+        or value.get("status") not in valid_statuses
+        or type(value.get("execution_started")) is not bool
+        or value.get("queue_mutated") not in (True, False, None)
+        or not isinstance(value.get("authorization"), dict)
+        or not isinstance(value.get("evidence"), dict)
+        or not isinstance(value.get("next_action"), dict)
     ):
         raise ArchitectSpoolError(
             f"Existing response does not match the expected order hash/schema: {path.name}"
@@ -268,7 +279,7 @@ def run_order_spool(
         snapshot: Path | None = None
         try:
             descriptor, snapshot_name = tempfile.mkstemp(
-                prefix=".botpyton-order-", suffix=".json", dir=outbox
+                prefix="botpyton-order-", suffix=".json"
             )
             snapshot = Path(snapshot_name)
             with os.fdopen(descriptor, "wb") as stream:
