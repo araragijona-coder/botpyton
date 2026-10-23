@@ -400,12 +400,12 @@ class ArchitectOrderContractTests(unittest.TestCase):
 
     def test_reviewed_patch_tasks_cannot_overlap_even_with_windows_case_variants(self):
         patch_template = (
-            "diff --git a/{path} b/{path}\\n"
-            "--- a/{path}\\n"
-            "+++ b/{path}\\n"
-            "@@ -1 +1 @@\\n"
-            "-VALUE = 1\\n"
-            "+VALUE = 2\\n"
+            "diff --git a/{path} b/{path}\n"
+            "--- a/{path}\n"
+            "+++ b/{path}\n"
+            "@@ -1 +1 @@\n"
+            "-VALUE = 1\n"
+            "+VALUE = 2\n"
         )
         first = task(
             "ARCH-PATCH-OVERLAP-A",
