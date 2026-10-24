@@ -660,6 +660,10 @@ Interrupted-order recovery now validates each real task report: allowed report p
 
 If every report verifies, BotPyton still requests evidence review before the operator closes the interrupted run. If a report is missing or does not prove success, it returns `inspect_task_report_evidence`. If queue tasks failed or were blocked, it recommends `create_revised_order_from_failure_evidence`, so the architect issues a revised order instead of repeating failed work blindly. Recovery is read-only: it never reruns tasks, rewrites the original response or queue, or rolls back unknown side effects. See [the architect-order contract](docs/ARCHITECT-ORDER-CONTRACT.md).
 
+## Repository branch audit — 2026-10-23
+
+The full remote branch inventory and disposition of unmerged or superseded candidates is recorded in [the exhaustive branch audit](docs/research/EXHAUSTIVE-BRANCH-AUDIT-2026-10-23.md). Do not merge legacy branches wholesale: some lack current safety fixes, and the old AI-repair candidate is intentionally excluded by BotPyton's no-AI execution policy. The identified Windows Job Object cleanup fix is being revalidated as a focused patch on current `main`.
+
 ## Phase 79 — bounded architect revision context
 
 When interrupted execution shows failed or blocked tasks, the recovery response now includes `evidence.revision_context`: a deterministic, allowlisted hand-off packet for an external architect. It carries task IDs, the durable queue's task-payload fingerprint, bounded report SHA-256/status, sanitized failure summaries, and compact failed-check details. Successful tasks are excluded from the revision list, duplicate checks are deduplicated, and task/check/text counts are bounded.

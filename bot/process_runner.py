@@ -230,8 +230,21 @@ def _terminate_process_tree(process, memory_job) -> bool:
             # JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE stops the leader and every
             # descendant assigned to this job. Close it before joining pipe
             # readers, since a descendant may otherwise keep those pipes open.
-            kernel32.CloseHandle(handle)
-            return True
+            if kernel32.CloseHandle(handle):
+                return True
+            # Closing the job normally kills its members because
+            # JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE is set. If that close fails,
+            # explicitly terminate the job before falling back to the leader.
+            try:
+                job_terminated = bool(kernel32.TerminateJobObject(handle, 1))
+            except (AttributeError, OSError):
+                job_terminated = False
+            if not job_terminated and process.poll() is None:
+                try:
+                    process.kill()
+                except OSError:
+                    pass
+            return False
         if process.poll() is None:
             try:
                 process.kill()
@@ -308,6 +321,8 @@ def _attach_windows_memory_job(process, memory_limit_mb: int):
     kernel32.AssignProcessToJobObject.restype = wintypes.BOOL
     kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
     kernel32.CloseHandle.restype = wintypes.BOOL
+    kernel32.TerminateJobObject.argtypes = [wintypes.HANDLE, wintypes.UINT]
+    kernel32.TerminateJobObject.restype = wintypes.BOOL
 
     job = kernel32.CreateJobObjectW(None, None)
     if not job:
