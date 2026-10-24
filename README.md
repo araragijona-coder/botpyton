@@ -662,7 +662,7 @@ If every report verifies, BotPyton still requests evidence review before the ope
 
 ## Repository branch audit — 2026-10-23
 
-The full remote branch inventory and disposition of unmerged or superseded candidates is recorded in [the exhaustive branch audit](docs/research/EXHAUSTIVE-BRANCH-AUDIT-2026-10-23.md). Do not merge legacy branches wholesale: some lack current safety fixes, and the old AI-repair candidate is intentionally excluded by BotPyton's no-AI execution policy. The identified Windows Job Object cleanup fix is being revalidated as a focused patch on current `main`.
+The full remote branch inventory and disposition of unmerged or superseded candidates is recorded in [the exhaustive branch audit](docs/research/EXHAUSTIVE-BRANCH-AUDIT-2026-10-23.md). Do not merge legacy branches wholesale: some lack current safety fixes, and the old AI-repair candidate is intentionally excluded by BotPyton's no-AI execution policy. The missing Windows Job Object cleanup fix was ported to the current baseline, passed Linux and Windows CI, and was integrated by [PR #54](https://github.com/araragijona-coder/botpyton/pull/54) at commit `f48db045688df999d0486507bc6c3aeac4213f98`.
 
 ## Phase 79 — bounded architect revision context
 
