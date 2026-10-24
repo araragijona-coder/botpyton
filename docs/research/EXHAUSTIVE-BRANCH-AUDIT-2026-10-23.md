@@ -72,7 +72,7 @@ Original commit: `19e7b3408d42f7cb2c243b456bf56efa78b14e5e`
 
 The change is not represented in `main`: `_terminate_process_tree()` ignored the return value of Windows `CloseHandle`, then treated the process tree as cleaned up. The old branch adds a checked close, explicit `TerminateJobObject` fallback, and leader-process fallback if job termination also fails, with mocked API tests.
 
-The old branch had successful Linux foundation and Windows smoke checks at its own SHA, but it also predates later mainline changes in the same files. Therefore the branch is **not** merged wholesale. Only the targeted cleanup fix and its regression tests are being carried onto a new branch based on the audited `main` baseline. The new candidate requires fresh Linux and Windows CI before integration.
+The isolated implementation notes and regression coverage are documented in [the Phase 45 backport note](PHASE-45-WINDOWS-JOB-CLOSE-FAILURE.md). The old branch had successful Linux foundation and Windows smoke checks at its own SHA, but it also predates later mainline changes in the same files. Therefore the branch is **not** merged wholesale. Only the targeted cleanup fix and its regression tests are being carried onto a new branch based on the audited `main` baseline. The new candidate requires fresh Linux and Windows CI before integration.
 
 ### Diverged branch with AI integration: explicitly excluded
 
