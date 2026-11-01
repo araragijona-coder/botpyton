@@ -176,6 +176,21 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--local-agent-path", default=".", metavar="RELATIVE_PATH", help="canonical path relative to the selected local-agent root (default: . for listing)")
     parser.add_argument("--local-agent-content-stdin", action="store_true", help="read bounded UTF-8 write content from stdin; required with --local-agent-write")
     parser.add_argument("--local-agent-expected-sha256", metavar="SHA256", help="required exact current file hash when replacing an existing target")
+    parser.add_argument(
+        "--local-installation-profile",
+        choices=("pdf-to-markdown-quick",),
+        help="preview or execute one fixed, reviewed local installation profile",
+    )
+    parser.add_argument(
+        "--local-installation-destination",
+        default=None,
+        help="destination for the selected local installation profile (must be inside the current user profile)",
+    )
+    parser.add_argument(
+        "--execute-local-installation",
+        action="store_true",
+        help="explicitly authorize the selected local installation profile to clone/update, install dependencies, and run quick",
+    )
     parser.add_argument("--project-root", default=".", help="project directory for local plans and project checks (default: current directory)")
     parser.add_argument("--list-project-checks", action="store_true", help="detect fixed test/build profiles without executing project code")
     parser.add_argument("--run-project-check", metavar="CHECK_ID", help="run one detected check; requires --execute-project-code")
@@ -252,6 +267,43 @@ def main(argv: list[str] | None = None) -> int:
                         help="seconds per fixed test attempt for --autonomous-cycle (hard maximum: 120)")
     parser.add_argument("--memory", default=".cerebro/memory/state.json", help="memory file path")
     args = parser.parse_args(argv)
+    local_installation_requested = (
+        args.local_installation_profile is not None
+        or args.execute_local_installation
+        or args.local_installation_destination is not None
+    )
+    if args.execute_local_installation and args.local_installation_profile is None:
+        parser.error("--execute-local-installation requires --local-installation-profile")
+    if local_installation_requested:
+        if args.local_installation_profile is None:
+            parser.error("--local-installation-destination requires --local-installation-profile")
+        allowed_local_args = {
+            "local_installation_profile", "local_installation_destination",
+            "execute_local_installation",
+        }
+        conflicts = [
+            name.replace("_", "-")
+            for name, value in vars(args).items()
+            if name not in allowed_local_args and value != parser.get_default(name)
+        ]
+        if conflicts:
+            parser.error(
+                "Local installation must be a standalone operation; conflicting options: "
+                + ", ".join(sorted(conflicts))
+            )
+        from .local_project_installation import run_local_project_installation
+        result = run_local_project_installation(
+            args.local_installation_profile,
+            args.local_installation_destination or r"%USERPROFILE%\source\botimagen-referencias-privadas",
+            execute=args.execute_local_installation,
+        )
+        _print_json(result)
+        if result.get("status") in {"preview", "succeeded"}:
+            return 0
+        if result.get("status") == "partial":
+            return 1
+        return 2
+
     if (
         args.architect_ai or args.allow_external_ai or args.architect_ai_context
         or args.send_source_context or args.architect_ai_failure_report or args.send_failure_report

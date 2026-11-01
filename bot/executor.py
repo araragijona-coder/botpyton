@@ -132,6 +132,21 @@ class TaskExecutor:
             return {"task_id": task["id"], "valid": True}
         if action == "run_tests":
             return self._run_tests()
+        if action == "run_local_installation":
+            if task.get("allow_local_installation") is not True:
+                raise PolicyError("Local installation was not explicitly approved")
+            from .local_project_installation import run_local_project_installation
+            result = run_local_project_installation(
+                task.get("local_installation_profile", ""),
+                task.get("local_installation_destination", r"%USERPROFILE%\source\botimagen-referencias-privadas"),
+                execute=True,
+            )
+            if result.get("status") != "succeeded":
+                raise ActionFailure(
+                    f"Local installation stopped with status {result.get('status', 'unknown')}",
+                    log_text=json.dumps(result, ensure_ascii=False, sort_keys=True)[-50_000:],
+                )
+            return result
         if action == "run_project_check":
             check_id = task.get("project_check_id")
             if task.get("allow_project_code_execution") is not True:

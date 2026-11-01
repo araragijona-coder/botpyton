@@ -9,6 +9,7 @@ ALLOWED_ACTIONS = frozenset({
     "validate_task",
     "run_tests",
     "run_project_check",
+    "run_local_installation",
     "apply_known_fix",
     "apply_local_plan",
     "apply_reviewed_patch",
@@ -54,6 +55,28 @@ def validate_task(task: dict[str, Any]) -> None:
             raise PolicyError("local_change_plan schema_version must be 1")
         if local_plan.get("task_id") != task["id"]:
             raise PolicyError("local_change_plan task_id must match the queue task id")
+    if "run_local_installation" in actions:
+        if task.get("allow_local_installation") is not True:
+            raise PolicyError("run_local_installation requires allow_local_installation=true")
+        if task.get("local_installation_profile") != "pdf-to-markdown-quick":
+            raise PolicyError("run_local_installation requires the fixed pdf-to-markdown-quick profile")
+        if attempts != 1:
+            raise PolicyError("run_local_installation requires max_attempts=1; interactive installations are never automatically retried")
+        if len(actions) != len(set(actions)):
+            raise PolicyError("run_local_installation task actions must not contain duplicates")
+        if not set(actions).issubset({"run_local_installation", "validate_task", "prepare_report"}):
+            raise PolicyError("run_local_installation must be isolated from unrelated task actions")
+        destination = task.get("local_installation_destination")
+        if "local_installation_destination" in task and (
+            not isinstance(destination, str) or not destination.strip()
+            or len(destination) > 1024 or chr(0) in destination
+        ):
+            raise PolicyError("local_installation_destination must be a non-empty path of at most 1024 characters")
+    elif any(key in task for key in (
+        "allow_local_installation", "local_installation_profile", "local_installation_destination",
+    )):
+        raise PolicyError("Local-installation fields are only allowed with run_local_installation")
+
     if "run_project_check" in actions:
         if task.get("allow_project_code_execution") is not True:
             raise PolicyError("run_project_check requires allow_project_code_execution=true")
