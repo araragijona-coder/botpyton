@@ -232,6 +232,10 @@ class LocalProjectInstallationTests(unittest.TestCase):
     def test_interactive_git_mode_rejects_every_non_git_transfer_operation(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
+            hooks = root / "empty-hooks"
+            hooks.mkdir()
+            config = root / "git-security.config"
+            config.write_text("[credential]\n    helper = manager\n", encoding="utf-8")
             with self.assertRaisesRegex(
                 install.LocalProjectInstallationError,
                 "restricted to Git clone, fetch, and pull",
@@ -241,6 +245,8 @@ class LocalProjectInstallationTests(unittest.TestCase):
                     ["status"],
                     cwd=root,
                     allowed_root=root,
+                    hooks_path=hooks,
+                    config_file=config,
                 )
 
     def test_venv_inspection_script_is_valid_python(self):
