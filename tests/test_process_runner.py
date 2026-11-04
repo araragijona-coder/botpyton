@@ -8,6 +8,7 @@ from unittest import mock
 from bot.process_runner import (
     ProcessRunnerError,
     _find_executable_in_path,
+    _safe_environment,
     _safe_search_path,
     _terminate_process_tree,
     run_process,
@@ -196,6 +197,36 @@ class ProcessRunnerTests(unittest.TestCase):
                     memory_limit_mb=2048,
                 )
 
+
+    def test_strips_inherited_git_and_credential_manager_override_environment(self):
+        with tempfile.TemporaryDirectory() as temp:
+            injected = {
+                "GIT_CONFIG_COUNT": "1",
+                "GIT_CONFIG_KEY_0": "credential.helper",
+                "GIT_CONFIG_VALUE_0": "!malicious-command",
+                "GIT_CONFIG_GLOBAL": str(Path(temp) / "attacker.gitconfig"),
+                "GIT_SSL_NO_VERIFY": "1",
+                "GIT_ASKPASS": str(Path(temp) / "askpass.exe"),
+                "SSH_ASKPASS": str(Path(temp) / "ssh-askpass.exe"),
+                "GCM_INTERACTIVE": "never",
+            }
+            with mock.patch.dict(os.environ, injected):
+                env = _safe_environment(cwd=temp)
+            for key in injected:
+                self.assertNotIn(key, env)
+
+    def test_rejects_untrusted_git_environment_overrides(self):
+        with tempfile.TemporaryDirectory() as temp:
+            for key in ("GIT_CONFIG_COUNT", "GIT_CONFIG_KEY_0", "GIT_SSL_NO_VERIFY", "GIT_ASKPASS"):
+                with self.subTest(key=key):
+                    with self.assertRaises(ProcessRunnerError):
+                        run_process(
+                            [sys.executable, "--version"],
+                            cwd=temp,
+                            allowed_root=temp,
+                            approved_executables=[sys.executable],
+                            env_overrides={key: "untrusted"},
+                        )
 
     def test_timeout_kills_descendants_that_inherit_output_pipes(self):
         import time

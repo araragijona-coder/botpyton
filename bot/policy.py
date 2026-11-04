@@ -56,6 +56,8 @@ def validate_task(task: dict[str, Any]) -> None:
         if local_plan.get("task_id") != task["id"]:
             raise PolicyError("local_change_plan task_id must match the queue task id")
     if "run_local_installation" in actions:
+        # This boolean records request intent only; TaskExecutor must obtain a
+        # separate live typed confirmation from a human at execution time.
         if task.get("allow_local_installation") is not True:
             raise PolicyError("run_local_installation requires allow_local_installation=true")
         if task.get("local_installation_profile") != "pdf-to-markdown-quick":

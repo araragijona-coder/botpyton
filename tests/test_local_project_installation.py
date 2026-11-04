@@ -3,7 +3,7 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from bot import local_project_installation as install
 from bot.policy import PolicyError, validate_task
@@ -170,6 +170,7 @@ class LocalProjectInstallationTests(unittest.TestCase):
                     "disk_free_end_mb": 8999,
                     "page_markers_valid": True,
                     "source_hash_unchanged": True,
+                    "status": "complete",
                     "execution_ok": True,
                 }],
             }
@@ -181,12 +182,13 @@ class LocalProjectInstallationTests(unittest.TestCase):
             ) as handle:
                 writer = csv.DictWriter(
                     handle,
-                    fieldnames=["profile", "page_mode", "execution_ok"],
+                    fieldnames=["profile", "page_mode", "status", "execution_ok"],
                 )
                 writer.writeheader()
                 writer.writerow({
                     "profile": "01-first20-batch-auto",
                     "page_mode": "first20",
+                    "status": "complete",
                     "execution_ok": "True",
                 })
 
@@ -396,11 +398,122 @@ class LocalProjectInstallationTests(unittest.TestCase):
             self.assertTrue(Path(paths["json"]).is_file())
             self.assertTrue(Path(paths["csv"]).is_file())
 
+    def test_git_credential_manager_rejects_url_specific_helper(self):
+        with tempfile.TemporaryDirectory() as temp:
+            home = Path(temp)
+            with patch.object(install, "_capture", side_effect=[
+                {"timed_out": False, "exit_code": 0, "stdout": "manager\n"},
+                {"timed_out": False, "exit_code": 0, "stdout": "credential.https://github.com.helper !steal-token\n"},
+            ]):
+                with self.assertRaises(install._StopInstallation) as caught:
+                    install._require_gcm("C:\\Git\\bin\\git.exe", home)
+            self.assertEqual(caught.exception.code, "git_url_credential_helper_forbidden")
+
+    def test_git_security_context_creates_empty_hooks_dir_and_minimal_tls_config(self):
+        with tempfile.TemporaryDirectory() as temp:
+            log_dir = Path(temp) / "run"
+            log_dir.mkdir()
+            hooks, config = install._create_git_security_context(log_dir, "manager")
+            self.assertTrue(hooks.is_dir())
+            self.assertEqual(list(hooks.iterdir()), [])
+            content = config.read_text(encoding="utf-8")
+            self.assertIn("helper = manager", content)
+            self.assertIn("sslVerify = true", content)
+            self.assertNotIn("include", content.casefold())
+            self.assertNotIn("filter", content.casefold())
+
+    def test_interactive_git_command_forces_hooks_fsmonitor_and_tls_settings(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            hooks = root / "hooks"
+            hooks.mkdir()
+            config = root / "git-security.config"
+            config.write_text("[credential]\n    helper = manager\n", encoding="utf-8")
+            fake_process = Mock()
+            fake_process.wait.return_value = 0
+            fake_process.returncode = 0
+            fake_process.poll.return_value = 0
+            with (
+                patch.object(install, "_resolve_approved_executable", return_value=str(root / "git.exe")),
+                patch.object(install, "_safe_environment", return_value={"PATH": ""}),
+                patch.object(install, "_attach_windows_memory_job", return_value=None),
+                patch.object(install.subprocess, "Popen", return_value=fake_process) as popen,
+            ):
+                result = install._run_git_interactive(
+                    str(root / "git.exe"),
+                    ["clone", "--", install.REPOSITORY_URL, str(root / "checkout")],
+                    cwd=root, allowed_root=root, hooks_path=hooks, config_file=config,
+                )
+            argv = popen.call_args.args[0]
+            self.assertIn("core.hooksPath=" + hooks.resolve().as_posix(), argv)
+            self.assertIn("core.fsmonitor=false", argv)
+            self.assertIn("http.sslVerify=true", argv)
+            self.assertIn("http.https://github.com/.sslVerify=true", argv)
+            self.assertTrue(result["git_hooks_disabled"])
+            self.assertTrue(result["http_tls_verification_enforced"])
+
+    def test_expected_commit_requires_exact_sha_not_an_ancestor(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            hooks = root / "hooks"
+            hooks.mkdir()
+            env = {"GIT_CONFIG_GLOBAL": str(root / "config"), "GIT_CONFIG_NOSYSTEM": "1"}
+            with patch.object(install, "_git_capture", return_value=install.EXPECTED_COMMIT):
+                install._verify_expected_commit(
+                    "C:\\Git\\bin\\git.exe", root, root, "FETCH_HEAD",
+                    hooks_path=hooks, env_overrides=env,
+                )
+            with patch.object(install, "_git_capture", return_value="f" * 40):
+                with self.assertRaises(install._StopInstallation) as caught:
+                    install._verify_expected_commit(
+                        "C:\\Git\\bin\\git.exe", root, root, "FETCH_HEAD",
+                        hooks_path=hooks, env_overrides=env,
+                    )
+            self.assertEqual(caught.exception.code, "unapproved_commit_refused")
+
+    def test_quick_result_validation_rejects_json_csv_execution_disagreement(self):
+        with tempfile.TemporaryDirectory() as temp:
+            project = Path(temp)
+            run_dir = project / install.RESULTS_SUBDIRECTORY / "20261030-120002-abcdef"
+            run_dir.mkdir(parents=True)
+            summary = {
+                "tool": "pdf-to-markdown-local-diagnostics",
+                "run_id": run_dir.name,
+                "overall_status": "complete",
+                "fixture_unchanged": True,
+                "metadata": {
+                    "profile_set": "quick",
+                    "fixture_name": "F-12-batch-120-pages.pdf",
+                    "privacy": {
+                        "synthetic_fixture_only": True,
+                        "network_used_by_diagnostic": False,
+                    },
+                },
+                "results": [{
+                    "profile": "01-first20-batch-auto",
+                    "page_mode": "first20",
+                    "status": "complete",
+                    "execution_ok": False,
+                    "page_markers_valid": True,
+                    "source_hash_unchanged": True,
+                }],
+            }
+            (run_dir / "performance-report.json").write_text(json.dumps(summary), encoding="utf-8")
+            (run_dir / "performance-report.csv").write_text(
+                "profile,page_mode,status,execution_ok,page_markers_valid,source_hash_unchanged\n"
+                "01-first20-batch-auto,first20,complete,True,True,True\n",
+                encoding="utf-8",
+            )
+            with self.assertRaises(install._StopInstallation) as caught:
+                install._collect_quick_results(project, set())
+            self.assertEqual(caught.exception.code, "performance_reports_disagree")
+
     def test_git_credential_manager_requires_one_official_helper_only(self):
         with tempfile.TemporaryDirectory() as temp:
             home = Path(temp)
             with patch.object(install, "_capture", side_effect=[
                 {"timed_out": False, "exit_code": 0, "stdout": "manager\n"},
+                {"timed_out": False, "exit_code": 1, "stdout": ""},
                 {"timed_out": False, "exit_code": 0, "stdout": "Git Credential Manager 2.x"},
             ]):
                 self.assertEqual(install._require_gcm("C:\\Git\\bin\\git.exe", home), "manager")
