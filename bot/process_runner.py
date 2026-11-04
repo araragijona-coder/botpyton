@@ -14,6 +14,9 @@ from .system_profile import recommended_child_memory_limit_mb
 MAX_TIMEOUT_SECONDS = 300
 MAX_OUTPUT_BYTES = 64_000
 SECRET_MARKERS = ("TOKEN", "SECRET", "PASSWORD", "CREDENTIAL", "API_KEY", "PRIVATE_KEY")
+TRUSTED_GIT_ENV_OVERRIDES = frozenset({
+    "GIT_CONFIG_GLOBAL", "GIT_CONFIG_NOSYSTEM", "GIT_TERMINAL_PROMPT",
+})
 
 # Remove variables that can inject code or native libraries before a tool even
 # processes its fixed arguments (for example NODE_OPTIONS=--require ...).
@@ -140,6 +143,9 @@ def _safe_environment(
         key: value for key, value in os.environ.items()
         if not any(marker in key.upper() for marker in SECRET_MARKERS)
         and key.upper() not in CODE_LOADING_ENV_VARS
+        and not key.upper().startswith("GIT_")
+        and not key.upper().startswith("GCM_")
+        and key.upper() not in {"SSH_ASKPASS", "SSH_ASKPASS_REQUIRE"}
     }
     env["PYTHONDONTWRITEBYTECODE"] = "1"
     if extra:
@@ -150,6 +156,10 @@ def _safe_environment(
                 raise ProcessRunnerError("Invalid environment variable name")
             if any(marker in key.upper() for marker in SECRET_MARKERS):
                 raise ProcessRunnerError("Secret-like environment overrides are forbidden")
+            if key.upper().startswith("GIT_") and key.upper() not in TRUSTED_GIT_ENV_OVERRIDES:
+                raise ProcessRunnerError(f"Untrusted Git environment override is forbidden: {key}")
+            if key.upper().startswith("GCM_") and key.upper() != "GCM_INTERACTIVE":
+                raise ProcessRunnerError(f"Untrusted Git Credential Manager environment override is forbidden: {key}")
             if key.upper() in CODE_LOADING_ENV_VARS:
                 raise ProcessRunnerError(f"Code-loading environment override is forbidden: {key}")
             if chr(0) in value:

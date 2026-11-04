@@ -177,6 +177,7 @@ def _capture(
     memory_limit_mb: int | None = None,
     log_dir: Path | None = None,
     log_name: str | None = None,
+    env_overrides: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     try:
         result = run_process(
@@ -187,6 +188,7 @@ def _capture(
             timeout_seconds=timeout_seconds,
             output_limit_bytes=64_000,
             memory_limit_mb=memory_limit_mb,
+            env_overrides=env_overrides,
         )
     except (OSError, ProcessRunnerError) as exc:
         raise _StopInstallation(
@@ -209,6 +211,7 @@ def _capture_text(
     code: str,
     timeout_seconds: int = 30,
     memory_limit_mb: int | None = None,
+    env_overrides: dict[str, str] | None = None,
 ) -> str:
     result = _capture(
         executable,
@@ -217,12 +220,59 @@ def _capture_text(
         allowed_root=allowed_root,
         timeout_seconds=timeout_seconds,
         memory_limit_mb=memory_limit_mb,
+        env_overrides=env_overrides,
     )
     if result["timed_out"]:
         _stop(phase, code, f"Command timed out after {timeout_seconds} seconds")
     if result["exit_code"] != 0:
         _stop(phase, code, f"Command failed with exit code {result['exit_code']}")
     return str(result.get("stdout", "")).strip()
+
+
+def _git_security_args(hooks_path: Path) -> list[str]:
+    """Command-line Git controls take precedence over repository-local config."""
+    hooks = hooks_path.resolve(strict=True).as_posix().replace('"', '\\"')
+    return [
+        "-c", f"core.hooksPath={hooks}",
+        "-c", "core.fsmonitor=false",
+        "-c", "core.pager=cat",
+        "-c", "http.sslVerify=true",
+        "-c", "http.https://github.com/.sslVerify=true",
+    ]
+
+
+def _git_environment(config_file: Path) -> dict[str, str]:
+    """Use a per-run, minimal Git config and disable system/user config sources."""
+    return {
+        "GIT_CONFIG_GLOBAL": str(config_file.resolve(strict=True)),
+        "GIT_CONFIG_NOSYSTEM": "1",
+        "GIT_TERMINAL_PROMPT": "0",
+        "GCM_INTERACTIVE": "auto",
+    }
+
+
+def _create_git_security_context(log_dir: Path, helper: str) -> tuple[Path, Path]:
+    if helper not in {"manager", "manager-core"}:
+        raise LocalProjectInstallationError("Only the verified Git Credential Manager helper is permitted")
+    hooks_path = log_dir / "empty-git-hooks"
+    hooks_path.mkdir(exist_ok=False)
+    config_file = log_dir / "git-security.config"
+    hooks_value = hooks_path.resolve(strict=True).as_posix().replace("\\", "/").replace('"', '\\"')
+    config_text = (
+        "[credential]\n"
+        f"    helper = {helper}\n"
+        "[core]\n"
+        f'    hooksPath = "{hooks_value}"\n'
+        "    fsmonitor = false\n"
+        "    pager = cat\n"
+        "[http]\n"
+        "    sslVerify = true\n"
+        '[http "https://github.com/"]\n'
+        "    sslVerify = true\n"
+    )
+    with config_file.open("x", encoding="utf-8", newline="\n") as handle:
+        handle.write(config_text)
+    return hooks_path, config_file
 
 
 def _run_git_interactive(
@@ -233,6 +283,8 @@ def _run_git_interactive(
     allowed_root: Path,
     timeout_seconds: int = COMMAND_TIMEOUT_SECONDS,
     memory_limit_mb: int = 512,
+    hooks_path: Path,
+    config_file: Path,
 ) -> dict[str, Any]:
     """Run only clone/fetch/pull with inherited console I/O for Git Credential Manager.
 
@@ -255,10 +307,8 @@ def _run_git_interactive(
     except ValueError as exc:
         raise LocalProjectInstallationError("Git working directory must be inside the approved root") from exc
     executable = _resolve_approved_executable(git_executable, [git_executable])
-    env = _safe_environment(
-        {"GIT_TERMINAL_PROMPT": "0", "GCM_INTERACTIVE": "auto"},
-        cwd=workdir,
-    )
+    env = _safe_environment(_git_environment(config_file), cwd=workdir)
+    git_args = [executable, *_git_security_args(hooks_path), *args]
     options: dict[str, Any] = {
         "cwd": workdir,
         "env": env,
@@ -275,7 +325,7 @@ def _run_git_interactive(
     memory_job = None
     timed_out = False
     try:
-        process = subprocess.Popen([executable, *args], **options)
+        process = subprocess.Popen(git_args, **options)
         memory_job = _attach_windows_memory_job(process, memory_limit_mb)
         try:
             process.wait(timeout=timeout_seconds)
@@ -294,6 +344,10 @@ def _run_git_interactive(
             "stdio_inherited": True,
             "output_captured": False,
             "credentials_captured": False,
+            "git_hooks_disabled": True,
+            "git_system_config_disabled": True,
+            "git_user_config_isolated": True,
+            "http_tls_verification_enforced": True,
             "network_isolation_enforced": False,
             "child_may_access_network": True,
         }
@@ -435,10 +489,14 @@ def _git_capture(
     home: Path,
     phase: str = "git_inspection",
     code: str = "git_command_failed",
+    hooks_path: Path,
+    env_overrides: dict[str, str],
 ) -> str:
+    safe_args = [*_git_security_args(hooks_path), *args]
     return _capture_text(
-        git, args, cwd=cwd, allowed_root=home,
+        git, safe_args, cwd=cwd, allowed_root=home,
         phase=phase, code=code, timeout_seconds=45, memory_limit_mb=256,
+        env_overrides=env_overrides,
     )
 
 
@@ -448,6 +506,7 @@ def _require_gcm(
     *,
     cwd: Path | None = None,
     allowed_root: Path | None = None,
+    env_overrides: dict[str, str] | None = None,
 ) -> str:
     command_cwd = home if cwd is None else cwd
     process_root = home if allowed_root is None else allowed_root
@@ -456,6 +515,7 @@ def _require_gcm(
     config = _capture(
         git, ["config", "--get-all", "credential.helper"],
         cwd=command_cwd, allowed_root=process_root, timeout_seconds=20, memory_limit_mb=256,
+        env_overrides=env_overrides,
     )
     if config["timed_out"] or config["exit_code"] != 0:
         _stop(
@@ -471,10 +531,27 @@ def _require_gcm(
             "Git must have exactly one credential.helper entry and it must be Git Credential Manager. Other or multiple helpers are refused.",
         )
     helper = helpers[0]
+    url_helpers = _capture(
+        git, ["config", "--get-regexp", r"^credential\..+\.helper$"],
+        cwd=command_cwd, allowed_root=process_root, timeout_seconds=20,
+        memory_limit_mb=256, env_overrides=env_overrides,
+    )
+    if url_helpers["timed_out"] or url_helpers["exit_code"] not in (0, 1):
+        _stop(
+            "authentication_preflight",
+            "git_url_credential_helpers_unreadable",
+            "URL-specific Git credential helpers could not be safely inspected",
+        )
+    if url_helpers["exit_code"] == 0 and str(url_helpers.get("stdout", "")).strip():
+        _stop(
+            "authentication_preflight",
+            "git_url_credential_helper_forbidden",
+            "URL-specific credential helpers are forbidden; only the single verified global Git Credential Manager helper may receive credentials",
+        )
     command = "credential-manager" if helper == "manager" else "credential-manager-core"
     result = _capture(
         git, [command, "--version"], cwd=command_cwd, allowed_root=process_root,
-        timeout_seconds=20, memory_limit_mb=256,
+        timeout_seconds=20, memory_limit_mb=256, env_overrides=env_overrides,
     )
     if result["timed_out"] or result["exit_code"] != 0:
         _stop(
@@ -491,54 +568,75 @@ def _check_git_transport_config(
     home: Path,
     *,
     allowed_root: Path | None = None,
+    env_overrides: dict[str, str] | None = None,
+    hooks_path: Path | None = None,
+    local_only: bool = False,
 ) -> None:
+    """Reject Git settings that can redirect auth or execute external programs."""
     process_root = home if allowed_root is None else allowed_root
-    """Reject URL rewrites and custom HTTP/SSH auth headers before contacting GitHub."""
     blocked_patterns = (
         r"^url\..*\.insteadof$",
         r"^(http\.extraheader|http\..*\.extraheader|core\.sshcommand)$",
+        r"^credential\..+\.helper$",
+        r"^filter\..*\.(clean|smudge|process)$",
+        r"^(core\.(hooksPath|fsmonitor)|include\..*\.path|includeif\..*\.path)$",
+        r"^http\..*\.sslverify$",
     )
     for pattern in blocked_patterns:
+        args = ["config"]
+        if local_only:
+            args.append("--local")
+        args.extend(["--get-regexp", pattern])
+        if hooks_path is not None:
+            args = [*_git_security_args(hooks_path), *args]
         result = _capture(
-            git, ["config", "--get-regexp", pattern],
+            git, args,
             cwd=cwd, allowed_root=process_root, timeout_seconds=20, memory_limit_mb=256,
+            env_overrides=env_overrides,
         )
         if result["timed_out"] or result["exit_code"] not in (0, 1):
             _stop(
                 "authentication_preflight",
                 "git_transport_config_unreadable",
-                "Git transport configuration could not be safely inspected",
+                "Git transport, hook, filter, include, or credential configuration could not be safely inspected",
             )
         if result["exit_code"] == 0 and str(result.get("stdout", "")).strip():
             _stop(
                 "authentication_preflight",
                 "git_custom_transport_config",
-                "A Git URL rewrite, HTTP extra header, or custom SSH command is configured. Remove it or use a clean Git configuration; BotPyton will not send credentials through custom transport settings.",
+                "A Git URL rewrite, custom HTTP/SSH setting, URL-specific credential helper, external filter, hook override, fsmonitor, or config include is configured. Remove it before installation.",
             )
 
 
-def _assert_checkout_state(git: str, destination: Path, home: Path) -> None:
+def _assert_checkout_state(
+    git: str,
+    destination: Path,
+    home: Path,
+    *,
+    hooks_path: Path,
+    config_file: Path,
+) -> None:
     if not destination.exists() or not destination.is_dir():
         _stop("git_checkout", "checkout_missing", "Repository checkout directory is missing")
     _reject_reparse_components(destination)
     git_metadata = destination / ".git"
     if not git_metadata.is_dir() or _is_reparse_point(git_metadata):
         _stop("git_checkout", "git_metadata_invalid", "Destination does not contain a normal, non-linked Git metadata directory")
+    git_env = _git_environment(config_file)
     top = _git_capture(
         git, ["rev-parse", "--show-toplevel"], cwd=destination, home=home,
         phase="git_checkout", code="not_a_git_repository",
+        hooks_path=hooks_path, env_overrides=git_env,
     )
     try:
         if Path(top).resolve(strict=True) != destination.resolve(strict=True):
             _stop("git_checkout", "wrong_git_root", "Destination is not the root of the expected Git working tree")
     except (OSError, RuntimeError, ValueError):
         _stop("git_checkout", "wrong_git_root", "Git reported a checkout root that could not be verified")
-    git_metadata = destination / ".git"
-    if not git_metadata.is_dir() or _is_reparse_point(git_metadata):
-        _stop("git_checkout", "git_metadata_invalid", "Destination does not contain a normal, non-linked Git metadata directory")
     remote = _git_capture(
         git, ["remote", "get-url", "origin"], cwd=destination, home=home,
         phase="git_checkout", code="origin_missing",
+        hooks_path=hooks_path, env_overrides=git_env,
     )
     if not _validate_repository_url(remote):
         _stop(
@@ -549,6 +647,7 @@ def _assert_checkout_state(git: str, destination: Path, home: Path) -> None:
     branch = _git_capture(
         git, ["branch", "--show-current"], cwd=destination, home=home,
         phase="git_checkout", code="branch_unavailable",
+        hooks_path=hooks_path, env_overrides=git_env,
     )
     if branch != BRANCH:
         _stop(
@@ -559,7 +658,7 @@ def _assert_checkout_state(git: str, destination: Path, home: Path) -> None:
     status = _git_capture(
         git, ["status", "--porcelain=v1", "--untracked-files=all"],
         cwd=destination, home=home, phase="git_checkout",
-        code="git_status_failed",
+        code="git_status_failed", hooks_path=hooks_path, env_overrides=git_env,
     )
     if status:
         _stop(
@@ -569,17 +668,25 @@ def _assert_checkout_state(git: str, destination: Path, home: Path) -> None:
         )
 
 
-def _verify_expected_commit(git: str, destination: Path, home: Path, ref: str) -> None:
-    result = _capture(
-        git, ["merge-base", "--is-ancestor", EXPECTED_COMMIT, ref],
-        cwd=destination, allowed_root=home,
-        timeout_seconds=30, memory_limit_mb=256,
+def _verify_expected_commit(
+    git: str,
+    destination: Path,
+    home: Path,
+    ref: str,
+    *,
+    hooks_path: Path,
+    env_overrides: dict[str, str],
+) -> None:
+    actual = _git_capture(
+        git, ["rev-parse", ref], cwd=destination, home=home,
+        phase="git_history_validation", code="expected_commit_unavailable",
+        hooks_path=hooks_path, env_overrides=env_overrides,
     )
-    if result["timed_out"] or result["exit_code"] != 0:
+    if actual != EXPECTED_COMMIT:
         _stop(
             "git_history_validation",
-            "expected_commit_not_in_main_history",
-            f"Expected commit {EXPECTED_COMMIT} was not confirmed in {ref}; no pull was attempted",
+            "unapproved_commit_refused",
+            f"{ref} resolves to {actual}, not the exact reviewed commit {EXPECTED_COMMIT}; no pull or installation was attempted",
         )
 
 
@@ -588,10 +695,27 @@ def _prepare_checkout(
     destination: Path,
     home: Path,
     report: dict[str, Any],
+    *,
+    hooks_path: Path,
+    config_file: Path,
 ) -> str:
     created = False
+    git_env = _git_environment(config_file)
     if destination.exists():
-        _assert_checkout_state(git, destination, home)
+        if not destination.is_dir():
+            _stop("git_checkout", "checkout_not_directory", "The destination exists but is not a directory")
+        _reject_reparse_components(destination)
+        git_metadata = destination / ".git"
+        if not git_metadata.is_dir() or _is_reparse_point(git_metadata):
+            _stop("git_checkout", "git_metadata_invalid", "Destination does not contain a normal, non-linked Git metadata directory")
+        _require_gcm(git, home, cwd=destination, allowed_root=home, env_overrides=git_env)
+        _check_git_transport_config(
+            git, destination, home, env_overrides=git_env,
+            hooks_path=hooks_path, local_only=True,
+        )
+        _assert_checkout_state(
+            git, destination, home, hooks_path=hooks_path, config_file=config_file,
+        )
     else:
         destination.parent.mkdir(parents=True, exist_ok=True)
         _reject_reparse_components(destination.parent)
@@ -601,6 +725,8 @@ def _prepare_checkout(
             cwd=destination.parent,
             allowed_root=home,
             memory_limit_mb=512,
+            hooks_path=hooks_path,
+            config_file=config_file,
         )
         if result["timed_out"] or result["exit_code"] != 0:
             _stop(
@@ -609,35 +735,43 @@ def _prepare_checkout(
                 "Git clone did not complete. Any partial destination was preserved for inspection; nothing was deleted",
             )
         created = True
-        _assert_checkout_state(git, destination, home)
-    # For an existing checkout, inspect local .git/config before fetch can use
-    # any repo-local credential or transport override. The just-cloned checkout
-    # is also checked before its first subsequent network operation.
-    _require_gcm(git, home, cwd=destination)
-    _check_git_transport_config(git, destination, home)
-    report["repository"]["checkout_created"] = created
+        _require_gcm(git, home, cwd=destination, allowed_root=home, env_overrides=git_env)
+        _check_git_transport_config(
+            git, destination, home, env_overrides=git_env,
+            hooks_path=hooks_path, local_only=True,
+        )
+        _assert_checkout_state(
+            git, destination, home, hooks_path=hooks_path, config_file=config_file,
+        )
 
+    report["repository"]["checkout_created"] = created
     fetch = _run_git_interactive(
         git, ["fetch", "origin", BRANCH],
         cwd=destination, allowed_root=home, memory_limit_mb=512,
+        hooks_path=hooks_path, config_file=config_file,
     )
     if fetch["timed_out"] or fetch["exit_code"] != 0:
         _stop("git_fetch", "git_fetch_failed", "Git fetch failed; local files were not cleaned or reset")
-    _verify_expected_commit(git, destination, home, "FETCH_HEAD")
+    _verify_expected_commit(
+        git, destination, home, "FETCH_HEAD",
+        hooks_path=hooks_path, env_overrides=git_env,
+    )
     local_is_ancestor = _capture(
-        git, ["merge-base", "--is-ancestor", "HEAD", "FETCH_HEAD"],
+        git, [*_git_security_args(hooks_path), "merge-base", "--is-ancestor", "HEAD", "FETCH_HEAD"],
         cwd=destination, allowed_root=home, timeout_seconds=30, memory_limit_mb=256,
+        env_overrides=git_env,
     )
     if local_is_ancestor["timed_out"] or local_is_ancestor["exit_code"] != 0:
         _stop(
             "git_history_validation",
             "local_main_not_fast_forwardable",
-            "The local main history cannot be advanced to the fetched main by fast-forward only; no pull or merge was attempted",
+            "The local main history cannot be advanced to the exact reviewed commit by fast-forward only; no pull or merge was attempted",
         )
 
     pull = _run_git_interactive(
         git, ["pull", "--ff-only", "origin", BRANCH],
         cwd=destination, allowed_root=home, memory_limit_mb=512,
+        hooks_path=hooks_path, config_file=config_file,
     )
     if pull["timed_out"] or pull["exit_code"] != 0:
         _stop(
@@ -645,21 +779,31 @@ def _prepare_checkout(
             "git_fast_forward_failed",
             "git pull --ff-only failed; BotPyton did not merge, reset, or switch branches",
         )
-    _assert_checkout_state(git, destination, home)
-    _verify_expected_commit(git, destination, home, "HEAD")
+    _assert_checkout_state(
+        git, destination, home, hooks_path=hooks_path, config_file=config_file,
+    )
+    _verify_expected_commit(
+        git, destination, home, "HEAD",
+        hooks_path=hooks_path, env_overrides=git_env,
+    )
     head = _git_capture(
         git, ["rev-parse", "HEAD"], cwd=destination, home=home,
         phase="git_verification", code="head_sha_unavailable",
+        hooks_path=hooks_path, env_overrides=git_env,
     )
     report["repository"].update({
         "name": REPOSITORY,
         "branch": BRANCH,
         "expected_commit": EXPECTED_COMMIT,
-        "expected_commit_in_main_history": True,
+        "exact_commit_verified": True,
         "local_head_sha": head,
         "origin_verified": True,
         "working_tree_clean_before_install": True,
         "fast_forward_only": True,
+        "git_hooks_disabled": True,
+        "git_system_config_disabled": True,
+        "git_user_config_isolated": True,
+        "http_tls_verification_enforced": True,
         "push_performed": False,
         "commit_created": False,
         "pull_request_created": False,
@@ -1037,12 +1181,32 @@ def _collect_quick_results(
         _stop("result_validation", "performance_report_mismatch", "JSON/CSV do not describe one validated quick run over the synthetic fixture")
     json_row = summary["results"][0]
     csv_row = rows[0]
+    required_fields = ("profile", "page_mode", "status", "execution_ok")
+    if any(field not in json_row or field not in csv_row for field in required_fields):
+        _stop(
+            "result_validation",
+            "performance_report_fields_missing",
+            "JSON and CSV must both provide profile, page_mode, status, and execution_ok",
+        )
+    for field, csv_value in csv_row.items():
+        json_value = json_row.get(field)
+        expected_csv_value = "" if json_value is None else (
+            "True" if json_value is True else "False" if json_value is False else str(json_value)
+        )
+        if csv_value != expected_csv_value:
+            _stop(
+                "result_validation",
+                "performance_reports_disagree",
+                f"JSON and CSV disagree on the {field!r} field",
+            )
     if summary.get("stopped_by_safety_guard") is True:
         if (
             json_row.get("status") != "skipped_safety_guard"
             or csv_row.get("status") != "skipped_safety_guard"
             or json_row.get("page_mode") != "first20"
             or csv_row.get("page_mode") != "first20"
+            or json_row.get("execution_ok") is not False
+            or csv_row.get("execution_ok") != "False"
             or summary.get("overall_status") != "partial"
         ):
             _stop(
@@ -1054,7 +1218,9 @@ def _collect_quick_results(
         json_row.get("profile") != csv_row.get("profile")
         or json_row.get("page_mode") != "first20"
         or csv_row.get("page_mode") != "first20"
-        or str(csv_row.get("execution_ok", "")).casefold() != "true"
+        or json_row.get("execution_ok") is not True
+        or csv_row.get("execution_ok") != "True"
+        or json_row.get("status") != "complete"
         or json_row.get("page_markers_valid") is not True
         or json_row.get("source_hash_unchanged") is not True
     ):
@@ -1150,7 +1316,7 @@ def run_local_project_installation(
 
         home = Path.home().resolve(strict=True)
         tool_cwd = _tool_search_cwd()
-        _require_gcm(git, home, cwd=tool_cwd, allowed_root=tool_cwd)
+        gcm_helper = _require_gcm(git, home, cwd=tool_cwd, allowed_root=tool_cwd)
         _check_git_transport_config(git, tool_cwd, home, allowed_root=tool_cwd)
         report["steps"].append({"name": "git_credential_manager_preflight", "status": "complete"})
 
@@ -1161,8 +1327,21 @@ def run_local_project_installation(
         log_dir = logs_root / run_id
         log_dir.mkdir(exist_ok=False)
         report["log_directory"] = str(log_dir)
+        hooks_path, git_config_file = _create_git_security_context(log_dir, gcm_helper)
+        report["git_security"] = {
+            "hooks_path": str(hooks_path),
+            "isolated_global_config": str(git_config_file),
+            "system_config_disabled": True,
+            "user_config_isolated": True,
+            "external_hooks_disabled": True,
+            "fsmonitor_disabled": True,
+            "tls_verification_forced": True,
+        }
 
-        _prepare_checkout(git, target, home, report)
+        _prepare_checkout(
+            git, target, home, report,
+            hooks_path=hooks_path, config_file=git_config_file,
+        )
         report["steps"].append({"name": "git_checkout_fast_forward", "status": "complete"})
 
         project_dir = target / PROJECT_SUBDIRECTORY
