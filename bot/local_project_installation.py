@@ -580,6 +580,7 @@ def _check_git_transport_config(
         r"^credential\..+\.helper$",
         r"^filter\..*\.(clean|smudge|process)$",
         r"^(core\.(hooksPath|fsmonitor)|include\..*\.path|includeif\..*\.path)$",
+        r"^http\.sslverify$",
         r"^http\..*\.sslverify$",
     )
     for pattern in blocked_patterns:
@@ -1162,20 +1163,29 @@ def _collect_quick_results(
         if len(csv_bytes) > MAX_REPORT_BYTES:
             _stop("result_validation", "performance_csv_too_large", "Performance CSV exceeds the report size limit")
         csv_text = csv_bytes.decode("utf-8-sig")
-        rows = list(csv.DictReader(io.StringIO(csv_text)))
+        reader = csv.DictReader(io.StringIO(csv_text))
+        if not reader.fieldnames or len(reader.fieldnames) != len(set(reader.fieldnames)):
+            _stop("result_validation", "performance_csv_header_invalid", "Performance CSV has an empty or duplicated header")
+        rows = list(reader)
     except (OSError, UnicodeError, csv.Error) as exc:
         _stop("result_validation", "performance_csv_invalid", f"Performance CSV could not be read: {type(exc).__name__}")
     if csv_path.stat().st_size > MAX_REPORT_BYTES:
         _stop("result_validation", "performance_csv_too_large", "Performance CSV exceeds the report size limit")
+    metadata = summary.get("metadata")
+    privacy = metadata.get("privacy") if isinstance(metadata, dict) else None
+    result_rows = summary.get("results")
     if (
         summary.get("tool") != "pdf-to-markdown-local-diagnostics"
-        or summary.get("metadata", {}).get("profile_set") != "quick"
+        or not isinstance(metadata, dict)
+        or metadata.get("profile_set") != "quick"
         or summary.get("run_id") != run_dir.name
-        or summary.get("metadata", {}).get("fixture_name") != "F-12-batch-120-pages.pdf"
-        or summary.get("metadata", {}).get("privacy", {}).get("synthetic_fixture_only") is not True
-        or summary.get("metadata", {}).get("privacy", {}).get("network_used_by_diagnostic") is not False
+        or metadata.get("fixture_name") != "F-12-batch-120-pages.pdf"
+        or not isinstance(privacy, dict)
+        or privacy.get("synthetic_fixture_only") is not True
+        or privacy.get("network_used_by_diagnostic") is not False
         or summary.get("fixture_unchanged") is not True
-        or len(summary.get("results", [])) != 1
+        or not isinstance(result_rows, list)
+        or len(result_rows) != 1
         or len(rows) != 1
     ):
         _stop("result_validation", "performance_report_mismatch", "JSON/CSV do not describe one validated quick run over the synthetic fixture")
@@ -1221,6 +1231,7 @@ def _collect_quick_results(
         or json_row.get("execution_ok") is not True
         or csv_row.get("execution_ok") != "True"
         or json_row.get("status") != "complete"
+        or summary.get("overall_status") != "complete"
         or json_row.get("page_markers_valid") is not True
         or json_row.get("source_hash_unchanged") is not True
     ):
@@ -1481,6 +1492,7 @@ def run_local_project_installation(
             git, ["status", "--porcelain=v1", "--untracked-files=all"],
             cwd=target, home=home,
             phase="final_verification", code="final_git_status_failed",
+            hooks_path=hooks_path, env_overrides=_git_environment(git_config_file),
         )
         report["repository"]["working_tree_clean_after_install"] = not bool(final_git_status)
         report["repository"]["local_uncommitted_paths"] = [

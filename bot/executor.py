@@ -41,6 +41,11 @@ def _confirm_local_installation_human(task: dict[str, Any]) -> str:
             "Local installation from the task queue requires a human confirmation in an interactive terminal"
         )
     task_id = task.get("id")
+    if (
+        not isinstance(task_id, str) or not task_id or len(task_id) > 80
+        or any(not (char.isascii() and (char.isalnum() or char in "-_.")) for char in task_id)
+    ):
+        raise PolicyError("Task ID is not safe for the interactive installation confirmation prompt")
     challenge = f"INSTALL {task.get('local_installation_profile')} {task_id}"
     print(
         "A queued task requested a local installation. This is a separate human approval step.\n"
@@ -157,7 +162,7 @@ class TaskExecutor:
             return self._run_tests()
         if action == "run_local_installation":
             if task.get("allow_local_installation") is not True:
-                raise PolicyError("Local installation was not explicitly approved")
+                raise PolicyError("Local installation was not explicitly requested")
             confirmation = _confirm_local_installation_human(task)
             from .local_project_installation import run_local_project_installation
             result = run_local_project_installation(
@@ -165,11 +170,6 @@ class TaskExecutor:
                 task.get("local_installation_destination", r"%USERPROFILE%\source\botimagen-referencias-privadas"),
                 execute=True,
             )
-            if result.get("status") != "succeeded":
-                raise ActionFailure(
-                    f"Local installation stopped with status {result.get('status', 'unknown')}",
-                    log_text=json.dumps(result, ensure_ascii=False, sort_keys=True)[-50_000:],
-                )
             result["human_approval"] = {
                 "method": "interactive_typed_confirmation",
                 "confirmed": True,
@@ -177,6 +177,11 @@ class TaskExecutor:
                 "profile_id": task["local_installation_profile"],
                 "confirmation_phrase": confirmation,
             }
+            if result.get("status") != "succeeded":
+                raise ActionFailure(
+                    f"Local installation stopped with status {result.get('status', 'unknown')}",
+                    log_text=json.dumps(result, ensure_ascii=False, sort_keys=True)[-50_000:],
+                )
             return result
         if action == "run_project_check":
             check_id = task.get("project_check_id")

@@ -69,12 +69,12 @@ El perfil llama al instalador con `execute=True`. Si se bloquea, se interrumpe o
 7. Crea una configuración Git efímera y aislada: excluye configuración de sistema y usuario, conserva únicamente el GCM verificado, deshabilita hooks/fsmonitor y fuerza la verificación TLS de GitHub.
 8. Clona únicamente la URL HTTPS aprobada o verifica el checkout existente: raíz exacta, remoto `origin`, rama `main`, árbol limpio y metadatos normales sin enlaces/reparse points.
 9. Exige que `FETCH_HEAD` y el `HEAD` final sean exactamente el SHA aprobado; un commit posterior o anterior no se instala. Solo permite avance rápido y nunca hace merge manual, reset, clean, commit o push.
-9. Comprueba los metadatos del paquete y compara las dependencias runtime/build con una lista permitida revisada.
-10. Crea `.venv` con Python 3.11 o verifica el entorno existente. Nunca lo elimina ni lo reemplaza.
-11. Instala el proyecto editable con pip dentro de ese entorno, sin caché, sin prompts de pip y sin paquetes opcionales.
-12. Comprueba imports, versiones, `pip check` y disponibilidad del módulo de diagnóstico.
-13. Vuelve a comprobar los umbrales de RAM/disco y ejecuta únicamente el perfil `quick`.
-14. Lee y valida el JSON y CSV nuevos, y publica un informe local de instalación.
+10. Comprueba los metadatos del paquete y compara las dependencias runtime/build con una lista permitida revisada.
+11. Crea `.venv` con Python 3.11 o verifica el entorno existente. Nunca lo elimina ni lo reemplaza.
+12. Instala el proyecto editable con pip dentro de ese entorno, sin caché, sin prompts de pip y sin paquetes opcionales.
+13. Comprueba imports, versiones, `pip check` y disponibilidad del módulo de diagnóstico.
+14. Vuelve a comprobar los umbrales de RAM/disco y ejecuta únicamente el perfil `quick`.
+15. Lee y valida el JSON y CSV nuevos, y publica un informe local de instalación.
 
 ## Dependencias permitidas
 
@@ -117,7 +117,7 @@ Informes del conversor:
 
 Registros e informe de instalación:
 
-`%USERPROFILE%\source\.botpyton-install-logs\\pdf-to-markdown-quick\\<run_id>\\`
+`%USERPROFILE%\source\.botpyton-install-logs\pdf-to-markdown-quick\<run_id>`
 
 El instalador verifica que JSON y CSV no estén vacíos, se puedan leer, correspondan al run recién creado, indiquen `quick`, describan el fixture sintético F-12 y validen los marcadores/preservación del hash. Un corte interno por RAM o disco se registra como resultado parcial; no se informa como éxito.
 

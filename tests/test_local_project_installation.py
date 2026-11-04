@@ -314,21 +314,27 @@ class LocalProjectInstallationTests(unittest.TestCase):
         with self.assertRaises(PolicyError):
             validate_task(task)
 
-    def test_executor_dispatches_the_fixed_profile_only_after_explicit_authorization(self):
+    def test_executor_dispatches_the_fixed_profile_after_interactive_human_approval(self):
         with tempfile.TemporaryDirectory() as temp:
             executor = TaskExecutor(Path(temp))
             task = {
+                "id": "LOCAL-INSTALL-EXECUTOR-TEST",
                 "allow_local_installation": True,
                 "local_installation_profile": "pdf-to-markdown-quick",
                 "local_installation_destination": r"%USERPROFILE%\source\botimagen-referencias-privadas",
             }
             expected = {"status": "succeeded", "profile_id": "pdf-to-markdown-quick"}
-            with patch(
-                "bot.local_project_installation.run_local_project_installation",
-                return_value=expected,
-            ) as run_install:
+            phrase = "INSTALL pdf-to-markdown-quick LOCAL-INSTALL-EXECUTOR-TEST"
+            with (
+                patch("bot.executor._confirm_local_installation_human", return_value=phrase),
+                patch(
+                    "bot.local_project_installation.run_local_project_installation",
+                    return_value=expected,
+                ) as run_install,
+            ):
                 result = executor._dispatch("run_local_installation", task, {})
-            self.assertEqual(result, expected)
+            self.assertEqual(result["status"], "succeeded")
+            self.assertEqual(result["human_approval"]["confirmation_phrase"], phrase)
             run_install.assert_called_once_with(
                 "pdf-to-markdown-quick",
                 r"%USERPROFILE%\source\botimagen-referencias-privadas",
@@ -339,15 +345,57 @@ class LocalProjectInstallationTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp:
             executor = TaskExecutor(Path(temp))
             task = {
+                "id": "LOCAL-INSTALL-BLOCKED",
                 "allow_local_installation": True,
                 "local_installation_profile": "pdf-to-markdown-quick",
             }
-            with patch(
-                "bot.local_project_installation.run_local_project_installation",
-                return_value={"status": "blocked", "error_code": "git_missing"},
+            phrase = "INSTALL pdf-to-markdown-quick LOCAL-INSTALL-BLOCKED"
+            with (
+                patch("bot.executor._confirm_local_installation_human", return_value=phrase),
+                patch(
+                    "bot.local_project_installation.run_local_project_installation",
+                    return_value={"status": "blocked", "error_code": "git_missing"},
+                ),
             ):
                 with self.assertRaises(ActionFailure):
                     executor._dispatch("run_local_installation", task, {})
+
+    def test_executor_refuses_installation_when_no_interactive_terminal_exists(self):
+        with tempfile.TemporaryDirectory() as temp:
+            executor = TaskExecutor(Path(temp))
+            task = {
+                "id": "LOCAL-INSTALL-NO-TTY",
+                "allow_local_installation": True,
+                "local_installation_profile": "pdf-to-markdown-quick",
+            }
+            noninteractive = Mock(isatty=Mock(return_value=False))
+            with (
+                patch("bot.executor.sys.stdin", noninteractive),
+                patch("builtins.input") as read_input,
+                patch("bot.local_project_installation.run_local_project_installation") as run_install,
+            ):
+                with self.assertRaisesRegex(PolicyError, "interactive terminal"):
+                    executor._dispatch("run_local_installation", task, {})
+            read_input.assert_not_called()
+            run_install.assert_not_called()
+
+    def test_executor_refuses_wrong_human_confirmation_phrase(self):
+        with tempfile.TemporaryDirectory() as temp:
+            executor = TaskExecutor(Path(temp))
+            task = {
+                "id": "LOCAL-INSTALL-WRONG-CONFIRM",
+                "allow_local_installation": True,
+                "local_installation_profile": "pdf-to-markdown-quick",
+            }
+            interactive = Mock(isatty=Mock(return_value=True))
+            with (
+                patch("bot.executor.sys.stdin", interactive),
+                patch("builtins.input", return_value="INSTALL arbitrary-shell LOCAL-INSTALL-WRONG-CONFIRM"),
+                patch("bot.local_project_installation.run_local_project_installation") as run_install,
+            ):
+                with self.assertRaisesRegex(PolicyError, "did not match"):
+                    executor._dispatch("run_local_installation", task, {})
+            run_install.assert_not_called()
 
 
     def test_quick_result_validation_preserves_a_safety_guard_stop(self):
