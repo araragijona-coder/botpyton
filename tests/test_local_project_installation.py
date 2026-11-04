@@ -1,5 +1,8 @@
 import csv
 import json
+import os
+import shutil
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -475,6 +478,106 @@ class LocalProjectInstallationTests(unittest.TestCase):
             self.assertIn("sslVerify = true", content)
             self.assertNotIn("include", content.casefold())
             self.assertNotIn("filter", content.casefold())
+
+
+    def test_git_hooks_from_template_are_suppressed_during_clone_and_fast_forward_pull(self):
+        if os.name == "nt":
+            self.skipTest("The POSIX hook fixture is exercised on Linux; Windows command flags have a separate test")
+        git = shutil.which("git")
+        if git is None:
+            self.skipTest("Git is unavailable on this runner")
+
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            source = root / "source"
+            source.mkdir()
+            template_hooks = root / "template" / "hooks"
+            template_hooks.mkdir(parents=True)
+            empty_hooks = root / "empty-hooks"
+            empty_hooks.mkdir()
+            config_file = root / "git-security.config"
+            config_file.write_text(
+                "[credential]\n    helper = manager\n",
+                encoding="utf-8",
+            )
+            marker = root / "hook-executions.txt"
+
+            def git_setup(*args):
+                return subprocess.run(
+                    [git, *args],
+                    check=True,
+                    capture_output=True,
+                    text=True,
+                )
+
+            git_setup("init", "-b", "main", str(source))
+            git_setup("-C", str(source), "config", "user.name", "BotPyton Hook Test")
+            git_setup("-C", str(source), "config", "user.email", "botpyton-hook-test@example.invalid")
+            (source / "tracked.txt").write_text("first\n", encoding="utf-8")
+            git_setup("-C", str(source), "add", "tracked.txt")
+            git_setup("-C", str(source), "commit", "-m", "fixture commit one")
+
+            for hook_name in ("post-checkout", "post-merge"):
+                hook = template_hooks / hook_name
+                hook.write_text(
+                    "#!/bin/sh\n"
+                    f"printf '%s\\n' '{hook_name}' >> '{marker.as_posix()}'\n",
+                    encoding="utf-8",
+                )
+                hook.chmod(0o755)
+
+            # Positive controls prove the template hooks really execute when no
+            # hooksPath override is present.
+            control_checkout = root / "control-checkout"
+            git_setup(
+                "clone", f"--template={root / 'template'}", "--",
+                source.as_uri(), str(control_checkout),
+            )
+            self.assertEqual(marker.read_text(encoding="utf-8").splitlines(), ["post-checkout"])
+
+            (source / "tracked.txt").write_text("second\n", encoding="utf-8")
+            git_setup("-C", str(source), "add", "tracked.txt")
+            git_setup("-C", str(source), "commit", "-m", "fixture commit two")
+            git_setup("-C", str(control_checkout), "pull", "--ff-only", "origin", "main")
+            self.assertEqual(
+                marker.read_text(encoding="utf-8").splitlines(),
+                ["post-checkout", "post-merge"],
+            )
+            marker.unlink()
+
+            secure_checkout = root / "secure-checkout"
+            clone_result = install._run_git_interactive(
+                git,
+                [
+                    "clone", f"--template={root / 'template'}", "--branch", "main",
+                    "--single-branch", "--", source.as_uri(), str(secure_checkout),
+                ],
+                cwd=root,
+                allowed_root=root,
+                hooks_path=empty_hooks,
+                config_file=config_file,
+                timeout_seconds=30,
+                memory_limit_mb=256,
+            )
+            self.assertEqual(clone_result["exit_code"], 0)
+            self.assertFalse(marker.exists(), "post-checkout from the clone template executed")
+
+            (source / "tracked.txt").write_text("third\n", encoding="utf-8")
+            git_setup("-C", str(source), "add", "tracked.txt")
+            git_setup("-C", str(source), "commit", "-m", "fixture commit three")
+            pull_result = install._run_git_interactive(
+                git,
+                ["pull", "--ff-only", "origin", "main"],
+                cwd=secure_checkout,
+                allowed_root=root,
+                hooks_path=empty_hooks,
+                config_file=config_file,
+                timeout_seconds=30,
+                memory_limit_mb=256,
+            )
+            self.assertEqual(pull_result["exit_code"], 0)
+            self.assertFalse(marker.exists(), "post-merge from the clone template executed")
+            self.assertEqual((secure_checkout / "tracked.txt").read_text(encoding="utf-8"), "third\n")
 
     def test_interactive_git_command_forces_hooks_fsmonitor_and_tls_settings(self):
         with tempfile.TemporaryDirectory() as temp:
